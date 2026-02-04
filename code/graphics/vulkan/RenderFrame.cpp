@@ -58,6 +58,9 @@ uint32_t RenderFrame::acquireSwapchainImage()
 }
 void RenderFrame::submitAndPresent(const std::vector<vk::CommandBuffer>& cmdBuffers)
 {
+	mprintf(("RenderFrame::submitAndPresent - cmdBuffers.size()=%zu, swapChainIdx=%u\n",
+		cmdBuffers.size(), m_swapChainIdx));
+
 	Assertion(!m_inFlight, "Cannot submit a frame for presentation when it is still in flight.");
 
 	const std::array<vk::PipelineStageFlags, 1> waitStages = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
@@ -75,6 +78,7 @@ void RenderFrame::submitAndPresent(const std::vector<vk::CommandBuffer>& cmdBuff
 	submitInfo.signalSemaphoreCount = 1;
 	submitInfo.pSignalSemaphores = signalSemaphores.data();
 
+	mprintf(("RenderFrame::submitAndPresent - submitting to graphics queue\n"));
 	m_graphicsQueue.submit(submitInfo, m_frameInFlightFence.get());
 
 	// This frame is now officially in flight
@@ -90,10 +94,9 @@ void RenderFrame::submitAndPresent(const std::vector<vk::CommandBuffer>& cmdBuff
 	presentInfo.pImageIndices = &m_swapChainIdx;
 	presentInfo.pResults = nullptr;
 
+	mprintf(("RenderFrame::submitAndPresent - presenting\n"));
 	vk::Result res = m_presentQueue.presentKHR(presentInfo);
-	// TODO: This should handle at least VK_SUBOPTIMAL_KHR, which means that the swap chain is no longer
-	// optimal and should be recreated.
-	(void)res;
+	mprintf(("RenderFrame::submitAndPresent - present result: %d\n", static_cast<int>(res)));
 }
 
 } // namespace vulkan

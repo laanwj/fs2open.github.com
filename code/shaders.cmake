@@ -8,6 +8,29 @@ set(SHADERS
 	${SHADER_DIR}/default-material.vert
 	${SHADER_DIR}/vulkan.frag
 	${SHADER_DIR}/vulkan.vert
+	${SHADER_DIR}/passthrough.frag
+	${SHADER_DIR}/passthrough.vert
+	${SHADER_DIR}/batched.frag
+	${SHADER_DIR}/batched.vert
+	${SHADER_DIR}/video.frag
+	${SHADER_DIR}/video.vert
+	${SHADER_DIR}/rocketui.frag
+	${SHADER_DIR}/rocketui.vert
+	${SHADER_DIR}/main.frag
+	${SHADER_DIR}/main.vert
+	${SHADER_DIR}/nanovg.frag
+	${SHADER_DIR}/nanovg.vert
+	${SHADER_DIR}/decal.frag
+	${SHADER_DIR}/decal.vert
+)
+
+# Shaders that have complex uniform blocks with vec3 members that cause struct generation issues
+# due to std140 alignment differences. These get stub struct files instead.
+set(SHADERS_SKIP_STRUCT_GEN
+	${SHADER_DIR}/main.frag
+	${SHADER_DIR}/main.vert
+	${SHADER_DIR}/rocketui.frag
+	${SHADER_DIR}/rocketui.vert
 )
 
 target_sources(code PRIVATE ${SHADERS})
@@ -45,7 +68,7 @@ foreach (_shader ${SHADERS})
 			COMMAND ${CMAKE_COMMAND} -E make_directory "${_depFileDir}"
 			COMMAND glslc "${_shader}" -o "${_spirvFile}" --target-env=vulkan1.0 -O -g "-I${SHADER_DIR}"
 				"-I${LEGACY_SHADER_DIR}" -MD -MF "${_depFile}" -MT "${_relativeSpirvPath}" -Werror -x glsl
-			MAIN_DEPENDENCY "${shader}"
+			MAIN_DEPENDENCY "${_shader}"
 			COMMENT "Compiling shader ${_fileName}"
 			${DEPFILE_PARAM}
 			)
@@ -57,11 +80,26 @@ foreach (_shader ${SHADERS})
 
 		list(APPEND _structHeaderList "${_structOutput}")
 
-		add_custom_command(OUTPUT "${_glslOutput}" "${_structOutput}"
-			COMMAND shadertool --glsl "--glsl-output=${_glslOutput}" --structs "--structs-output=${_structOutput}" ${_spirvFile}
-			MAIN_DEPENDENCY "${_spirvFile}"
-			COMMENT "Processing shader ${_spirvFile}"
-			)
+		# Check if this shader should skip struct generation (due to std140 alignment issues)
+		list(FIND SHADERS_SKIP_STRUCT_GEN "${_shader}" _skipStructGen)
+		if (_skipStructGen GREATER -1)
+			# Generate stub struct file for shaders with complex uniform blocks
+			# Write stub header using printf to avoid cmake escaping issues
+			file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/write_stub.cmake"
+				"file(WRITE \"\${OUTPUT_FILE}\" \"#pragma once\\n\")")
+			add_custom_command(OUTPUT "${_glslOutput}" "${_structOutput}"
+				COMMAND shadertool --glsl "--glsl-output=${_glslOutput}" ${_spirvFile}
+				COMMAND ${CMAKE_COMMAND} -DOUTPUT_FILE=${_structOutput} -P "${CMAKE_CURRENT_BINARY_DIR}/write_stub.cmake"
+				MAIN_DEPENDENCY "${_spirvFile}"
+				COMMENT "Processing shader ${_spirvFile} (stub structs)"
+				)
+		else()
+			add_custom_command(OUTPUT "${_glslOutput}" "${_structOutput}"
+				COMMAND shadertool --glsl "--glsl-output=${_glslOutput}" --structs "--structs-output=${_structOutput}" ${_spirvFile}
+				MAIN_DEPENDENCY "${_spirvFile}"
+				COMMENT "Processing shader ${_spirvFile}"
+				)
+		endif()
 
 		target_embed_files(code FILES "${_glslOutput}" RELATIVE_TO "${_shaderOutputDir}" PATH_TYPE_PREFIX "data/effects")
 	else()

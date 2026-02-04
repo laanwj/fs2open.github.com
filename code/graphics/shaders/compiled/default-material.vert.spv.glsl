@@ -1,7 +1,5 @@
 #version 150
 
-out float gl_ClipDistance[1];
-
 layout(std140) uniform genericData
 {
     mat4 modelMatrix;
@@ -14,28 +12,19 @@ layout(std140) uniform genericData
     float intensity;
     float alphaThreshold;
     uint clipEnabled;
-} _22;
-
-layout(std140) uniform matrixData
-{
-    mat4 modelViewMatrix;
-    mat4 projMatrix;
-} _36;
+} _20;
 
 out vec4 fragTexCoord;
 in vec4 vertTexCoord;
 out vec4 fragColor;
-in vec4 vertColor;
+out float debugMatrixVal;
 in vec4 vertPosition;
 
 void main()
 {
     fragTexCoord = vertTexCoord;
-    fragColor = vertColor * _22.color;
-    gl_Position = (_36.projMatrix * _36.modelViewMatrix) * vertPosition;
-    if (_22.clipEnabled != 0u)
-    {
-        gl_ClipDistance[0] = dot(_22.clipEquation, _22.modelMatrix * vertPosition);
-    }
+    fragColor = _20.color;
+    debugMatrixVal = 0.5;
+    gl_Position = vec4(((vertPosition.xy * vec2(0.0005208333604969084262847900390625, 0.000925925909541547298431396484375)) * 2.0) - vec2(1.0), 0.0, 1.0);
 }
 

@@ -1,5 +1,8 @@
 
 #include "VulkanRenderer.h"
+#include "VulkanMemory.h"
+#include "VulkanBuffer.h"
+#include "VulkanTexture.h"
 
 #include "globalincs/version.h"
 
@@ -286,6 +289,55 @@ bool VulkanRenderer::initialize()
 	createPresentSyncObjects();
 	createCommandPool(deviceValues);
 
+	// Initialize texture manager (needs command pool for uploads)
+	m_textureManager = std::unique_ptr<VulkanTextureManager>(new VulkanTextureManager());
+	if (!m_textureManager->init(m_device.get(), m_physicalDevice, m_memoryManager.get(),
+	                            m_graphicsCommandPool.get(), m_graphicsQueue)) {
+		mprintf(("Failed to initialize Vulkan texture manager!\n"));
+		return false;
+	}
+	setTextureManager(m_textureManager.get());
+
+	// Initialize shader manager (Phase 3)
+	m_shaderManager = std::unique_ptr<VulkanShaderManager>(new VulkanShaderManager());
+	if (!m_shaderManager->init(m_device.get())) {
+		mprintf(("Failed to initialize Vulkan shader manager!\n"));
+		return false;
+	}
+	setShaderManager(m_shaderManager.get());
+
+	// Initialize descriptor manager (Phase 3)
+	m_descriptorManager = std::unique_ptr<VulkanDescriptorManager>(new VulkanDescriptorManager());
+	if (!m_descriptorManager->init(m_device.get())) {
+		mprintf(("Failed to initialize Vulkan descriptor manager!\n"));
+		return false;
+	}
+	setDescriptorManager(m_descriptorManager.get());
+
+	// Initialize pipeline manager (Phase 3)
+	m_pipelineManager = std::unique_ptr<VulkanPipelineManager>(new VulkanPipelineManager());
+	if (!m_pipelineManager->init(m_device.get(), m_shaderManager.get(), m_descriptorManager.get())) {
+		mprintf(("Failed to initialize Vulkan pipeline manager!\n"));
+		return false;
+	}
+	setPipelineManager(m_pipelineManager.get());
+
+	// Initialize state tracker (Phase 4)
+	m_stateTracker = std::unique_ptr<VulkanStateTracker>(new VulkanStateTracker());
+	if (!m_stateTracker->init(m_device.get())) {
+		mprintf(("Failed to initialize Vulkan state tracker!\n"));
+		return false;
+	}
+	setStateTracker(m_stateTracker.get());
+
+	// Initialize draw manager (Phase 4)
+	m_drawManager = std::unique_ptr<VulkanDrawManager>(new VulkanDrawManager());
+	if (!m_drawManager->init(m_device.get())) {
+		mprintf(("Failed to initialize Vulkan draw manager!\n"));
+		return false;
+	}
+	setDrawManager(m_drawManager.get());
+
 	// Prepare the rendering state by acquiring our first swap chain image
 	acquireNextSwapChainImage();
 
@@ -401,7 +453,9 @@ bool VulkanRenderer::initializeInstance()
 			VK_VERSION_PATCH(layer.specVersion),
 			layer.implementationVersion));
 		if (FSO_DEBUG || Cmdline_graphics_debug_output) {
-			if (!stricmp(layer.layerName, "VK_LAYER_LUNARG_core_validation")) {
+			if (!stricmp(layer.layerName, "VK_LAYER_KHRONOS_validation")) {
+				layers.push_back("VK_LAYER_KHRONOS_validation");
+			} else if (!stricmp(layer.layerName, "VK_LAYER_LUNARG_core_validation")) {
 				layers.push_back("VK_LAYER_LUNARG_core_validation");
 			}
 		}
@@ -549,6 +603,35 @@ bool VulkanRenderer::createLogicalDevice(const PhysicalDeviceValues& deviceValue
 	m_graphicsQueue = m_device->getQueue(deviceValues.graphicsQueueIndex.index, 0);
 	m_transferQueue = m_device->getQueue(deviceValues.transferQueueIndex.index, 0);
 	m_presentQueue = m_device->getQueue(deviceValues.presentQueueIndex.index, 0);
+
+	// Store physical device and queue family indices for later use
+	m_physicalDevice = deviceValues.device;
+	m_graphicsQueueFamilyIndex = deviceValues.graphicsQueueIndex.index;
+	m_transferQueueFamilyIndex = deviceValues.transferQueueIndex.index;
+
+	// Initialize memory manager
+	m_memoryManager = std::unique_ptr<VulkanMemoryManager>(new VulkanMemoryManager());
+	if (!m_memoryManager->init(m_physicalDevice, m_device.get())) {
+		mprintf(("Failed to initialize Vulkan memory manager!\n"));
+		return false;
+	}
+	setMemoryManager(m_memoryManager.get());
+
+	// Initialize deletion queue for deferred resource destruction
+	m_deletionQueue = std::unique_ptr<VulkanDeletionQueue>(new VulkanDeletionQueue());
+	m_deletionQueue->init(m_device.get(), m_memoryManager.get());
+	setDeletionQueue(m_deletionQueue.get());
+
+	// Initialize buffer manager
+	m_bufferManager = std::unique_ptr<VulkanBufferManager>(new VulkanBufferManager());
+	if (!m_bufferManager->init(m_device.get(), m_memoryManager.get(),
+	                           m_graphicsQueueFamilyIndex, m_transferQueueFamilyIndex)) {
+		mprintf(("Failed to initialize Vulkan buffer manager!\n"));
+		return false;
+	}
+	setBufferManager(m_bufferManager.get());
+	// Set initial frame index for buffer manager
+	m_bufferManager->setCurrentFrame(m_currentFrame);
 
 	return true;
 }
@@ -840,61 +923,157 @@ void VulkanRenderer::acquireNextSwapChainImage()
 	// Reserve the image as in use
 	m_swapChainImageRenderImage[m_currentSwapChainImage] = m_frames[m_currentFrame].get();
 }
-void VulkanRenderer::drawScene(vk::Framebuffer destinationFb, vk::CommandBuffer cmdBuffer)
+void VulkanRenderer::setupFrame()
 {
-	vk::CommandBufferBeginInfo beginInfo;
-	beginInfo.flags |= vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+	static int frameCounter = 0;
+	mprintf(("=== VulkanRenderer::setupFrame START (frame %d) ===\n", frameCounter++));
 
-	cmdBuffer.begin(beginInfo);
+	if (m_frameInProgress) {
+		mprintf(("VulkanRenderer::setupFrame called while frame already in progress!\n"));
+		return;
+	}
 
-	vk::RenderPassBeginInfo renderPassBegin;
-	renderPassBegin.renderPass = m_renderPass.get();
-	renderPassBegin.framebuffer = destinationFb;
-	renderPassBegin.renderArea.offset.x = 0;
-	renderPassBegin.renderArea.offset.y = 0;
-	renderPassBegin.renderArea.extent = m_swapChainExtent;
+	// Process deferred buffer destructions
+	if (m_bufferManager) {
+		m_bufferManager->processDeferredDestructions();
+	}
 
-	vk::ClearValue clearColor;
-	clearColor.color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
-
-	renderPassBegin.clearValueCount = 1;
-	renderPassBegin.pClearValues = &clearColor;
-
-	cmdBuffer.beginRenderPass(renderPassBegin, vk::SubpassContents::eInline);
-
-	cmdBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.get());
-
-	cmdBuffer.draw(3, 1, 0, 0);
-
-	cmdBuffer.endRenderPass();
-
-	cmdBuffer.end();
-}
-void VulkanRenderer::flip()
-{
+	// Allocate command buffer for this frame
 	vk::CommandBufferAllocateInfo cmdBufferAlloc;
 	cmdBufferAlloc.commandPool = m_graphicsCommandPool.get();
 	cmdBufferAlloc.level = vk::CommandBufferLevel::ePrimary;
 	cmdBufferAlloc.commandBufferCount = 1;
 
-	// Uses the non-unique version since we can't get the buffers into the lambda below otherwise. Only C++14 can do
-	// that
-	auto allocatedBuffers = m_device->allocateCommandBuffers(cmdBufferAlloc);
-	auto& cmdBuffer = allocatedBuffers.front();
+	m_currentCommandBuffers = m_device->allocateCommandBuffers(cmdBufferAlloc);
+	m_currentCommandBuffer = m_currentCommandBuffers.front();
 
-	drawScene(m_swapChainFramebuffers[m_currentSwapChainImage].get(), cmdBuffer);
-	m_frames[m_currentFrame]->onFrameFinished([this, allocatedBuffers]() mutable {
-		m_device->freeCommandBuffers(m_graphicsCommandPool.get(), allocatedBuffers);
-		allocatedBuffers.clear();
+	// Begin command buffer
+	vk::CommandBufferBeginInfo beginInfo;
+	beginInfo.flags |= vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+	m_currentCommandBuffer.begin(beginInfo);
+
+	// TEST 2: Add back descriptor manager beginFrame
+	if (m_descriptorManager) {
+		m_descriptorManager->beginFrame();
+	}
+
+	// TEST 4: Re-enable state tracker with pipeline check protection
+	if (m_stateTracker) {
+		m_stateTracker->beginFrame(m_currentCommandBuffer);
+	}
+
+	// Begin render pass
+	vk::RenderPassBeginInfo renderPassBegin;
+	renderPassBegin.renderPass = m_renderPass.get();
+	renderPassBegin.framebuffer = m_swapChainFramebuffers[m_currentSwapChainImage].get();
+	renderPassBegin.renderArea.offset.x = 0;
+	renderPassBegin.renderArea.offset.y = 0;
+	renderPassBegin.renderArea.extent = m_swapChainExtent;
+
+	vk::ClearValue clearColor;
+	clearColor.color.setFloat32({1.0f, 0.0f, 1.0f, 1.0f});  // Magenta
+
+	renderPassBegin.clearValueCount = 1;
+	renderPassBegin.pClearValues = &clearColor;
+
+	m_currentCommandBuffer.beginRenderPass(renderPassBegin, vk::SubpassContents::eInline);
+
+	// Draw test triangle
+	m_currentCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.get());
+	m_currentCommandBuffer.draw(3, 1, 0, 0);
+
+	// Set up state tracker for FSO draws
+	if (m_stateTracker) {
+		m_stateTracker->setRenderPass(m_renderPass.get(), 0);
+		m_stateTracker->setViewport(0.0f, 0.0f,
+			static_cast<float>(m_swapChainExtent.width),
+			static_cast<float>(m_swapChainExtent.height));
+	}
+
+	m_frameInProgress = true;
+	mprintf(("=== VulkanRenderer::setupFrame END ===\n"));
+}
+
+void VulkanRenderer::flip()
+{
+	static int flipCounter = 0;
+	mprintf(("=== VulkanRenderer::flip START (flip %d, m_frameInProgress=%d) ===\n",
+		flipCounter++, m_frameInProgress ? 1 : 0));
+
+	if (!m_frameInProgress) {
+		mprintf(("VulkanRenderer::flip called without frame in progress, skipping\n"));
+		return;
+	}
+
+	// End render pass
+	m_currentCommandBuffer.endRenderPass();
+
+	// TEST 3: Add back state tracker endFrame
+	if (m_stateTracker) {
+		m_stateTracker->endFrame();
+	}
+
+	// TEST 2: Add back descriptor manager endFrame
+	if (m_descriptorManager) {
+		m_descriptorManager->endFrame();
+	}
+
+	// End command buffer
+	m_currentCommandBuffer.end();
+
+	// Set up cleanup callback for command buffers
+	auto buffersToFree = m_currentCommandBuffers;
+	m_frames[m_currentFrame]->onFrameFinished([this, buffersToFree]() mutable {
+		m_device->freeCommandBuffers(m_graphicsCommandPool.get(), buffersToFree);
 	});
 
-	m_frames[m_currentFrame]->submitAndPresent(allocatedBuffers);
+	// Submit and present
+	m_frames[m_currentFrame]->submitAndPresent(m_currentCommandBuffers);
+
+	// Clear current command buffer reference
+	m_currentCommandBuffer = nullptr;
+	m_currentCommandBuffers.clear();
+	m_frameInProgress = false;
 
 	// Advance counters to prepare for the next frame
 	m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+	++m_frameNumber;
 
+	// Set the frame index for the buffer manager immediately after incrementing
+	// This ensures any buffer operations that happen before setupFrame() use the correct frame
+	if (m_bufferManager) {
+		m_bufferManager->setCurrentFrame(m_currentFrame);
+	}
+
+	// Process deferred resource deletions
+	// Resources queued 2+ frames ago are now safe to delete
+	if (m_deletionQueue) {
+		m_deletionQueue->processDestructions();
+	}
+
+	mprintf(("VulkanRenderer::flip - about to acquireNextSwapChainImage, m_currentFrame now %d\n", m_currentFrame));
 	acquireNextSwapChainImage();
+	mprintf(("=== VulkanRenderer::flip END ===\n"));
 }
+
+uint32_t VulkanRenderer::getMinUniformBufferOffsetAlignment() const
+{
+	if (!m_physicalDevice) {
+		// Fallback to common value if device not initialized
+		return 256;
+	}
+
+	auto properties = m_physicalDevice.getProperties();
+	return static_cast<uint32_t>(properties.limits.minUniformBufferOffsetAlignment);
+}
+
+void VulkanRenderer::waitIdle()
+{
+	if (m_device) {
+		m_device->waitIdle();
+	}
+}
+
 void VulkanRenderer::shutdown()
 {
 	// Wait for all frames to complete to ensure no drawing is in progress when we destroy the device
@@ -903,6 +1082,66 @@ void VulkanRenderer::shutdown()
 	}
 	// For good measure, also wait until the device is idle
 	m_device->waitIdle();
+
+	// Shutdown managers in reverse order of initialization
+	// Phase 4 managers first
+	if (m_drawManager) {
+		setDrawManager(nullptr);
+		m_drawManager->shutdown();
+		m_drawManager.reset();
+	}
+
+	if (m_stateTracker) {
+		setStateTracker(nullptr);
+		m_stateTracker->shutdown();
+		m_stateTracker.reset();
+	}
+
+	// Phase 3 managers
+	if (m_pipelineManager) {
+		setPipelineManager(nullptr);
+		m_pipelineManager->shutdown();
+		m_pipelineManager.reset();
+	}
+
+	if (m_descriptorManager) {
+		setDescriptorManager(nullptr);
+		m_descriptorManager->shutdown();
+		m_descriptorManager.reset();
+	}
+
+	if (m_shaderManager) {
+		setShaderManager(nullptr);
+		m_shaderManager->shutdown();
+		m_shaderManager.reset();
+	}
+
+	// Phase 2 managers
+	if (m_textureManager) {
+		setTextureManager(nullptr);
+		m_textureManager->shutdown();
+		m_textureManager.reset();
+	}
+
+	// Phase 1 managers
+	if (m_bufferManager) {
+		setBufferManager(nullptr);
+		m_bufferManager->shutdown();
+		m_bufferManager.reset();
+	}
+
+	// Deletion queue must be flushed before memory manager shutdown
+	if (m_deletionQueue) {
+		setDeletionQueue(nullptr);
+		m_deletionQueue->shutdown();
+		m_deletionQueue.reset();
+	}
+
+	if (m_memoryManager) {
+		setMemoryManager(nullptr);
+		m_memoryManager->shutdown();
+		m_memoryManager.reset();
+	}
 }
 
 } // namespace vulkan

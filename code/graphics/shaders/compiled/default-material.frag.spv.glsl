@@ -14,7 +14,7 @@ layout(std140) uniform genericData
     uint clipEnabled;
 } _39;
 
-uniform sampler2DArray baseMap;
+uniform sampler2D baseMap;
 
 in vec4 fragTexCoord;
 in vec4 fragColor;
@@ -22,30 +22,58 @@ out vec4 fragOut0;
 
 void main()
 {
-    vec4 _48 = texture(baseMap, vec3(fragTexCoord.xy, float(_39.baseMapIndex)));
-    if (_39.alphaThreshold > _48.w)
+    vec4 _33 = texture(baseMap, fragTexCoord.xy);
+    if (_39.alphaThreshold > _33.w)
     {
         discard;
     }
-    bool _66 = _39.srgb == 1;
-    vec3 _146;
-    if (_66)
+    bool _58 = _39.srgb == 1;
+    vec4 _160;
+    if (_58)
     {
-        _146 = pow(_48.xyz, vec3(2.2000000476837158203125));
+        vec3 _139 = pow(_33.xyz, vec3(2.2000000476837158203125));
+        vec4 _146 = _33;
+        _146.x = _139.x;
+        vec4 _148 = _146;
+        _148.y = _139.y;
+        vec4 _150 = _148;
+        _150.z = _139.z;
+        _160 = _150;
     }
     else
     {
-        _146 = _48.xyz;
+        _160 = _33;
     }
-    vec4 _148;
-    if (_66)
+    vec4 _161;
+    if (_58)
     {
-        _148 = vec4(pow(fragColor.xyz, vec3(2.2000000476837158203125)), fragColor.w);
+        vec3 _143 = pow(fragColor.xyz, vec3(2.2000000476837158203125));
+        vec4 _152 = fragColor;
+        _152.x = _143.x;
+        vec4 _154 = _152;
+        _154.y = _143.y;
+        vec4 _156 = _154;
+        _156.z = _143.z;
+        _161 = _156;
     }
     else
     {
-        _148 = fragColor;
+        _161 = fragColor;
     }
-    fragOut0 = mix(mix(vec4(_146.x, _146.y, _146.z, _48.w) * _148, vec4(_148.xyz, _146.x * _148.w), vec4(float(_39.alphaTexture))), _148, vec4(float(_39.noTexturing))) * _39.intensity;
+    if (_39.noTexturing != 0)
+    {
+        fragOut0 = _161 * _39.intensity;
+    }
+    else
+    {
+        if (_39.alphaTexture != 0)
+        {
+            fragOut0 = vec4(_161.xyz, _160.x * _161.w) * _39.intensity;
+        }
+        else
+        {
+            fragOut0 = (_160 * _161) * _39.intensity;
+        }
+    }
 }
 

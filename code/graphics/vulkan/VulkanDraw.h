@@ -1,0 +1,259 @@
+#pragma once
+
+#include "globalincs/pstypes.h"
+#include "graphics/2d.h"
+#include "graphics/material.h"
+#include "VulkanPipeline.h"
+
+#include <vulkan/vulkan.hpp>
+#include <array>
+
+namespace graphics {
+namespace vulkan {
+
+/**
+ * @brief Tracks a pending uniform buffer binding
+ * Stores handle instead of raw vk::Buffer to survive buffer recreation
+ */
+struct PendingUniformBinding {
+	gr_buffer_handle bufferHandle;  // FSO buffer handle - lookup vk::Buffer at bind time
+	vk::DeviceSize offset = 0;
+	vk::DeviceSize size = 0;
+	bool valid = false;
+};
+
+/**
+ * @brief Handles Vulkan draw command recording
+ *
+ * Provides functions to record draw commands to the command buffer,
+ * including primitive rendering, batched rendering, and special effects.
+ */
+class VulkanDrawManager {
+public:
+	VulkanDrawManager() = default;
+	~VulkanDrawManager() = default;
+
+	// Non-copyable
+	VulkanDrawManager(const VulkanDrawManager&) = delete;
+	VulkanDrawManager& operator=(const VulkanDrawManager&) = delete;
+
+	/**
+	 * @brief Initialize draw manager
+	 */
+	bool init(vk::Device device);
+
+	/**
+	 * @brief Shutdown and release resources
+	 */
+	void shutdown();
+
+	// ========== Clear Operations ==========
+
+	/**
+	 * @brief Clear the color buffer
+	 */
+	void clear();
+
+	/**
+	 * @brief Set clear color
+	 */
+	void setClearColor(int r, int g, int b);
+
+	// ========== Clipping ==========
+
+	/**
+	 * @brief Set clip region (scissor)
+	 */
+	void setClip(int x, int y, int w, int h, int resize_mode);
+
+	/**
+	 * @brief Reset clip to full screen
+	 */
+	void resetClip();
+
+	// ========== Z-Buffer ==========
+
+	/**
+	 * @brief Get current zbuffer mode
+	 */
+	int zbufferGet();
+
+	/**
+	 * @brief Set zbuffer mode
+	 * @return Previous mode
+	 */
+	int zbufferSet(int mode);
+
+	/**
+	 * @brief Clear zbuffer
+	 */
+	void zbufferClear(int mode);
+
+	// ========== Stencil ==========
+
+	/**
+	 * @brief Set stencil mode
+	 * @return Previous mode
+	 */
+	int stencilSet(int mode);
+
+	/**
+	 * @brief Clear stencil buffer
+	 */
+	void stencilClear();
+
+	// ========== Culling ==========
+
+	/**
+	 * @brief Set cull mode
+	 * @return Previous mode
+	 */
+	int setCull(int cull);
+
+	// ========== Primitive Rendering ==========
+
+	/**
+	 * @brief Render primitives with material
+	 */
+	void renderPrimitives(material* material_info, primitive_type prim_type,
+	                      vertex_layout* layout, int offset, int n_verts,
+	                      gr_buffer_handle buffer_handle, size_t buffer_offset);
+
+	/**
+	 * @brief Render batched bitmaps
+	 */
+	void renderPrimitivesBatched(batched_bitmap_material* material_info,
+	                             primitive_type prim_type, vertex_layout* layout,
+	                             int offset, int n_verts, gr_buffer_handle buffer_handle);
+
+	/**
+	 * @brief Render particles
+	 */
+	void renderPrimitivesParticle(particle_material* material_info,
+	                              primitive_type prim_type, vertex_layout* layout,
+	                              int offset, int n_verts, gr_buffer_handle buffer_handle);
+
+	/**
+	 * @brief Render distortion effect
+	 */
+	void renderPrimitivesDistortion(distortion_material* material_info,
+	                                primitive_type prim_type, vertex_layout* layout,
+	                                int n_verts, gr_buffer_handle buffer_handle);
+
+	/**
+	 * @brief Render movie frame
+	 */
+	void renderMovie(movie_material* material_info, primitive_type prim_type,
+	                 vertex_layout* layout, int n_verts, gr_buffer_handle buffer_handle);
+
+	/**
+	 * @brief Render NanoVG UI
+	 */
+	void renderNanoVG(nanovg_material* material_info, primitive_type prim_type,
+	                  vertex_layout* layout, int offset, int n_verts,
+	                  gr_buffer_handle buffer_handle);
+
+	/**
+	 * @brief Render Rocket UI primitives (indexed)
+	 */
+	void renderRocketPrimitives(interface_material* material_info,
+	                            primitive_type prim_type, vertex_layout* layout,
+	                            int n_indices, gr_buffer_handle vertex_buffer,
+	                            gr_buffer_handle index_buffer);
+
+	/**
+	 * @brief Render 3D model with indexed geometry
+	 * @param material_info Model material settings
+	 * @param vert_source Indexed vertex source with buffer handles
+	 * @param bufferp Vertex buffer with layout and texture info
+	 * @param texi Index into tex_buf array for this draw
+	 */
+	void renderModel(model_material* material_info, indexed_vertex_source* vert_source,
+	                 vertex_buffer* bufferp, size_t texi);
+
+	// ========== State ==========
+
+	/**
+	 * @brief Clear all graphics states to defaults
+	 */
+	void clearStates();
+
+	// ========== Uniform Buffers ==========
+
+	/**
+	 * @brief Set a pending uniform buffer binding
+	 * @param blockType The uniform block type
+	 * @param bufferHandle The FSO buffer handle (looked up at bind time)
+	 * @param offset Offset within the buffer
+	 * @param size Size of the bound range
+	 */
+	void setPendingUniformBinding(uniform_block_type blockType, gr_buffer_handle bufferHandle,
+	                              vk::DeviceSize offset, vk::DeviceSize size);
+
+	/**
+	 * @brief Clear all pending uniform bindings
+	 */
+	void clearPendingUniformBindings();
+
+private:
+	/**
+	 * @brief Apply material state and bind pipeline
+	 * @return true if pipeline was successfully bound
+	 */
+	bool applyMaterial(material* mat, primitive_type prim_type, vertex_layout* layout);
+
+	/**
+	 * @brief Build pipeline config from material
+	 */
+	PipelineConfig buildPipelineConfig(material* mat, primitive_type prim_type);
+
+	/**
+	 * @brief Bind material textures to descriptor set
+	 */
+	bool bindMaterialTextures(material* mat, vk::DescriptorSet materialSet);
+
+	/**
+	 * @brief Apply pending uniform buffer bindings to descriptor sets
+	 */
+	void applyPendingUniformBindings();
+
+	/**
+	 * @brief Bind vertex buffer from handle
+	 */
+	void bindVertexBuffer(gr_buffer_handle handle, size_t offset = 0);
+
+	/**
+	 * @brief Bind index buffer from handle
+	 */
+	void bindIndexBuffer(gr_buffer_handle handle);
+
+	/**
+	 * @brief Issue draw call
+	 */
+	void draw(primitive_type prim_type, int first_vertex, int vertex_count);
+
+	/**
+	 * @brief Issue indexed draw call
+	 */
+	void drawIndexed(primitive_type prim_type, int index_count, int first_index, int vertex_offset);
+
+	vk::Device m_device;
+
+	// Current render state
+	int m_zbufferMode = GR_ZBUFF_FULL;
+	int m_stencilMode = GR_STENCIL_NONE;
+	bool m_cullEnabled = true;
+
+	// Pending uniform buffer bindings (indexed by uniform_block_type)
+	static constexpr size_t NUM_UNIFORM_BLOCK_TYPES = static_cast<size_t>(uniform_block_type::NUM_BLOCK_TYPES);
+	std::array<PendingUniformBinding, NUM_UNIFORM_BLOCK_TYPES> m_pendingUniformBindings;
+
+	bool m_initialized = false;
+};
+
+// Global draw manager access
+VulkanDrawManager* getDrawManager();
+void setDrawManager(VulkanDrawManager* manager);
+
+} // namespace vulkan
+} // namespace graphics

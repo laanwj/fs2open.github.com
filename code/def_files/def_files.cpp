@@ -41,6 +41,28 @@ default_file defaults_get_file(const char *filename)
 	return def;
 }
 
+default_file defaults_try_get_file(const char *filename)
+{
+	default_file def{};
+
+	auto endIter = std::end(Default_files);
+	for (auto iter = std::begin(Default_files); iter != endIter; ++iter)
+	{
+		if (!stricmp(iter->filename, filename))
+		{
+			def.path_type = iter->path_type;
+			def.filename = iter->filename;
+			def.data = iter->contents;
+			def.size = iter->size;
+
+			return def;
+		}
+	}
+
+	// Return empty default_file if not found (no error)
+	return def;
+}
+
 SCP_vector<default_file> defaults_get_all() {
 	SCP_vector<default_file> files;
 

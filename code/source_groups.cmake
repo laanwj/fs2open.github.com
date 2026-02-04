@@ -577,10 +577,30 @@ if (FSO_BUILD_WITH_VULKAN)
 		graphics/vulkan/gr_vulkan.h
 		graphics/vulkan/RenderFrame.cpp
 		graphics/vulkan/RenderFrame.h
-		graphics/vulkan/vulkan_stubs.cpp
-		graphics/vulkan/vulkan_stubs.h
+		graphics/vulkan/VulkanBuffer.cpp
+		graphics/vulkan/VulkanBuffer.h
+		graphics/vulkan/VulkanDeletionQueue.cpp
+		graphics/vulkan/VulkanDeletionQueue.h
+		graphics/vulkan/VulkanDescriptorManager.cpp
+		graphics/vulkan/VulkanDescriptorManager.h
+		graphics/vulkan/VulkanDraw.cpp
+		graphics/vulkan/VulkanDraw.h
+		graphics/vulkan/VulkanMemory.cpp
+		graphics/vulkan/VulkanMemory.h
+		graphics/vulkan/VulkanPipeline.cpp
+		graphics/vulkan/VulkanPipeline.h
 		graphics/vulkan/VulkanRenderer.cpp
 		graphics/vulkan/VulkanRenderer.h
+		graphics/vulkan/VulkanRenderState.cpp
+		graphics/vulkan/VulkanRenderState.h
+		graphics/vulkan/VulkanShader.cpp
+		graphics/vulkan/VulkanShader.h
+		graphics/vulkan/VulkanState.cpp
+		graphics/vulkan/VulkanState.h
+		graphics/vulkan/VulkanTexture.cpp
+		graphics/vulkan/VulkanTexture.h
+		graphics/vulkan/VulkanVertexFormat.cpp
+		graphics/vulkan/VulkanVertexFormat.h
 	)
 endif()
 

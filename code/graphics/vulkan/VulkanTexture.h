@@ -1,0 +1,247 @@
+#pragma once
+
+#include "globalincs/pstypes.h"
+#include "VulkanMemory.h"
+
+#define BMPMAN_INTERNAL
+#include "bmpman/bm_internal.h"
+
+#include <vulkan/vulkan.hpp>
+
+namespace graphics {
+namespace vulkan {
+
+/**
+ * @brief Vulkan-specific texture data stored in bitmap slots
+ *
+ * Extends gr_bitmap_info to store Vulkan image handles and metadata.
+ * This is the Vulkan equivalent of tcache_slot_opengl.
+ */
+class tcache_slot_vulkan : public gr_bitmap_info {
+public:
+	vk::Image image;
+	vk::ImageView imageView;
+	VulkanAllocation allocation;
+	vk::Format format = vk::Format::eUndefined;
+	vk::ImageLayout currentLayout = vk::ImageLayout::eUndefined;
+
+	uint32_t width = 0;
+	uint32_t height = 0;
+	uint32_t mipLevels = 1;
+	uint32_t arrayLayers = 1;
+	int bpp = 0;
+
+	int bitmapHandle = -1;
+	uint32_t arrayIndex = 0;
+	bool used = false;
+
+	// For render targets
+	vk::Framebuffer framebuffer;
+	vk::RenderPass renderPass;  // Render pass compatible with this target
+	bool isRenderTarget = false;
+
+	// Texture scaling (for non-power-of-two handling)
+	float uScale = 1.0f;
+	float vScale = 1.0f;
+
+	tcache_slot_vulkan() { reset(); }
+	~tcache_slot_vulkan() override = default;
+
+	void reset();
+};
+
+/**
+ * @brief Manages Vulkan textures, samplers, and render targets
+ */
+class VulkanTextureManager {
+public:
+	VulkanTextureManager();
+	~VulkanTextureManager();
+
+	// Non-copyable
+	VulkanTextureManager(const VulkanTextureManager&) = delete;
+	VulkanTextureManager& operator=(const VulkanTextureManager&) = delete;
+
+	/**
+	 * @brief Initialize the texture manager
+	 */
+	bool init(vk::Device device, vk::PhysicalDevice physicalDevice,
+	          VulkanMemoryManager* memoryManager,
+	          vk::CommandPool commandPool, vk::Queue graphicsQueue);
+
+	/**
+	 * @brief Shutdown and free all textures
+	 */
+	void shutdown();
+
+	// Bitmap management functions (implement gr_screen function pointers)
+
+	/**
+	 * @brief Initialize a bitmap slot for Vulkan
+	 */
+	void bm_init(bitmap_slot* slot);
+
+	/**
+	 * @brief Create Vulkan resources for a bitmap slot
+	 */
+	void bm_create(bitmap_slot* slot);
+
+	/**
+	 * @brief Free Vulkan resources for a bitmap slot
+	 */
+	void bm_free_data(bitmap_slot* slot, bool release);
+
+	/**
+	 * @brief Upload bitmap data to GPU
+	 */
+	bool bm_data(int handle, bitmap* bm);
+
+	/**
+	 * @brief Create a render target
+	 */
+	int bm_make_render_target(int handle, int* width, int* height, int* bpp, int* mm_lvl, int flags);
+
+	/**
+	 * @brief Set active render target
+	 */
+	int bm_set_render_target(int handle, int face);
+
+	/**
+	 * @brief Update texture data
+	 */
+	void update_texture(int bitmap_handle, int bpp, const ubyte* data, int width, int height);
+
+	/**
+	 * @brief Read texture data back to CPU
+	 */
+	void get_bitmap_from_texture(void* data_out, int bitmap_num);
+
+	// Sampler management
+
+	/**
+	 * @brief Get or create a sampler with specified parameters
+	 */
+	vk::Sampler getSampler(vk::Filter magFilter, vk::Filter minFilter,
+	                       vk::SamplerAddressMode addressMode,
+	                       bool enableAnisotropy, float maxAnisotropy,
+	                       bool enableMipmaps);
+
+	/**
+	 * @brief Get default sampler for standard textures
+	 */
+	vk::Sampler getDefaultSampler();
+
+	/**
+	 * @brief Get fallback white texture image view for unbound slots
+	 */
+	vk::ImageView getFallbackTextureView();
+
+	// Texture access
+
+	/**
+	 * @brief Get texture slot data
+	 */
+	tcache_slot_vulkan* getTextureSlot(int handle);
+
+	/**
+	 * @brief Check if texture is valid and ready for use
+	 */
+	bool isTextureValid(int handle);
+
+	// Utility functions
+
+	/**
+	 * @brief Convert FSO bitmap format to Vulkan format
+	 */
+	static vk::Format bppToVkFormat(int bpp, bool compressed = false, int compressionType = 0);
+
+	/**
+	 * @brief Transition image layout
+	 */
+	void transitionImageLayout(vk::Image image, vk::Format format,
+	                           vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
+	                           uint32_t mipLevels = 1);
+
+	/**
+	 * @brief Generate mipmaps for a texture
+	 */
+	void generateMipmaps(int handle);
+
+	/**
+	 * @brief Flush texture cache
+	 */
+	void flushCache();
+
+	/**
+	 * @brief Called at start of frame
+	 */
+	void frameStart();
+
+private:
+	/**
+	 * @brief Create a Vulkan image
+	 */
+	bool createImage(uint32_t width, uint32_t height, uint32_t mipLevels,
+	                 vk::Format format, vk::ImageTiling tiling,
+	                 vk::ImageUsageFlags usage, MemoryUsage memUsage,
+	                 vk::Image& image, VulkanAllocation& allocation);
+
+	/**
+	 * @brief Create an image view
+	 */
+	vk::ImageView createImageView(vk::Image image, vk::Format format,
+	                               vk::ImageAspectFlags aspectFlags,
+	                               uint32_t mipLevels);
+
+	/**
+	 * @brief Copy buffer data to image
+	 */
+	void copyBufferToImage(vk::Buffer buffer, vk::Image image,
+	                       uint32_t width, uint32_t height);
+
+	/**
+	 * @brief Begin single-time command buffer
+	 */
+	vk::CommandBuffer beginSingleTimeCommands();
+
+	/**
+	 * @brief End and submit single-time command buffer
+	 */
+	void endSingleTimeCommands(vk::CommandBuffer commandBuffer);
+
+	/**
+	 * @brief Calculate number of mipmap levels
+	 */
+	static uint32_t calculateMipLevels(uint32_t width, uint32_t height);
+
+	vk::Device m_device;
+	vk::PhysicalDevice m_physicalDevice;
+	VulkanMemoryManager* m_memoryManager = nullptr;
+	vk::CommandPool m_commandPool;
+	vk::Queue m_graphicsQueue;
+
+	// Cached samplers (key: packed sampler state)
+	SCP_unordered_map<uint64_t, vk::Sampler> m_samplerCache;
+	vk::Sampler m_defaultSampler;
+
+	// Fallback 1x1 white texture for unbound texture slots
+	vk::Image m_fallbackTexture;
+	vk::ImageView m_fallbackTextureView;
+	VulkanAllocation m_fallbackTextureAllocation;
+
+	// Device limits
+	uint32_t m_maxTextureSize = 4096;
+	float m_maxAnisotropy = 1.0f;
+
+	// Current render target state
+	int m_currentRenderTarget = -1;
+
+	bool m_initialized = false;
+};
+
+// Global texture manager instance
+VulkanTextureManager* getTextureManager();
+void setTextureManager(VulkanTextureManager* manager);
+
+} // namespace vulkan
+} // namespace graphics

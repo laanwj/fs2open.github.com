@@ -1,14 +1,20 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
-#include "gamma.sdr"
+// Inline gamma conversion (from gamma.sdr)
+const float SRGB_GAMMA = 2.2;
+vec3 srgb_to_linear(vec3 val) {
+	return pow(val, vec3(SRGB_GAMMA));
+}
 
 layout (location = 0) in vec4 fragTexCoord;
 layout (location = 1) in vec4 fragColor;
+layout (location = 2) in float debugMatrixVal;
 
 layout (location = 0) out vec4 fragOut0;
 
-layout (binding = 1, std140) uniform genericData {
+// Set 2 = PerDraw, Binding 0 = GenericData
+layout (set = 2, binding = 0, std140) uniform genericData {
 	mat4 modelMatrix;
 
 	vec4 color;
@@ -22,16 +28,37 @@ layout (binding = 1, std140) uniform genericData {
 
 	float intensity;
 	float alphaThreshold;
-	bool clipEnabled;
+	uint clipEnabled;  // Use uint instead of bool for std140 compatibility
 };
 
-layout(binding = 2) uniform sampler2DArray baseMap;
+// Set 1 = Material, Binding 1 = textures (first texture in array is base map)
+layout (set = 1, binding = 1) uniform sampler2D baseMap;
 
 void main()
 {
-	vec4 baseColor = texture(baseMap, vec3(fragTexCoord.xy, float(baseMapIndex)));
-	if(alphaThreshold > baseColor.a) discard;
-	baseColor.rgb = (srgb == 1) ? srgb_to_linear(baseColor.rgb) : baseColor.rgb;
-	vec4 blendColor = (srgb == 1) ? vec4(srgb_to_linear(fragColor.rgb), fragColor.a) : fragColor;
-	fragOut0 = mix(mix(baseColor * blendColor, vec4(blendColor.rgb, baseColor.r * blendColor.a), float(alphaTexture)), blendColor, float(noTexturing)) * intensity;
+	// Sample base texture
+	vec4 baseColor = texture(baseMap, fragTexCoord.xy);
+
+	// Apply alpha threshold
+	if (alphaThreshold > baseColor.a) discard;
+
+	// Apply sRGB conversion if needed
+	if (srgb == 1) {
+		baseColor.rgb = srgb_to_linear(baseColor.rgb);
+	}
+
+	// Blend with material color
+	vec4 blendColor = fragColor;
+	if (srgb == 1) {
+		blendColor.rgb = srgb_to_linear(blendColor.rgb);
+	}
+
+	// Mix based on texturing mode
+	if (noTexturing != 0) {
+		fragOut0 = blendColor * intensity;
+	} else if (alphaTexture != 0) {
+		fragOut0 = vec4(blendColor.rgb, baseColor.r * blendColor.a) * intensity;
+	} else {
+		fragOut0 = baseColor * blendColor * intensity;
+	}
 }
