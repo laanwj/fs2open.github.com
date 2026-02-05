@@ -28,51 +28,51 @@ void main()
         discard;
     }
     bool _58 = _39.srgb == 1;
-    vec4 _160;
+    vec4 _158;
     if (_58)
     {
-        vec3 _139 = pow(_33.xyz, vec3(2.2000000476837158203125));
-        vec4 _146 = _33;
-        _146.x = _139.x;
+        vec3 _137 = pow(_33.xyz, vec3(2.2000000476837158203125));
+        vec4 _144 = _33;
+        _144.x = _137.x;
+        vec4 _146 = _144;
+        _146.y = _137.y;
         vec4 _148 = _146;
-        _148.y = _139.y;
-        vec4 _150 = _148;
-        _150.z = _139.z;
-        _160 = _150;
+        _148.z = _137.z;
+        _158 = _148;
     }
     else
     {
-        _160 = _33;
+        _158 = _33;
     }
-    vec4 _161;
+    vec4 _159;
     if (_58)
     {
-        vec3 _143 = pow(fragColor.xyz, vec3(2.2000000476837158203125));
-        vec4 _152 = fragColor;
-        _152.x = _143.x;
+        vec3 _141 = pow(fragColor.xyz, vec3(2.2000000476837158203125));
+        vec4 _150 = fragColor;
+        _150.x = _141.x;
+        vec4 _152 = _150;
+        _152.y = _141.y;
         vec4 _154 = _152;
-        _154.y = _143.y;
-        vec4 _156 = _154;
-        _156.z = _143.z;
-        _161 = _156;
+        _154.z = _141.z;
+        _159 = _154;
     }
     else
     {
-        _161 = fragColor;
+        _159 = fragColor;
     }
     if (_39.noTexturing != 0)
     {
-        fragOut0 = _161 * _39.intensity;
+        fragOut0 = _159 * _39.intensity;
     }
     else
     {
         if (_39.alphaTexture != 0)
         {
-            fragOut0 = vec4(_161.xyz, _160.x * _161.w) * _39.intensity;
+            fragOut0 = vec4(_159.xyz, _158.x * _159.w) * _39.intensity;
         }
         else
         {
-            fragOut0 = (_160 * _161) * _39.intensity;
+            fragOut0 = (_158 * _159) * _39.intensity;
         }
     }
 }

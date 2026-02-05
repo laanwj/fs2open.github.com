@@ -56,6 +56,13 @@ static void create_perspective_projection_matrix(matrix4 *out, float left, float
 	out->a1d[10] = -(far_dist + near_dist) / (far_dist - near_dist);
 	out->a1d[11] = -1.0f;
 	out->a1d[14] = -2.0f * far_dist * near_dist / (far_dist - near_dist);
+
+	// Vulkan uses Y-down NDC (opposite of OpenGL), so flip Y in the projection matrix
+	// This allows shaders to be identical between OpenGL and Vulkan
+	if (gr_screen.mode == GR_VULKAN) {
+		out->a1d[5] = -out->a1d[5];
+		out->a1d[9] = -out->a1d[9];
+	}
 }
 
 static void create_orthographic_projection_matrix(matrix4* out, float left, float right, float bottom, float top, float near_dist, float far_dist)
@@ -69,6 +76,13 @@ static void create_orthographic_projection_matrix(matrix4* out, float left, floa
 	out->a1d[13] = -(top + bottom) / (top - bottom);
 	out->a1d[14] = -(far_dist + near_dist) / (far_dist - near_dist);
 	out->a1d[15] = 1.0f;
+
+	// Vulkan uses Y-down NDC (opposite of OpenGL), so flip Y in the projection matrix
+	// This allows shaders to be identical between OpenGL and Vulkan
+	if (gr_screen.mode == GR_VULKAN) {
+		out->a1d[5] = -out->a1d[5];
+		out->a1d[13] = -out->a1d[13];
+	}
 }
 
 void gr_start_instance_matrix(const vec3d *offset, const matrix *rotation)

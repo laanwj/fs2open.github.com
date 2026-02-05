@@ -7,7 +7,6 @@ layout (location = 2) in vec4 vertTexCoord;
 
 layout (location = 0) out vec4 fragTexCoord;
 layout (location = 1) out vec4 fragColor;
-layout (location = 2) out float debugMatrixVal;
 
 // Set 2 = PerDraw, Binding 1 = Matrices
 layout (set = 2, binding = 1, std140) uniform matrixData {
@@ -36,8 +35,7 @@ layout (set = 2, binding = 0, std140) uniform genericData {
 void main()
 {
 	fragTexCoord = vertTexCoord;
-	fragColor = color;  // Use uniform color instead of vertex color
-	debugMatrixVal = 0.5;  // Not used anymore
+	fragColor = color;
 
 	gl_Position = projMatrix * modelViewMatrix * vertPosition;
 

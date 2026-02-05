@@ -9,7 +9,6 @@ vec3 srgb_to_linear(vec3 val) {
 
 layout (location = 0) in vec4 fragTexCoord;
 layout (location = 1) in vec4 fragColor;
-layout (location = 2) in float debugMatrixVal;
 
 layout (location = 0) out vec4 fragOut0;
 

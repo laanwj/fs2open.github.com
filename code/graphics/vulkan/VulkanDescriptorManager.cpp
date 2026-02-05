@@ -123,11 +123,6 @@ void VulkanDescriptorManager::updateUniformBuffer(vk::DescriptorSet set, uint32_
 		return;
 	}
 
-	mprintf(("VulkanDescriptorManager: Writing buffer %p to set %p binding %u (offset=%zu, range=%zu)\n",
-		static_cast<void*>(static_cast<VkBuffer>(buffer)),
-		static_cast<void*>(static_cast<VkDescriptorSet>(set)),
-		binding, static_cast<size_t>(offset), static_cast<size_t>(range)));
-
 	vk::DescriptorBufferInfo bufferInfo;
 	bufferInfo.buffer = buffer;
 	bufferInfo.offset = offset;
