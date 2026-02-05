@@ -860,11 +860,9 @@ void VulkanRenderer::setupFrame()
 	// Set up state tracker for FSO draws
 	if (m_stateTracker) {
 		m_stateTracker->setRenderPass(m_renderPass.get(), 0);
-		// Use negative viewport height to flip Y (VK_KHR_maintenance1 convention)
-		m_stateTracker->setViewport(0.0f,
-			static_cast<float>(m_swapChainExtent.height),
+		m_stateTracker->setViewport(0.0f, 0.0f,
 			static_cast<float>(m_swapChainExtent.width),
-			-static_cast<float>(m_swapChainExtent.height));
+			static_cast<float>(m_swapChainExtent.height));
 	}
 
 	m_frameInProgress = true;

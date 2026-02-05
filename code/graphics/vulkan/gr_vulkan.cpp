@@ -803,15 +803,9 @@ void init_function_pointers()
 	gr_screen.gf_set_viewport = [](int x, int y, int width, int height) {
 		auto* stateTracker = graphics::vulkan::getStateTracker();
 		if (stateTracker) {
-			// Use negative viewport height to flip Y axis (VK_KHR_maintenance1).
-			// This makes the Vulkan viewport behave like OpenGL (Y-up), so all
-			// coordinate math in the engine works identically for both backends.
-			// The caller provides OpenGL-convention coordinates (Y=0 at bottom).
 			stateTracker->setViewport(
-				static_cast<float>(x),
-				static_cast<float>(y + height),  // offset to bottom edge
-				static_cast<float>(width),
-				static_cast<float>(-height));     // negative = flip Y
+				static_cast<float>(x), static_cast<float>(y),
+				static_cast<float>(width), static_cast<float>(height));
 		}
 	};
 
