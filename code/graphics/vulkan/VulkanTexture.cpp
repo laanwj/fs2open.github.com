@@ -116,7 +116,7 @@ bool VulkanTextureManager::init(vk::Device device, vk::PhysicalDevice physicalDe
 	}
 
 	m_fallbackTextureView = createImageView(m_fallbackTexture, vk::Format::eR8G8B8A8Unorm,
-	                                         vk::ImageAspectFlagBits::eColor, 1);
+	                                         vk::ImageAspectFlagBits::eColor, 1, true);
 	if (!m_fallbackTextureView) {
 		mprintf(("Failed to create fallback texture view!\n"));
 		m_device.destroyImage(m_fallbackTexture);
@@ -356,7 +356,7 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
 	}
 
 	// Create image view
-	ts->imageView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, mipLevels);
+	ts->imageView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, mipLevels, true);
 	if (!ts->imageView) {
 		mprintf(("Failed to create texture image view!\n"));
 		m_device.destroyImage(ts->image);
@@ -480,8 +480,8 @@ int VulkanTextureManager::bm_make_render_target(int handle, int* width, int* hei
 		return 0;
 	}
 
-	// Create image view
-	ts->imageView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, mipLevels);
+	// Create image view (use array view for shader compatibility)
+	ts->imageView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, mipLevels, true);
 	if (!ts->imageView) {
 		m_device.destroyImage(ts->image);
 		ts->image = nullptr;
@@ -852,11 +852,14 @@ bool VulkanTextureManager::createImage(uint32_t width, uint32_t height, uint32_t
 
 vk::ImageView VulkanTextureManager::createImageView(vk::Image image, vk::Format format,
                                                      vk::ImageAspectFlags aspectFlags,
-                                                     uint32_t mipLevels)
+                                                     uint32_t mipLevels,
+                                                     bool asArray)
 {
 	vk::ImageViewCreateInfo viewInfo;
 	viewInfo.image = image;
-	viewInfo.viewType = vk::ImageViewType::e2D;
+	// Use 2DArray view type for shader compatibility (sampler2DArray in shaders)
+	// Even single-layer textures are viewed as arrays with layerCount=1
+	viewInfo.viewType = asArray ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
 	viewInfo.format = format;
 	viewInfo.subresourceRange.aspectMask = aspectFlags;
 	viewInfo.subresourceRange.baseMipLevel = 0;

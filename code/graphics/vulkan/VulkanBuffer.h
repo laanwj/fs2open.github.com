@@ -195,6 +195,12 @@ public:
 	size_t getTotalBufferMemory() const { return m_totalBufferMemory; }
 
 	/**
+	 * @brief Get the constant white color buffer for fallback vertex colors
+	 * This buffer contains vec4(1,1,1,1) for shaders expecting vertColor
+	 */
+	vk::Buffer getFallbackColorBuffer() const { return m_fallbackColorBuffer; }
+
+	/**
 	 * @brief Process deferred buffer destructions from previous frame
 	 * Called at frame start to destroy buffers that were queued last frame
 	 */
@@ -243,6 +249,10 @@ private:
 
 	// Deferred destruction queue - buffers destroyed mid-frame are queued here
 	SCP_vector<PendingBufferDestruction> m_pendingDestructions;
+
+	// Fallback color buffer containing white (1,1,1,1) for vertex data without colors
+	vk::Buffer m_fallbackColorBuffer;
+	VulkanAllocation m_fallbackColorAllocation;
 
 	size_t m_activeBufferCount = 0;
 	size_t m_totalBufferMemory = 0;

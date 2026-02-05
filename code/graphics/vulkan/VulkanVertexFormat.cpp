@@ -76,9 +76,11 @@ void VulkanVertexFormatCache::clear()
 VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_layout& layout)
 {
 	VertexInputConfig config;
+	config.needsFallbackColor = false;
 
 	// Track which bindings we've already added
 	SCP_unordered_map<size_t, uint32_t> bufferBindings; // buffer_number -> binding index
+	bool hasColorAttribute = false;
 
 	size_t numComponents = layout.get_num_vertex_components();
 
@@ -89,6 +91,11 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 		if (!mapping) {
 			mprintf(("VulkanVertexFormat: Unknown vertex format %d\n", static_cast<int>(component->format_type)));
 			continue;
+		}
+
+		// Track if we have a color attribute
+		if (mapping->location == VertexAttributeLocation::Color) {
+			hasColorAttribute = true;
 		}
 
 		// Get or create binding for this buffer
@@ -127,6 +134,27 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 			attr.offset = static_cast<uint32_t>(component->offset);
 			config.attributes.push_back(attr);
 		}
+	}
+
+	// If no color attribute in vertex data, add a fallback using a dedicated binding
+	// This provides white (1,1,1,1) color for shaders that expect vertColor
+	if (!hasColorAttribute) {
+		config.needsFallbackColor = true;
+
+		// Add binding for fallback color buffer (instanced so one value applies to all vertices)
+		vk::VertexInputBindingDescription colorBinding;
+		colorBinding.binding = FALLBACK_COLOR_BINDING;
+		colorBinding.stride = 16;  // vec4 = 16 bytes
+		colorBinding.inputRate = vk::VertexInputRate::eInstance;  // Same color for all vertices
+		config.bindings.push_back(colorBinding);
+
+		// Add attribute for color at location 1
+		vk::VertexInputAttributeDescription colorAttr;
+		colorAttr.location = static_cast<uint32_t>(VertexAttributeLocation::Color);
+		colorAttr.binding = FALLBACK_COLOR_BINDING;
+		colorAttr.format = vk::Format::eR32G32B32A32Sfloat;
+		colorAttr.offset = 0;
+		config.attributes.push_back(colorAttr);
 	}
 
 	// Update the createInfo pointers

@@ -122,6 +122,13 @@ public:
 	size_t getPipelineCount() const { return m_pipelines.size(); }
 
 	/**
+	 * @brief Check if a vertex layout needs the fallback color buffer
+	 * @param vertexLayout The vertex layout to check
+	 * @return true if the layout doesn't have color and needs fallback
+	 */
+	bool needsFallbackColor(const vertex_layout& vertexLayout);
+
+	/**
 	 * @brief Clear all cached pipelines
 	 */
 	void clearPipelineCache();

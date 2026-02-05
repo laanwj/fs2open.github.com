@@ -51,6 +51,39 @@ bool VulkanBufferManager::init(vk::Device device,
 	m_transferQueueFamily = transferQueueFamily;
 	m_currentFrame = 0;
 
+	// Create fallback color buffer with white (1,1,1,1) for shaders expecting vertColor
+	{
+		vk::BufferCreateInfo bufferInfo;
+		bufferInfo.size = 16;  // vec4 = 16 bytes
+		bufferInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+		try {
+			m_fallbackColorBuffer = m_device.createBuffer(bufferInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("Failed to create fallback color buffer: %s\n", e.what()));
+			return false;
+		}
+
+		if (!m_memoryManager->allocateBufferMemory(m_fallbackColorBuffer, MemoryUsage::CpuToGpu, m_fallbackColorAllocation)) {
+			m_device.destroyBuffer(m_fallbackColorBuffer);
+			m_fallbackColorBuffer = nullptr;
+			mprintf(("Failed to allocate fallback color buffer memory!\n"));
+			return false;
+		}
+
+		// Write white color (1.0, 1.0, 1.0, 1.0) to the buffer
+		float whiteColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+		void* mapped = m_memoryManager->mapMemory(m_fallbackColorAllocation);
+		if (mapped) {
+			memcpy(mapped, whiteColor, sizeof(whiteColor));
+			m_memoryManager->flushMemory(m_fallbackColorAllocation, 0, sizeof(whiteColor));
+			m_memoryManager->unmapMemory(m_fallbackColorAllocation);
+		}
+
+		mprintf(("Created fallback white color buffer\n"));
+	}
+
 	m_initialized = true;
 	mprintf(("Vulkan Buffer Manager initialized (per-frame streaming buffers enabled, %u frames)\n",
 		BUFFER_MAX_FRAMES_IN_FLIGHT));
@@ -61,6 +94,16 @@ void VulkanBufferManager::shutdown()
 {
 	if (!m_initialized) {
 		return;
+	}
+
+	// Destroy fallback color buffer
+	if (m_fallbackColorBuffer) {
+		m_device.destroyBuffer(m_fallbackColorBuffer);
+		m_fallbackColorBuffer = nullptr;
+	}
+	if (m_fallbackColorAllocation.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_fallbackColorAllocation);
+		m_fallbackColorAllocation = {};
 	}
 
 	// Free all remaining buffers

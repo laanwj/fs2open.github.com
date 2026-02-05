@@ -188,10 +188,12 @@ private:
 
 	/**
 	 * @brief Create an image view
+	 * @param asArray If true, creates a 2DArray view for shader compatibility
 	 */
 	vk::ImageView createImageView(vk::Image image, vk::Format format,
 	                               vk::ImageAspectFlags aspectFlags,
-	                               uint32_t mipLevels);
+	                               uint32_t mipLevels,
+	                               bool asArray = false);
 
 	/**
 	 * @brief Copy buffer data to image

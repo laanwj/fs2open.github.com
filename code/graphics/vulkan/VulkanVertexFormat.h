@@ -44,6 +44,9 @@ struct VertexFormatMapping {
  */
 const VertexFormatMapping* getVertexFormatMapping(vertex_format_data::vertex_format format);
 
+// Reserved binding index for fallback color buffer when vertex data doesn't have color
+static constexpr uint32_t FALLBACK_COLOR_BINDING = 15;
+
 /**
  * @brief Cached vertex input configuration
  */
@@ -51,6 +54,9 @@ struct VertexInputConfig {
 	SCP_vector<vk::VertexInputBindingDescription> bindings;
 	SCP_vector<vk::VertexInputAttributeDescription> attributes;
 	vk::PipelineVertexInputStateCreateInfo createInfo;
+
+	// True if this config uses the fallback color buffer (no color in vertex data)
+	bool needsFallbackColor = false;
 
 	// Update createInfo pointers after vector modifications
 	void updatePointers();

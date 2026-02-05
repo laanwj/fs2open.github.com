@@ -213,6 +213,12 @@ void VulkanPipelineManager::clearPipelineCache()
 	m_vertexFormatCache.clear();
 }
 
+bool VulkanPipelineManager::needsFallbackColor(const vertex_layout& vertexLayout)
+{
+	const VertexInputConfig& config = m_vertexFormatCache.getVertexInputConfig(vertexLayout);
+	return config.needsFallbackColor;
+}
+
 void VulkanPipelineManager::createPipelineLayout()
 {
 	// Get descriptor set layouts from descriptor manager

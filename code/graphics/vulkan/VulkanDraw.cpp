@@ -5,6 +5,7 @@
 #include "VulkanShader.h"
 #include "VulkanTexture.h"
 #include "VulkanDescriptorManager.h"
+#include "VulkanVertexFormat.h"
 #include "bmpman/bmpman.h"
 #include "graphics/grinternal.h"
 
@@ -957,6 +958,14 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 
 	// Bind pipeline with layout
 	stateTracker->bindPipeline(pipeline, pipelineManager->getPipelineLayout());
+
+	// Bind fallback color buffer if vertex data doesn't have color
+	if (pipelineManager->needsFallbackColor(*layout)) {
+		vk::Buffer fallbackColor = bufferManager->getFallbackColorBuffer();
+		if (fallbackColor) {
+			stateTracker->bindVertexBuffer(FALLBACK_COLOR_BINDING, fallbackColor, 0);
+		}
+	}
 
 	// Apply any pending uniform buffer bindings
 	applyPendingUniformBindings();
