@@ -800,7 +800,14 @@ void init_function_pointers()
 		}
 	};
 
-	gr_screen.gf_set_viewport = [](int /*x*/, int /*y*/, int /*width*/, int /*height*/) {};
+	gr_screen.gf_set_viewport = [](int x, int y, int width, int height) {
+		auto* stateTracker = graphics::vulkan::getStateTracker();
+		if (stateTracker) {
+			stateTracker->setViewport(
+				static_cast<float>(x), static_cast<float>(y),
+				static_cast<float>(width), static_cast<float>(height));
+		}
+	};
 
 	gr_screen.gf_openxr_get_extensions = stub_openxr_get_extensions;
 	gr_screen.gf_openxr_test_capabilities = stub_openxr_test_capabilities;
