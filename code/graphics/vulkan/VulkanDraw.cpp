@@ -7,6 +7,7 @@
 #include "VulkanDescriptorManager.h"
 #include "VulkanVertexFormat.h"
 #include "bmpman/bmpman.h"
+#include "ddsutils/ddsutils.h"
 #include "graphics/grinternal.h"
 #include "graphics/material.h"
 
@@ -516,6 +517,26 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 		return;  // Nothing to draw
 	}
 
+	// Log model material textures for debugging
+	static int modelLogCount = 0;
+	if (modelLogCount < 10) {
+		int baseMap = material_info->get_texture_map(TM_BASE_TYPE);
+		int glowMap = material_info->get_texture_map(TM_GLOW_TYPE);
+		int specMap = material_info->get_texture_map(TM_SPECULAR_TYPE);
+		mprintf(("renderModel #%d: base=%d glow=%d spec=%d texType=%d shaderFlags=0x%x\n",
+			modelLogCount, baseMap, glowMap, specMap,
+			material_info->get_texture_type(),
+			material_info->get_shader_runtime_flags()));
+		if (baseMap >= 0) {
+			mprintf(("  baseMap: bmType=%d compType=%d hasAlpha=%d name=%s\n",
+				static_cast<int>(bm_get_type(baseMap)),
+				bm_is_compressed(baseMap),
+				bm_has_alpha_channel(baseMap) ? 1 : 0,
+				bm_get_filename(baseMap)));
+		}
+		modelLogCount++;
+	}
+
 	// Apply model material state and bind pipeline
 	// Model rendering always uses triangles
 	if (!applyMaterial(material_info, PRIM_TYPE_TRIS, &bufferp->layout)) {
@@ -752,10 +773,17 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 
 		// If texture isn't loaded, try to load it on-demand (like OpenGL does)
 		if (!texSlot || !texSlot->imageView) {
-			// For base map, use material's texture type. For others, use XPARENT/NORMAL
-			int bitmapType = isBaseMap ? materialTextureType : TCACHE_TYPE_XPARENT;
+			// Determine bitmap type - match OpenGL's gr_opengl_tcache_set logic:
+			// Override material texture type with bitmap's own type if not NORMAL
+			int bitmapType = isBaseMap ? materialTextureType : TCACHE_TYPE_NORMAL;
+			int overrideType = bm_get_tcache_type(textureHandle);
+			if (overrideType != TCACHE_TYPE_NORMAL) {
+				bitmapType = overrideType;
+			}
+
+			// Determine bpp and flags - matches OpenGL's opengl_determine_bpp_and_flags
 			ushort lockFlags = 0;
-			int bpp = 32;
+			int bpp = 16;
 
 			switch (bitmapType) {
 				case TCACHE_TYPE_AABITMAP:
@@ -765,11 +793,44 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 				case TCACHE_TYPE_INTERFACE:
 				case TCACHE_TYPE_XPARENT:
 					lockFlags = BMP_TEX_XPARENT;
-					bpp = 32;
+					if (bm_get_type(textureHandle) == BM_TYPE_PCX) {
+						bpp = 16;
+					} else {
+						bpp = 32;
+					}
 					break;
+				case TCACHE_TYPE_COMPRESSED:
+					switch (bm_is_compressed(textureHandle)) {
+						case DDS_DXT1:
+							bpp = 24;
+							lockFlags = BMP_TEX_DXT1;
+							break;
+						case DDS_DXT3:
+							bpp = 32;
+							lockFlags = BMP_TEX_DXT3;
+							break;
+						case DDS_DXT5:
+							bpp = 32;
+							lockFlags = BMP_TEX_DXT5;
+							break;
+						default:
+							bpp = 32;
+							lockFlags = BMP_TEX_OTHER;
+							break;
+					}
+					break;
+				case TCACHE_TYPE_NORMAL:
 				default:
 					lockFlags = BMP_TEX_OTHER;
-					bpp = bm_has_alpha_channel(textureHandle) ? 32 : 24;
+					if (bm_get_type(textureHandle) == BM_TYPE_PCX) {
+						bpp = 16;  // PCX locking only works with bpp=16
+					} else {
+						if (bm_has_alpha_channel(textureHandle)) {
+							bpp = 32;
+						} else {
+							bpp = 24;
+						}
+					}
 					break;
 			}
 
@@ -784,8 +845,8 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 				texSlot = texManager->getTextureSlot(textureHandle);
 
 				if (texLogCount < 20) {
-					mprintf(("bindMaterialTextures: on-demand loaded texture %d (type=%d bpp=%d), slot now=%p\n",
-						textureHandle, bitmapType, bpp, texSlot));
+					mprintf(("bindMaterialTextures: loaded tex %d (type=%d bpp=%d lockFlags=0x%x bmType=%d), slot=%p\n",
+						textureHandle, bitmapType, bpp, lockFlags, static_cast<int>(bm_get_type(textureHandle)), texSlot));
 					texLogCount++;
 				}
 			}
@@ -793,11 +854,6 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 
 		if (texSlot && texSlot->imageView) {
 			textureInfos[slot].imageView = texSlot->imageView;
-			if (texLogCount < 20) {
-				mprintf(("bindMaterialTextures: slot %u bound to handle %d (view=%p)\n",
-					slot, textureHandle, static_cast<void*>(static_cast<VkImageView>(texSlot->imageView))));
-				texLogCount++;
-			}
 		} else {
 			if (texLogCount < 20) {
 				mprintf(("bindMaterialTextures: slot %u handle %d FAILED to load\n",

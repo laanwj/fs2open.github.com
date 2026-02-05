@@ -329,16 +329,55 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
 
 	auto* ts = static_cast<tcache_slot_vulkan*>(slot->gr_info);
 
-	// Determine format
-	vk::Format format = bppToVkFormat(bm->bpp);
-	if (format == vk::Format::eUndefined) {
-		mprintf(("VulkanTextureManager::bm_data: Unsupported bpp %d\n", bm->bpp));
-		return false;
-	}
-
 	uint32_t width = static_cast<uint32_t>(bm->w);
 	uint32_t height = static_cast<uint32_t>(bm->h);
-	uint32_t mipLevels = 1;  // For now, no mipmaps
+	uint32_t mipLevels = 1;
+
+	// Check if bitmap is compressed (DDS DXT/BC format)
+	int compType = bm_is_compressed(handle);
+	bool isCompressed = (compType > 0);
+
+	static int fmtLogCount = 0;
+	if (fmtLogCount < 30) {
+		mprintf(("VulkanTextureManager::bm_data: handle=%d w=%d h=%d bpp=%d true_bpp=%d flags=0x%x compType=%d\n",
+			handle, bm->w, bm->h, bm->bpp, bm->true_bpp, bm->flags, compType));
+		fmtLogCount++;
+	}
+
+	// Determine format and data size
+	vk::Format format;
+	size_t dataSize;
+
+	if (isCompressed) {
+		format = bppToVkFormat(bm->bpp, true, compType);
+		if (format == vk::Format::eUndefined) {
+			mprintf(("VulkanTextureManager::bm_data: Unsupported compression type %d\n", compType));
+			return false;
+		}
+
+		// Block-compressed data size: ceil(w/4) * ceil(h/4) * blockSize
+		uint32_t blocksW = (width + 3) / 4;
+		uint32_t blocksH = (height + 3) / 4;
+		size_t blockSize = (compType == DDS_DXT1) ? 8 : 16;  // DXT1=8, DXT3/DXT5/BC7=16
+		dataSize = blocksW * blocksH * blockSize;
+
+		static int compLogCount = 0;
+		if (compLogCount < 10) {
+			mprintf(("VulkanTextureManager::bm_data: Compressed texture %d: %ux%u compType=%d blockSize=%zu dataSize=%zu\n",
+				handle, width, height, compType, blockSize, dataSize));
+			compLogCount++;
+		}
+	} else {
+		format = bppToVkFormat(bm->bpp);
+		if (format == vk::Format::eUndefined) {
+			mprintf(("VulkanTextureManager::bm_data: Unsupported bpp %d\n", bm->bpp));
+			return false;
+		}
+
+		// 24bpp textures uploaded as 32bpp (Vulkan doesn't support 24bpp optimal tiling)
+		size_t dstBytesPerPixel = (bm->bpp == 24) ? 4 : (bm->bpp / 8);
+		dataSize = width * height * dstBytesPerPixel;
+	}
 
 	// If texture already exists with same dimensions, just update data
 	if (ts->image && ts->width == width && ts->height == height && ts->format == format) {
@@ -376,12 +415,6 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
 		return false;
 	}
 
-	// Calculate staging buffer size
-	// 24bpp textures are uploaded as 32bpp (BGR→BGRA) since Vulkan doesn't support 24bpp optimal tiling
-	size_t srcBytesPerPixel = bm->bpp / 8;
-	size_t dstBytesPerPixel = (bm->bpp == 24) ? 4 : srcBytesPerPixel;
-	size_t dataSize = width * height * dstBytesPerPixel;
-
 	// Create staging buffer
 	vk::BufferCreateInfo bufferInfo;
 	bufferInfo.size = dataSize;
@@ -406,7 +439,10 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
 	// Copy data to staging buffer
 	void* mapped = m_memoryManager->mapMemory(stagingAllocation);
 	if (mapped) {
-		if (bm->bpp == 24) {
+		if (isCompressed) {
+			// Compressed data: copy raw block data directly
+			memcpy(mapped, reinterpret_cast<const void*>(bm->data), dataSize);
+		} else if (bm->bpp == 24) {
 			// Convert BGR (3 bytes) to BGRA (4 bytes), adding alpha=255
 			const uint8_t* src = reinterpret_cast<const uint8_t*>(bm->data);
 			uint8_t* dst = static_cast<uint8_t*>(mapped);
@@ -841,6 +877,8 @@ vk::Format VulkanTextureManager::bppToVkFormat(int bpp, bool compressed, int com
 			return vk::Format::eBc2UnormBlock;
 		case DDS_DXT5:
 			return vk::Format::eBc3UnormBlock;
+		case DDS_BC7:
+			return vk::Format::eBc7UnormBlock;
 		default:
 			return vk::Format::eUndefined;
 		}

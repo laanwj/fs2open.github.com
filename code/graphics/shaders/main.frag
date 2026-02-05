@@ -375,8 +375,9 @@ void main()
 	// === DIAGNOSTIC: Visualize shader data for debugging ===
 	// Uncomment ONE of these to diagnose rendering issues:
 
-	// 1. Solid magenta = pipeline works, geometry correct
-	//fragOut0 = vec4(1.0, 0.0, 1.0, 1.0); return;
+	// DIAGNOSTIC: Show base texture directly (no lighting)
+	fragOut0 = texture(materialTextures[0], vec3(fragTexCoord.xy, 0.0));
+	return;
 
 	// 2. Show flags as color: R=has diffuse, G=has light, B=has spec
 	//fragOut0 = vec4(
