@@ -376,9 +376,11 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
 		return false;
 	}
 
-	// Calculate data size
-	size_t bytesPerPixel = bm->bpp / 8;
-	size_t dataSize = width * height * bytesPerPixel;
+	// Calculate staging buffer size
+	// 24bpp textures are uploaded as 32bpp (BGR→BGRA) since Vulkan doesn't support 24bpp optimal tiling
+	size_t srcBytesPerPixel = bm->bpp / 8;
+	size_t dstBytesPerPixel = (bm->bpp == 24) ? 4 : srcBytesPerPixel;
+	size_t dataSize = width * height * dstBytesPerPixel;
 
 	// Create staging buffer
 	vk::BufferCreateInfo bufferInfo;
@@ -404,7 +406,22 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
 	// Copy data to staging buffer
 	void* mapped = m_memoryManager->mapMemory(stagingAllocation);
 	if (mapped) {
-		memcpy(mapped, reinterpret_cast<const void*>(bm->data), dataSize);
+		if (bm->bpp == 24) {
+			// Convert BGR (3 bytes) to BGRA (4 bytes), adding alpha=255
+			const uint8_t* src = reinterpret_cast<const uint8_t*>(bm->data);
+			uint8_t* dst = static_cast<uint8_t*>(mapped);
+			size_t pixelCount = width * height;
+			for (size_t i = 0; i < pixelCount; ++i) {
+				dst[0] = src[0];  // B
+				dst[1] = src[1];  // G
+				dst[2] = src[2];  // R
+				dst[3] = 255;     // A
+				src += 3;
+				dst += 4;
+			}
+		} else {
+			memcpy(mapped, reinterpret_cast<const void*>(bm->data), dataSize);
+		}
 		m_memoryManager->flushMemory(stagingAllocation, 0, dataSize);
 		m_memoryManager->unmapMemory(stagingAllocation);
 	}
@@ -663,9 +680,10 @@ void VulkanTextureManager::update_texture(int bitmap_handle, int bpp, const ubyt
 		return;
 	}
 
-	// Calculate data size based on input bpp (the actual data being passed)
-	size_t bytesPerPixel = bpp / 8;
-	size_t dataSize = w * h * bytesPerPixel;
+	// Calculate staging buffer size (24bpp is uploaded as 32bpp BGRA)
+	size_t srcBytesPerPixel = bpp / 8;
+	size_t dstBytesPerPixel = (bpp == 24) ? 4 : srcBytesPerPixel;
+	size_t dataSize = w * h * dstBytesPerPixel;
 
 	// Create staging buffer
 	vk::BufferCreateInfo bufferInfo;
@@ -691,7 +709,22 @@ void VulkanTextureManager::update_texture(int bitmap_handle, int bpp, const ubyt
 	// Copy data to staging buffer
 	void* mapped = m_memoryManager->mapMemory(stagingAllocation);
 	if (mapped) {
-		memcpy(mapped, data, dataSize);
+		if (bpp == 24) {
+			// Convert BGR (3 bytes) to BGRA (4 bytes), adding alpha=255
+			const uint8_t* src = data;
+			uint8_t* dst = static_cast<uint8_t*>(mapped);
+			size_t pixelCount = w * h;
+			for (size_t i = 0; i < pixelCount; ++i) {
+				dst[0] = src[0];
+				dst[1] = src[1];
+				dst[2] = src[2];
+				dst[3] = 255;
+				src += 3;
+				dst += 4;
+			}
+		} else {
+			memcpy(mapped, data, dataSize);
+		}
 		m_memoryManager->flushMemory(stagingAllocation, 0, dataSize);
 		m_memoryManager->unmapMemory(stagingAllocation);
 	}
@@ -820,8 +853,9 @@ vk::Format VulkanTextureManager::bppToVkFormat(int bpp, bool compressed, int com
 		// OpenGL uses GL_UNSIGNED_SHORT_1_5_5_5_REV with GL_BGRA (A1R5G5B5)
 		return vk::Format::eA1R5G5B5UnormPack16;
 	case 24:
-		// FSO uses BGR format for 24bpp
-		return vk::Format::eB8G8R8Unorm;
+		// 24bpp (BGR) is almost never supported for optimal tiling in Vulkan.
+		// We convert to 32bpp BGRA at upload time, so return the 32bpp format.
+		return vk::Format::eB8G8R8A8Unorm;
 	case 32:
 		// FSO uses BGRA format (BMP_AARRGGBB = BGRA in memory)
 		return vk::Format::eB8G8R8A8Unorm;
