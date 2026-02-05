@@ -136,8 +136,6 @@ class VulkanRenderer {
 	uint32_t m_currentSwapChainImage = 0;
 
 	vk::UniqueRenderPass m_renderPass;
-	vk::UniquePipelineLayout m_pipelineLayout;
-	vk::UniquePipeline m_graphicsPipeline;
 
 	uint32_t m_currentFrame = 0;
 	uint64_t m_frameNumber = 0;  // Total frames rendered (for sync tracking)

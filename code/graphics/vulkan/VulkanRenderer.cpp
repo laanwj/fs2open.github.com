@@ -284,7 +284,6 @@ bool VulkanRenderer::initialize()
 	}
 
 	createRenderPass();
-	createGraphicsPipeline();
 	createFrameBuffers();
 	createPresentSyncObjects();
 	createCommandPool(deviceValues);
@@ -774,126 +773,6 @@ void VulkanRenderer::createRenderPass()
 
 	m_renderPass = m_device->createRenderPassUnique(renderPassInfo);
 }
-void VulkanRenderer::createGraphicsPipeline()
-{
-	auto vertShaderMod = loadShader("vulkan.vert.spv");
-	vk::PipelineShaderStageCreateInfo vertStageCreate;
-	vertStageCreate.stage = vk::ShaderStageFlagBits::eVertex;
-	vertStageCreate.module = vertShaderMod.get();
-	vertStageCreate.pName = "main";
-
-	auto fragShaderMod = loadShader("vulkan.frag.spv");
-	vk::PipelineShaderStageCreateInfo fragStageCreate;
-	fragStageCreate.stage = vk::ShaderStageFlagBits::eFragment;
-	fragStageCreate.module = fragShaderMod.get();
-	fragStageCreate.pName = "main";
-
-	std::array<vk::PipelineShaderStageCreateInfo, 2> shaderStages = {vertStageCreate, fragStageCreate};
-
-	vk::PipelineVertexInputStateCreateInfo vertInCreate;
-	vertInCreate.vertexBindingDescriptionCount = 0;
-	vertInCreate.vertexAttributeDescriptionCount = 0;
-
-	vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
-	inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
-	inputAssembly.primitiveRestartEnable = false;
-
-	vk::Viewport viewport;
-	viewport.x = 0.0f;
-	viewport.y = 0.0f;
-	viewport.width = i2fl(gr_screen.max_w);
-	viewport.height = i2fl(gr_screen.max_h);
-	viewport.minDepth = 0.0f;
-	viewport.maxDepth = 1.0f;
-
-	vk::Rect2D scissor;
-	scissor.offset.x = 0;
-	scissor.offset.y = 0;
-	scissor.extent = m_swapChainExtent;
-
-	vk::PipelineViewportStateCreateInfo viewportState;
-	viewportState.viewportCount = 1;
-	viewportState.pViewports = &viewport;
-	viewportState.scissorCount = 1;
-	viewportState.pScissors = &scissor;
-
-	vk::PipelineRasterizationStateCreateInfo rasterizer;
-	rasterizer.depthClampEnable = false;
-	rasterizer.rasterizerDiscardEnable = false;
-	rasterizer.polygonMode = vk::PolygonMode::eFill;
-	rasterizer.lineWidth = 1.0f;
-	rasterizer.cullMode |= vk::CullModeFlagBits::eBack;
-	rasterizer.frontFace = vk::FrontFace::eClockwise;
-	rasterizer.depthBiasEnable = false;
-	rasterizer.depthBiasConstantFactor = 0.0f;
-	rasterizer.depthBiasClamp = 0.0f;
-	rasterizer.depthBiasSlopeFactor = 0.0f;
-
-	vk::PipelineMultisampleStateCreateInfo multisampling;
-	multisampling.sampleShadingEnable = false;
-	multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
-	multisampling.minSampleShading = 1.0f;
-	multisampling.pSampleMask = nullptr;
-	multisampling.alphaToCoverageEnable = false;
-	multisampling.alphaToOneEnable = false;
-
-	vk::PipelineColorBlendAttachmentState colorBlendAttachment;
-	colorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-										  vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
-	colorBlendAttachment.blendEnable = false;
-	colorBlendAttachment.srcColorBlendFactor = vk::BlendFactor::eOne;  // Optional
-	colorBlendAttachment.dstColorBlendFactor = vk::BlendFactor::eZero; // Optional
-	colorBlendAttachment.colorBlendOp = vk::BlendOp::eAdd;             // Optional
-	colorBlendAttachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;  // Optional
-	colorBlendAttachment.dstAlphaBlendFactor = vk::BlendFactor::eZero; // Optional
-	colorBlendAttachment.alphaBlendOp = vk::BlendOp::eAdd;             // Optional
-
-	vk::PipelineColorBlendStateCreateInfo colorBlending;
-	colorBlending.logicOpEnable = false;
-	colorBlending.logicOp = vk::LogicOp::eCopy;
-	colorBlending.attachmentCount = 1;
-	colorBlending.pAttachments = &colorBlendAttachment;
-	colorBlending.blendConstants[0] = 0.0f;
-	colorBlending.blendConstants[1] = 0.0f;
-	colorBlending.blendConstants[2] = 0.0f;
-	colorBlending.blendConstants[3] = 0.0f;
-
-	vk::DynamicState dynamicStates[] = {
-		vk::DynamicState::eViewport,
-		vk::DynamicState::eLineWidth,
-	};
-
-	vk::PipelineDynamicStateCreateInfo dynamicStateInfo;
-	dynamicStateInfo.dynamicStateCount = 2;
-	dynamicStateInfo.pDynamicStates = dynamicStates;
-
-	vk::PipelineLayoutCreateInfo pipelineLayout;
-	pipelineLayout.setLayoutCount = 0;
-	pipelineLayout.pSetLayouts = nullptr;
-	pipelineLayout.pushConstantRangeCount = 0;
-	pipelineLayout.pPushConstantRanges = nullptr;
-
-	m_pipelineLayout = m_device->createPipelineLayoutUnique(pipelineLayout);
-
-	vk::GraphicsPipelineCreateInfo pipelineInfo;
-	pipelineInfo.stageCount = 2;
-	pipelineInfo.pStages = shaderStages.data();
-	pipelineInfo.pVertexInputState = &vertInCreate;
-	pipelineInfo.pInputAssemblyState = &inputAssembly;
-	pipelineInfo.pViewportState = &viewportState;
-	pipelineInfo.pRasterizationState = &rasterizer;
-	pipelineInfo.pMultisampleState = &multisampling;
-	pipelineInfo.pDepthStencilState = nullptr;
-	pipelineInfo.pColorBlendState = &colorBlending;
-	pipelineInfo.pDynamicState = nullptr;
-	pipelineInfo.layout = m_pipelineLayout.get();
-	pipelineInfo.renderPass = m_renderPass.get();
-	pipelineInfo.subpass = 0;
-	pipelineInfo.basePipelineHandle = nullptr;
-	pipelineInfo.basePipelineIndex = -1;
-
-	m_graphicsPipeline = m_device->createGraphicsPipelineUnique(nullptr, pipelineInfo).value;
-}
 void VulkanRenderer::createCommandPool(const PhysicalDeviceValues& values)
 {
 	vk::CommandPoolCreateInfo poolCreate;
@@ -977,10 +856,6 @@ void VulkanRenderer::setupFrame()
 	renderPassBegin.pClearValues = &clearColor;
 
 	m_currentCommandBuffer.beginRenderPass(renderPassBegin, vk::SubpassContents::eInline);
-
-	// Draw test triangle
-	m_currentCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.get());
-	m_currentCommandBuffer.draw(3, 1, 0, 0);
 
 	// Set up state tracker for FSO draws
 	if (m_stateTracker) {
