@@ -201,6 +201,12 @@ public:
 	vk::Buffer getFallbackColorBuffer() const { return m_fallbackColorBuffer; }
 
 	/**
+	 * @brief Get the constant zero texcoord buffer for fallback vertex texcoords
+	 * This buffer contains vec4(0,0,0,0) for shaders expecting vertTexCoord
+	 */
+	vk::Buffer getFallbackTexCoordBuffer() const { return m_fallbackTexCoordBuffer; }
+
+	/**
 	 * @brief Process deferred buffer destructions from previous frame
 	 * Called at frame start to destroy buffers that were queued last frame
 	 */
@@ -253,6 +259,10 @@ private:
 	// Fallback color buffer containing white (1,1,1,1) for vertex data without colors
 	vk::Buffer m_fallbackColorBuffer;
 	VulkanAllocation m_fallbackColorAllocation;
+
+	// Fallback texcoord buffer containing (0,0,0,0) for vertex data without texcoords
+	vk::Buffer m_fallbackTexCoordBuffer;
+	VulkanAllocation m_fallbackTexCoordAllocation;
 
 	size_t m_activeBufferCount = 0;
 	size_t m_totalBufferMemory = 0;

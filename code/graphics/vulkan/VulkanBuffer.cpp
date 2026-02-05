@@ -84,6 +84,39 @@ bool VulkanBufferManager::init(vk::Device device,
 		mprintf(("Created fallback white color buffer\n"));
 	}
 
+	// Create fallback texcoord buffer with zeros (0,0,0,0) for shaders expecting vertTexCoord
+	{
+		vk::BufferCreateInfo bufferInfo;
+		bufferInfo.size = 16;  // vec4 = 16 bytes
+		bufferInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+		try {
+			m_fallbackTexCoordBuffer = m_device.createBuffer(bufferInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("Failed to create fallback texcoord buffer: %s\n", e.what()));
+			return false;
+		}
+
+		if (!m_memoryManager->allocateBufferMemory(m_fallbackTexCoordBuffer, MemoryUsage::CpuToGpu, m_fallbackTexCoordAllocation)) {
+			m_device.destroyBuffer(m_fallbackTexCoordBuffer);
+			m_fallbackTexCoordBuffer = nullptr;
+			mprintf(("Failed to allocate fallback texcoord buffer memory!\n"));
+			return false;
+		}
+
+		// Write zero texcoord (0.0, 0.0, 0.0, 0.0) to the buffer
+		float zeroTexCoord[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		void* mapped = m_memoryManager->mapMemory(m_fallbackTexCoordAllocation);
+		if (mapped) {
+			memcpy(mapped, zeroTexCoord, sizeof(zeroTexCoord));
+			m_memoryManager->flushMemory(m_fallbackTexCoordAllocation, 0, sizeof(zeroTexCoord));
+			m_memoryManager->unmapMemory(m_fallbackTexCoordAllocation);
+		}
+
+		mprintf(("Created fallback zero texcoord buffer\n"));
+	}
+
 	m_initialized = true;
 	mprintf(("Vulkan Buffer Manager initialized (per-frame streaming buffers enabled, %u frames)\n",
 		BUFFER_MAX_FRAMES_IN_FLIGHT));
@@ -104,6 +137,16 @@ void VulkanBufferManager::shutdown()
 	if (m_fallbackColorAllocation.memory != VK_NULL_HANDLE) {
 		m_memoryManager->freeAllocation(m_fallbackColorAllocation);
 		m_fallbackColorAllocation = {};
+	}
+
+	// Destroy fallback texcoord buffer
+	if (m_fallbackTexCoordBuffer) {
+		m_device.destroyBuffer(m_fallbackTexCoordBuffer);
+		m_fallbackTexCoordBuffer = nullptr;
+	}
+	if (m_fallbackTexCoordAllocation.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_fallbackTexCoordAllocation);
+		m_fallbackTexCoordAllocation = {};
 	}
 
 	// Free all remaining buffers

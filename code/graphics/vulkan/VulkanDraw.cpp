@@ -1022,6 +1022,14 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 		}
 	}
 
+	// Bind fallback texcoord buffer if vertex data doesn't have texcoords
+	if (pipelineManager->needsFallbackTexCoord(*layout)) {
+		vk::Buffer fallbackTexCoord = bufferManager->getFallbackTexCoordBuffer();
+		if (fallbackTexCoord) {
+			stateTracker->bindVertexBuffer(FALLBACK_TEXCOORD_BINDING, fallbackTexCoord, 0);
+		}
+	}
+
 	// Apply any pending uniform buffer bindings
 	applyPendingUniformBindings();
 

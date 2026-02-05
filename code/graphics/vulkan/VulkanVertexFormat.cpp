@@ -77,10 +77,12 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 {
 	VertexInputConfig config;
 	config.needsFallbackColor = false;
+	config.needsFallbackTexCoord = false;
 
 	// Track which bindings we've already added
 	SCP_unordered_map<size_t, uint32_t> bufferBindings; // buffer_number -> binding index
 	bool hasColorAttribute = false;
+	bool hasTexCoordAttribute = false;
 
 	size_t numComponents = layout.get_num_vertex_components();
 
@@ -96,6 +98,9 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 		// Track if we have a color attribute
 		if (mapping->location == VertexAttributeLocation::Color) {
 			hasColorAttribute = true;
+		}
+		if (mapping->location == VertexAttributeLocation::TexCoord) {
+			hasTexCoordAttribute = true;
 		}
 
 		// Get or create binding for this buffer
@@ -155,6 +160,25 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 		colorAttr.format = vk::Format::eR32G32B32A32Sfloat;
 		colorAttr.offset = 0;
 		config.attributes.push_back(colorAttr);
+	}
+
+	// If no texcoord attribute, add a fallback providing (0,0,0,0)
+	// In OpenGL, missing vertex attributes default to (0,0,0,1); Vulkan requires explicit input
+	if (!hasTexCoordAttribute) {
+		config.needsFallbackTexCoord = true;
+
+		vk::VertexInputBindingDescription texCoordBinding;
+		texCoordBinding.binding = FALLBACK_TEXCOORD_BINDING;
+		texCoordBinding.stride = 16;  // vec4 = 16 bytes
+		texCoordBinding.inputRate = vk::VertexInputRate::eInstance;
+		config.bindings.push_back(texCoordBinding);
+
+		vk::VertexInputAttributeDescription texCoordAttr;
+		texCoordAttr.location = static_cast<uint32_t>(VertexAttributeLocation::TexCoord);
+		texCoordAttr.binding = FALLBACK_TEXCOORD_BINDING;
+		texCoordAttr.format = vk::Format::eR32G32B32A32Sfloat;
+		texCoordAttr.offset = 0;
+		config.attributes.push_back(texCoordAttr);
 	}
 
 	// Update the createInfo pointers

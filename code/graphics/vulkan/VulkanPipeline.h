@@ -129,6 +129,13 @@ public:
 	bool needsFallbackColor(const vertex_layout& vertexLayout);
 
 	/**
+	 * @brief Check if a vertex layout needs the fallback texcoord buffer
+	 * @param vertexLayout The vertex layout to check
+	 * @return true if the layout doesn't have texcoord and needs fallback
+	 */
+	bool needsFallbackTexCoord(const vertex_layout& vertexLayout);
+
+	/**
 	 * @brief Clear all cached pipelines
 	 */
 	void clearPipelineCache();

@@ -44,8 +44,9 @@ struct VertexFormatMapping {
  */
 const VertexFormatMapping* getVertexFormatMapping(vertex_format_data::vertex_format format);
 
-// Reserved binding index for fallback color buffer when vertex data doesn't have color
+// Reserved binding indices for fallback buffers when vertex data is missing attributes
 static constexpr uint32_t FALLBACK_COLOR_BINDING = 15;
+static constexpr uint32_t FALLBACK_TEXCOORD_BINDING = 14;
 
 /**
  * @brief Cached vertex input configuration
@@ -57,6 +58,9 @@ struct VertexInputConfig {
 
 	// True if this config uses the fallback color buffer (no color in vertex data)
 	bool needsFallbackColor = false;
+
+	// True if this config uses the fallback texcoord buffer (no texcoord in vertex data)
+	bool needsFallbackTexCoord = false;
 
 	// Update createInfo pointers after vector modifications
 	void updatePointers();
