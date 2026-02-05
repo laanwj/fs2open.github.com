@@ -213,11 +213,6 @@ private:
 	bool bindMaterialTextures(material* mat, vk::DescriptorSet materialSet);
 
 	/**
-	 * @brief Apply pending uniform buffer bindings to descriptor sets
-	 */
-	void applyPendingUniformBindings();
-
-	/**
 	 * @brief Bind vertex buffer from handle
 	 */
 	void bindVertexBuffer(gr_buffer_handle handle, size_t offset = 0);

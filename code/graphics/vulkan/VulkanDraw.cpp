@@ -623,135 +623,6 @@ void VulkanDrawManager::clearPendingUniformBindings()
 	}
 }
 
-void VulkanDrawManager::applyPendingUniformBindings()
-{
-	auto* stateTracker = getStateTracker();
-	auto* descManager = getDescriptorManager();
-	auto* bufferManager = getBufferManager();
-
-	if (!stateTracker || !descManager || !bufferManager) {
-		return;
-	}
-
-	// Helper to get vk::Buffer from handle at bind time (survives buffer recreation)
-	auto getBuffer = [bufferManager](const PendingUniformBinding& binding) -> vk::Buffer {
-		return bufferManager->getVkBuffer(binding.bufferHandle);
-	};
-
-	// Helper to adjust offset for ring buffer - adds frame base offset
-	auto getAdjustedOffset = [bufferManager](const PendingUniformBinding& binding) -> vk::DeviceSize {
-		size_t frameOffset = bufferManager->getFrameBaseOffset(binding.bufferHandle);
-		return static_cast<vk::DeviceSize>(frameOffset + binding.offset);
-	};
-
-	// Track which descriptor sets we need to allocate and bind
-	bool needGlobalSet = false;
-	bool needMaterialSet = false;
-	bool needPerDrawSet = false;
-
-	// Check which sets have pending bindings
-	for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
-		if (!m_pendingUniformBindings[i].valid) {
-			continue;
-		}
-
-		uniform_block_type blockType = static_cast<uniform_block_type>(i);
-		DescriptorSetIndex setIndex;
-		uint32_t binding;
-
-		if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding)) {
-			switch (setIndex) {
-			case DescriptorSetIndex::Global:
-				needGlobalSet = true;
-				break;
-			case DescriptorSetIndex::Material:
-				needMaterialSet = true;
-				break;
-			case DescriptorSetIndex::PerDraw:
-				needPerDrawSet = true;
-				break;
-			default:
-				break;
-			}
-		}
-	}
-
-	// Allocate and update descriptor sets as needed
-	if (needGlobalSet) {
-		vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
-		if (globalSet) {
-			// Update bindings for global set
-			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
-				if (!m_pendingUniformBindings[i].valid) {
-					continue;
-				}
-
-				uniform_block_type blockType = static_cast<uniform_block_type>(i);
-				DescriptorSetIndex setIndex;
-				uint32_t binding;
-
-				if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
-				    setIndex == DescriptorSetIndex::Global) {
-					descManager->updateUniformBuffer(globalSet, binding,
-					                                  getBuffer(m_pendingUniformBindings[i]),
-					                                  getAdjustedOffset(m_pendingUniformBindings[i]),
-					                                  m_pendingUniformBindings[i].size);
-				}
-			}
-			stateTracker->bindDescriptorSet(DescriptorSetIndex::Global, globalSet);
-		}
-	}
-
-	// Note: Material set is typically handled in applyMaterial() along with textures
-	// We handle it here for uniform-only bindings (when no textures are involved)
-	if (needMaterialSet) {
-		vk::DescriptorSet materialSet = descManager->allocateFrameSet(DescriptorSetIndex::Material);
-		if (materialSet) {
-			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
-				if (!m_pendingUniformBindings[i].valid) {
-					continue;
-				}
-
-				uniform_block_type blockType = static_cast<uniform_block_type>(i);
-				DescriptorSetIndex setIndex;
-				uint32_t binding;
-
-				if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
-				    setIndex == DescriptorSetIndex::Material) {
-					descManager->updateUniformBuffer(materialSet, binding,
-					                                  getBuffer(m_pendingUniformBindings[i]),
-					                                  getAdjustedOffset(m_pendingUniformBindings[i]),
-					                                  m_pendingUniformBindings[i].size);
-				}
-			}
-			stateTracker->bindDescriptorSet(DescriptorSetIndex::Material, materialSet);
-		}
-	}
-
-	if (needPerDrawSet) {
-		vk::DescriptorSet perDrawSet = descManager->allocateFrameSet(DescriptorSetIndex::PerDraw);
-		if (perDrawSet) {
-			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
-				if (!m_pendingUniformBindings[i].valid) {
-					continue;
-				}
-
-				uniform_block_type blockType = static_cast<uniform_block_type>(i);
-				DescriptorSetIndex setIndex;
-				uint32_t binding;
-
-				if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
-				    setIndex == DescriptorSetIndex::PerDraw) {
-					descManager->updateUniformBuffer(perDrawSet, binding,
-					                                  getBuffer(m_pendingUniformBindings[i]),
-					                                  getAdjustedOffset(m_pendingUniformBindings[i]),
-					                                  m_pendingUniformBindings[i].size);
-				}
-			}
-			stateTracker->bindDescriptorSet(DescriptorSetIndex::PerDraw, perDrawSet);
-		}
-	}
-}
 
 PipelineConfig VulkanDrawManager::buildPipelineConfig(material* mat, primitive_type prim_type)
 {
@@ -1030,25 +901,41 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 		}
 	}
 
-	// Apply any pending uniform buffer bindings
-	applyPendingUniformBindings();
-
 	// Allocate and bind descriptor sets for this draw
 	// Vulkan requires all sets in the pipeline layout to be bound
+	// We handle uniform bindings inline here (not via applyPendingUniformBindings)
+	// to avoid allocating duplicate sets that waste pool memory
 	if (descManager) {
-		// Set 0: Global - allocate and bind (even if shader doesn't use it)
+		// Set 0: Global - allocate, update uniforms, and bind
 		vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
 		if (globalSet) {
+			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
+				if (!m_pendingUniformBindings[i].valid) {
+					continue;
+				}
+
+				uniform_block_type blockType = static_cast<uniform_block_type>(i);
+				DescriptorSetIndex setIndex;
+				uint32_t binding;
+
+				if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
+				    setIndex == DescriptorSetIndex::Global) {
+					descManager->updateUniformBuffer(globalSet, binding,
+					                                  getBuffer(m_pendingUniformBindings[i]),
+					                                  getAdjustedOffset(m_pendingUniformBindings[i]),
+					                                  m_pendingUniformBindings[i].size);
+				}
+			}
 			stateTracker->bindDescriptorSet(DescriptorSetIndex::Global, globalSet);
 		}
 
-		// Set 1: Material - allocate, update textures, and bind
+		// Set 1: Material - allocate, update textures and uniforms, and bind
 		vk::DescriptorSet materialSet = descManager->allocateFrameSet(DescriptorSetIndex::Material);
 		if (materialSet) {
 			// Bind textures
 			bindMaterialTextures(mat, materialSet);
 
-			// Also bind any pending uniform buffers for the Material set
+			// Bind any pending uniform buffers for the Material set
 			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
 				if (!m_pendingUniformBindings[i].valid) {
 					continue;
@@ -1067,14 +954,12 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 				}
 			}
 
-			// Bind the descriptor set
 			stateTracker->bindDescriptorSet(DescriptorSetIndex::Material, materialSet);
 		}
 
 		// Set 2: PerDraw - allocate, update uniforms, and bind
 		vk::DescriptorSet perDrawSet = descManager->allocateFrameSet(DescriptorSetIndex::PerDraw);
 		if (perDrawSet) {
-			// Bind any pending uniform buffers for the PerDraw set
 			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
 				if (!m_pendingUniformBindings[i].valid) {
 					continue;

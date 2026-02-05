@@ -149,13 +149,18 @@ private:
 	 */
 	vk::UniqueDescriptorSetLayout createSetLayout(const SCP_vector<DescriptorBindingInfo>& bindings);
 
+	/**
+	 * @brief Create a new descriptor pool with standard sizes
+	 */
+	vk::UniqueDescriptorPool createFramePool();
+
 	vk::Device m_device;
 
 	// Descriptor set layouts (one per set type)
 	std::array<vk::UniqueDescriptorSetLayout, static_cast<size_t>(DescriptorSetIndex::Count)> m_setLayouts;
 
-	// Per-frame descriptor pools (for transient sets)
-	std::array<vk::UniqueDescriptorPool, MAX_FRAMES_IN_FLIGHT> m_framePools;
+	// Per-frame descriptor pools (growable - new pools added on demand)
+	std::array<SCP_vector<vk::UniqueDescriptorPool>, MAX_FRAMES_IN_FLIGHT> m_framePools;
 
 	// Persistent descriptor pool (for long-lived sets)
 	vk::UniqueDescriptorPool m_persistentPool;

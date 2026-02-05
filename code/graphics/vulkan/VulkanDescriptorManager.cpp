@@ -43,8 +43,8 @@ void VulkanDescriptorManager::shutdown()
 
 	// Destroy pools (automatically frees allocated sets)
 	m_persistentPool.reset();
-	for (auto& pool : m_framePools) {
-		pool.reset();
+	for (auto& poolChain : m_framePools) {
+		poolChain.clear();
 	}
 
 	// Destroy layouts
@@ -79,17 +79,41 @@ vk::DescriptorSet VulkanDescriptorManager::allocateFrameSet(DescriptorSetIndex s
 		return {};
 	}
 
-	vk::DescriptorSetAllocateInfo allocInfo;
-	allocInfo.descriptorPool = m_framePools[m_currentFrame].get();
-	allocInfo.descriptorSetCount = 1;
 	vk::DescriptorSetLayout layout = m_setLayouts[static_cast<size_t>(setIndex)].get();
+	auto& pools = m_framePools[m_currentFrame];
+
+	// Try allocating from the last pool in the list
+	if (!pools.empty()) {
+		vk::DescriptorSetAllocateInfo allocInfo;
+		allocInfo.descriptorPool = pools.back().get();
+		allocInfo.descriptorSetCount = 1;
+		allocInfo.pSetLayouts = &layout;
+
+		try {
+			auto sets = m_device.allocateDescriptorSets(allocInfo);
+			return sets[0];
+		} catch (const vk::OutOfPoolMemoryError&) {
+			// Pool exhausted, fall through to create a new one
+		} catch (const vk::FragmentedPoolError&) {
+			// Pool fragmented, fall through to create a new one
+		}
+	}
+
+	// Create a new pool and retry
+	pools.push_back(createFramePool());
+	mprintf(("VulkanDescriptorManager: Grew frame %u pool count to %zu\n",
+		m_currentFrame, pools.size()));
+
+	vk::DescriptorSetAllocateInfo allocInfo;
+	allocInfo.descriptorPool = pools.back().get();
+	allocInfo.descriptorSetCount = 1;
 	allocInfo.pSetLayouts = &layout;
 
 	try {
 		auto sets = m_device.allocateDescriptorSets(allocInfo);
 		return sets[0];
 	} catch (const vk::SystemError& e) {
-		mprintf(("VulkanDescriptorManager: Failed to allocate frame descriptor set: %s\n", e.what()));
+		mprintf(("VulkanDescriptorManager: Failed to allocate frame descriptor set after pool growth: %s\n", e.what()));
 		return {};
 	}
 }
@@ -183,8 +207,20 @@ void VulkanDescriptorManager::beginFrame()
 		return;
 	}
 
-	// Reset the current frame's pool
-	m_device.resetDescriptorPool(m_framePools[m_currentFrame].get());
+	auto& pools = m_framePools[m_currentFrame];
+
+	// Reset all pools for the current frame
+	for (auto& pool : pools) {
+		m_device.resetDescriptorPool(pool.get());
+	}
+
+	// If we grew beyond the initial pool, shrink back to 1 to reclaim memory
+	// (the single pool will grow again next frame if needed)
+	if (pools.size() > 1) {
+		vk::UniqueDescriptorPool first = std::move(pools[0]);
+		pools.clear();
+		pools.push_back(std::move(first));
+	}
 }
 
 void VulkanDescriptorManager::endFrame()
@@ -322,42 +358,53 @@ void VulkanDescriptorManager::createSetLayouts()
 		static_cast<size_t>(DescriptorSetIndex::Count)));
 }
 
-void VulkanDescriptorManager::createDescriptorPools()
+vk::UniqueDescriptorPool VulkanDescriptorManager::createFramePool()
 {
-	// Pool sizes - estimate maximum descriptors per frame
-	// These may need tuning based on actual usage
-	constexpr uint32_t MAX_SETS_PER_FRAME = 1000;
-	constexpr uint32_t MAX_UNIFORM_BUFFERS = 5000;
-	constexpr uint32_t MAX_SAMPLERS = 2000;
+	// Pool sizes per chunk - supports ~330 draw calls (3 sets each)
+	// If more are needed, additional pools are created automatically
+	constexpr uint32_t MAX_SETS_PER_POOL = 1024;
+	constexpr uint32_t MAX_UNIFORM_BUFFERS = MAX_SETS_PER_POOL * 9;   // up to 9 UBOs per draw
+	constexpr uint32_t MAX_SAMPLERS = MAX_SETS_PER_POOL * 16;         // up to 16 samplers per material set
 
 	SCP_vector<vk::DescriptorPoolSize> poolSizes = {
 		{ vk::DescriptorType::eUniformBuffer, MAX_UNIFORM_BUFFERS },
-		{ vk::DescriptorType::eUniformBufferDynamic, MAX_UNIFORM_BUFFERS },
 		{ vk::DescriptorType::eCombinedImageSampler, MAX_SAMPLERS },
 	};
 
-	// Create per-frame pools
-	for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-		vk::DescriptorPoolCreateInfo poolInfo;
-		poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-		poolInfo.maxSets = MAX_SETS_PER_FRAME;
-		poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-		poolInfo.pPoolSizes = poolSizes.data();
+	vk::DescriptorPoolCreateInfo poolInfo;
+	poolInfo.maxSets = MAX_SETS_PER_POOL;
+	poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+	poolInfo.pPoolSizes = poolSizes.data();
 
-		m_framePools[i] = m_device.createDescriptorPoolUnique(poolInfo);
+	return m_device.createDescriptorPoolUnique(poolInfo);
+}
+
+void VulkanDescriptorManager::createDescriptorPools()
+{
+	// Create one initial pool per frame (more will be added on demand)
+	for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+		m_framePools[i].push_back(createFramePool());
 	}
 
-	// Create persistent pool (smaller, for long-lived sets)
+	// Create persistent pool (for long-lived sets)
 	constexpr uint32_t PERSISTENT_MAX_SETS = 100;
+	constexpr uint32_t PERSISTENT_UBOS = 500;
+	constexpr uint32_t PERSISTENT_SAMPLERS = 500;
+
+	SCP_vector<vk::DescriptorPoolSize> persistentSizes = {
+		{ vk::DescriptorType::eUniformBuffer, PERSISTENT_UBOS },
+		{ vk::DescriptorType::eCombinedImageSampler, PERSISTENT_SAMPLERS },
+	};
+
 	vk::DescriptorPoolCreateInfo persistentPoolInfo;
 	persistentPoolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
 	persistentPoolInfo.maxSets = PERSISTENT_MAX_SETS;
-	persistentPoolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-	persistentPoolInfo.pPoolSizes = poolSizes.data();
+	persistentPoolInfo.poolSizeCount = static_cast<uint32_t>(persistentSizes.size());
+	persistentPoolInfo.pPoolSizes = persistentSizes.data();
 
 	m_persistentPool = m_device.createDescriptorPoolUnique(persistentPoolInfo);
 
-	mprintf(("VulkanDescriptorManager: Created %u frame pools + 1 persistent pool\n",
+	mprintf(("VulkanDescriptorManager: Created %u frame pool chains + 1 persistent pool\n",
 		MAX_FRAMES_IN_FLIGHT));
 }
 
