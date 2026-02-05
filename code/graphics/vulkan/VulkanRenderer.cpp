@@ -191,9 +191,11 @@ void printPhysicalDevice(const PhysicalDeviceValues& values)
 
 vk::SurfaceFormatKHR chooseSurfaceFormat(const PhysicalDeviceValues& values)
 {
+	// Use a non-sRGB (UNORM) format to match OpenGL's default framebuffer behavior.
+	// The FSO shaders handle gamma correction manually in the fragment shader and
+	// post-processing pipeline, so hardware sRGB conversion would double-correct.
 	for (const auto& availableFormat : values.surfaceFormats) {
-		// Simple check is enough for now
-		if (availableFormat.format == vk::Format::eB8G8R8A8Srgb &&
+		if (availableFormat.format == vk::Format::eB8G8R8A8Unorm &&
 			availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear) {
 			return availableFormat;
 		}
