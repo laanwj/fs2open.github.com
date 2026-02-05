@@ -53,7 +53,7 @@ layout(std140) uniform modelData
     int _pad0;
 } _26;
 
-uniform sampler2D sBasemap;
+uniform sampler2DArray sBasemap;
 
 in vec4 fragTexCoord;
 in vec4 fragColor;
@@ -62,9 +62,9 @@ out vec4 outColor;
 
 void main()
 {
-    vec4 _73 = texture(sBasemap, fragTexCoord.xy) * fragColor;
-    vec3 _101 = _73.xyz;
-    outColor = vec4((_101 * ((_26.ambientFactor * 0.300000011920928955078125) + ((_26.diffuseFactor * max(dot(normalize(fragNormal), vec3(0.0, 0.447213590145111083984375, 0.89442718029022216796875)), 0.0)) * 0.699999988079071044921875))) + ((_26.emissionFactor * _101) * 0.100000001490116119384765625), _73.w * _26.alphaMult);
+    vec4 _81 = texture(sBasemap, vec3(fragTexCoord.xy, float(_26.sBasemapIndex))) * fragColor;
+    vec3 _109 = _81.xyz;
+    outColor = vec4((_109 * ((_26.ambientFactor * 0.300000011920928955078125) + ((_26.diffuseFactor * max(dot(normalize(fragNormal), vec3(0.0, 0.447213590145111083984375, 0.89442718029022216796875)), 0.0)) * 0.699999988079071044921875))) + ((_26.emissionFactor * _109) * 0.100000001490116119384765625), _81.w * _26.alphaMult);
     if (outColor.w < 0.00999999977648258209228515625)
     {
         discard;

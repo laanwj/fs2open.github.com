@@ -11,13 +11,13 @@ layout(location = 3) in vec3 fragPosition;
 layout(location = 0) out vec4 outColor;
 
 // Textures - Material set (set 1)
-layout(set = 1, binding = 1) uniform sampler2D sBasemap;
-layout(set = 1, binding = 2) uniform sampler2D sGlowmap;
-layout(set = 1, binding = 3) uniform sampler2D sSpecmap;
-layout(set = 1, binding = 4) uniform sampler2D sNormalmap;
-layout(set = 1, binding = 5) uniform sampler2D sHeightmap;
-layout(set = 1, binding = 6) uniform sampler2D sAmbientmap;
-layout(set = 1, binding = 7) uniform sampler2D sMiscmap;
+layout(set = 1, binding = 1) uniform sampler2DArray sBasemap;
+layout(set = 1, binding = 2) uniform sampler2DArray sGlowmap;
+layout(set = 1, binding = 3) uniform sampler2DArray sSpecmap;
+layout(set = 1, binding = 4) uniform sampler2DArray sNormalmap;
+layout(set = 1, binding = 5) uniform sampler2DArray sHeightmap;
+layout(set = 1, binding = 6) uniform sampler2DArray sAmbientmap;
+layout(set = 1, binding = 7) uniform sampler2DArray sMiscmap;
 
 // Model data uniform block - must match vertex shader
 layout(set = 1, binding = 0, std140) uniform modelData {
@@ -103,7 +103,7 @@ vec3 calculateLighting(vec3 normal, vec3 viewDir) {
 
 void main() {
     // Sample base texture
-    vec4 baseColor = texture(sBasemap, fragTexCoord.xy);
+    vec4 baseColor = texture(sBasemap, vec3(fragTexCoord.xy, float(sBasemapIndex)));
 
     // Apply vertex/uniform color
     baseColor *= fragColor;

@@ -4,10 +4,11 @@ layout(std140) uniform genericData
 {
     int noTexturing;
     int srgb;
-    float pad[2];
-} _41;
+    int baseMapIndex;
+    float pad;
+} _37;
 
-uniform sampler2D baseMap;
+uniform sampler2DArray baseMap;
 
 in vec4 fragTexCoord;
 in vec4 fragColor;
@@ -15,32 +16,32 @@ out vec4 fragOut0;
 
 void main()
 {
-    vec4 _34 = texture(baseMap, fragTexCoord.xy);
-    bool _47 = _41.srgb == 1;
-    vec3 _118;
-    if (_47)
+    vec4 _46 = texture(baseMap, vec3(fragTexCoord.xy, float(_37.baseMapIndex)));
+    bool _51 = _37.srgb == 1;
+    vec3 _124;
+    if (_51)
     {
-        _118 = pow(_34.xyz, vec3(2.2000000476837158203125));
+        _124 = pow(_46.xyz, vec3(2.2000000476837158203125));
     }
     else
     {
-        _118 = _34.xyz;
+        _124 = _46.xyz;
     }
-    vec4 _113 = _34;
-    _113.x = _118.x;
-    vec4 _115 = _113;
-    _115.y = _118.y;
-    vec4 _117 = _115;
-    _117.z = _118.z;
-    vec4 _120;
-    if (_47)
+    vec4 _119 = _46;
+    _119.x = _124.x;
+    vec4 _121 = _119;
+    _121.y = _124.y;
+    vec4 _123 = _121;
+    _123.z = _124.z;
+    vec4 _126;
+    if (_51)
     {
-        _120 = vec4(pow(fragColor.xyz, vec3(2.2000000476837158203125)), fragColor.w);
+        _126 = vec4(pow(fragColor.xyz, vec3(2.2000000476837158203125)), fragColor.w);
     }
     else
     {
-        _120 = fragColor;
+        _126 = fragColor;
     }
-    fragOut0 = mix(_117 * _120, _120, vec4(float(_41.noTexturing)));
+    fragOut0 = mix(_123 * _126, _126, vec4(float(_37.noTexturing)));
 }
 

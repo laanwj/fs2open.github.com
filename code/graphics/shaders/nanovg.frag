@@ -22,11 +22,11 @@ layout (set = 2, binding = 0, std140) uniform genericData {
 };
 
 // Set 1 = Material, Binding 1 = texture
-layout (set = 1, binding = 1) uniform sampler2D baseMap;
+layout (set = 1, binding = 1) uniform sampler2DArray baseMap;
 
 void main()
 {
-	vec4 baseColor = texture(baseMap, fragTexCoord.xy);
+	vec4 baseColor = texture(baseMap, vec3(fragTexCoord.xy, float(baseMapIndex)));
 
 	if (noTexturing != 0) {
 		fragOut0 = fragColor * intensity;

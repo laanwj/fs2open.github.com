@@ -10,19 +10,20 @@ layout (location = 1) in vec4 fragColor;
 // Output
 layout (location = 0) out vec4 fragOut0;
 
-// Texture sampler (binding 0 in Material set texture array)
-layout (set = 1, binding = 1) uniform sampler2D baseMap;
+// Texture sampler (binding 1 in Material set texture array)
+layout (set = 1, binding = 1) uniform sampler2DArray baseMap;
 
 // Uniform buffer: GenericData (binding 0 in PerDraw set)
 layout (set = 2, binding = 0, std140) uniform genericData {
 	int noTexturing;
 	int srgb;
-	float pad[2];
+	int baseMapIndex;
+	float pad;
 };
 
 void main()
 {
-	vec4 baseColor = texture(baseMap, fragTexCoord.xy);
+	vec4 baseColor = texture(baseMap, vec3(fragTexCoord.xy, float(baseMapIndex)));
 
 	baseColor.rgb = (srgb == 1) ? srgb_to_linear(baseColor.rgb) : baseColor.rgb;
 	vec4 blendColor = (srgb == 1) ? vec4(srgb_to_linear(fragColor.rgb), fragColor.a) : fragColor;
