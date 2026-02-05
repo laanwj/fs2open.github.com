@@ -87,9 +87,14 @@ bool VulkanTextureManager::init(vk::Device device, vk::PhysicalDevice physicalDe
 	vk::SamplerCreateInfo samplerInfo;
 	samplerInfo.magFilter = vk::Filter::eLinear;
 	samplerInfo.minFilter = vk::Filter::eLinear;
-	samplerInfo.addressModeU = vk::SamplerAddressMode::eRepeat;
-	samplerInfo.addressModeV = vk::SamplerAddressMode::eRepeat;
-	samplerInfo.addressModeW = vk::SamplerAddressMode::eRepeat;
+	// Use ClampToEdge by default to match OpenGL's behavior for UI/interface textures.
+	// OpenGL creates all textures with GL_CLAMP_TO_EDGE and only switches to GL_REPEAT
+	// for 3D model textures at bind time (excluding AABITMAP, INTERFACE, CUBEMAP types).
+	// Using eRepeat here causes visible 1-pixel seams on UI bitmaps where edge texels
+	// blend with the opposite edge via linear filtering.
+	samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+	samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+	samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
 	samplerInfo.anisotropyEnable = (m_maxAnisotropy > 1.0f);
 	samplerInfo.maxAnisotropy = m_maxAnisotropy;
 	samplerInfo.borderColor = vk::BorderColor::eIntOpaqueBlack;
