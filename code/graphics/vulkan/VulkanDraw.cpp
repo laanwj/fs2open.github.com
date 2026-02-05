@@ -8,6 +8,7 @@
 #include "VulkanVertexFormat.h"
 #include "bmpman/bmpman.h"
 #include "graphics/grinternal.h"
+#include "graphics/material.h"
 
 namespace graphics {
 namespace vulkan {
@@ -812,6 +813,45 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 	vk::Sampler defaultSampler = texManager->getDefaultSampler();
 	vk::ImageView fallbackView = texManager->getFallbackTextureView();
 
+	// Check for movie material - needs special YUV texture handling
+	auto* movieMat = dynamic_cast<movie_material*>(mat);
+	if (movieMat) {
+		// Movie materials use 3 YUV textures in the texture array at indices 0, 1, 2
+		SCP_vector<vk::DescriptorImageInfo> textureInfos;
+		textureInfos.resize(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS);
+
+		// Initialize all slots with fallback
+		for (auto& info : textureInfos) {
+			info.sampler = defaultSampler;
+			info.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			info.imageView = fallbackView;
+		}
+
+		auto loadYuvTexture = [&](int handle, uint32_t slot) {
+			if (handle < 0 || slot >= textureInfos.size()) return;
+			auto* texSlot = texManager->getTextureSlot(handle);
+			if (!texSlot || !texSlot->imageView) {
+				// Load on demand - YUV planes are 8bpp grayscale
+				bitmap* bmp = bm_lock(handle, 8, BMP_TEX_OTHER);
+				if (bmp) {
+					texManager->bm_data(handle, bmp);
+					bm_unlock(handle);
+					texSlot = texManager->getTextureSlot(handle);
+				}
+			}
+			if (texSlot && texSlot->imageView) {
+				textureInfos[slot].imageView = texSlot->imageView;
+			}
+		};
+
+		loadYuvTexture(movieMat->getYtex(), 0);  // Y at index 0
+		loadYuvTexture(movieMat->getUtex(), 1);  // U at index 1
+		loadYuvTexture(movieMat->getVtex(), 2);  // V at index 2
+
+		descManager->updateTextureArray(materialSet, 1, textureInfos);
+		return true;
+	}
+
 	// Build texture info array for all material texture slots
 	SCP_vector<vk::DescriptorImageInfo> textureInfos;
 	textureInfos.resize(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS);
@@ -941,6 +981,21 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 
 	// Build pipeline configuration from material
 	PipelineConfig config = buildPipelineConfig(mat, prim_type);
+
+	// Debug: Log material and shader type
+	static int matLogCount = 0;
+	if (matLogCount < 50) {
+		const char* matType = "unknown";
+		if (dynamic_cast<movie_material*>(mat)) matType = "movie";
+		else if (dynamic_cast<batched_bitmap_material*>(mat)) matType = "batched";
+		else if (dynamic_cast<interface_material*>(mat)) matType = "interface";
+		else if (dynamic_cast<nanovg_material*>(mat)) matType = "nanovg";
+		else if (dynamic_cast<particle_material*>(mat)) matType = "particle";
+		else if (dynamic_cast<distortion_material*>(mat)) matType = "distortion";
+		else if (dynamic_cast<shield_material*>(mat)) matType = "shield";
+		else if (dynamic_cast<model_material*>(mat)) matType = "model";
+		mprintf(("applyMaterial #%d: matType=%s shaderType=%d\n", matLogCount++, matType, static_cast<int>(config.shaderType)));
+	}
 
 	// Check if we have a valid render pass
 	if (!config.renderPass) {

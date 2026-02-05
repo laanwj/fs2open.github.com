@@ -619,10 +619,73 @@ void VulkanTextureManager::update_texture(int bitmap_handle, int bpp, const ubyt
 		return;
 	}
 
-	// TODO: Implement partial texture update using staging buffer
-	(void)bpp;
-	(void)width;
-	(void)height;
+	// Determine format from bpp
+	vk::Format format = bppToVkFormat(bpp);
+	if (format == vk::Format::eUndefined) {
+		mprintf(("VulkanTextureManager::update_texture: Unsupported bpp %d\n", bpp));
+		return;
+	}
+
+	uint32_t w = static_cast<uint32_t>(width);
+	uint32_t h = static_cast<uint32_t>(height);
+
+	// Verify dimensions match existing texture
+	if (ts->width != w || ts->height != h) {
+		mprintf(("VulkanTextureManager::update_texture: Size mismatch (%ux%u vs %ux%u)\n",
+			w, h, ts->width, ts->height));
+		return;
+	}
+
+	// Calculate data size
+	size_t bytesPerPixel = bpp / 8;
+	size_t dataSize = w * h * bytesPerPixel;
+
+	// Create staging buffer
+	vk::BufferCreateInfo bufferInfo;
+	bufferInfo.size = dataSize;
+	bufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+	vk::Buffer stagingBuffer;
+	VulkanAllocation stagingAllocation;
+
+	try {
+		stagingBuffer = m_device.createBuffer(bufferInfo);
+	} catch (const vk::SystemError& e) {
+		mprintf(("VulkanTextureManager::update_texture: Failed to create staging buffer: %s\n", e.what()));
+		return;
+	}
+
+	if (!m_memoryManager->allocateBufferMemory(stagingBuffer, MemoryUsage::CpuOnly, stagingAllocation)) {
+		m_device.destroyBuffer(stagingBuffer);
+		return;
+	}
+
+	// Copy data to staging buffer
+	void* mapped = m_memoryManager->mapMemory(stagingAllocation);
+	if (mapped) {
+		memcpy(mapped, data, dataSize);
+		m_memoryManager->flushMemory(stagingAllocation, 0, dataSize);
+		m_memoryManager->unmapMemory(stagingAllocation);
+	}
+
+	// Transition image layout to transfer destination
+	transitionImageLayout(ts->image, format, ts->currentLayout,
+	                      vk::ImageLayout::eTransferDstOptimal, ts->mipLevels);
+
+	// Copy data from staging buffer to image
+	copyBufferToImage(stagingBuffer, ts->image, w, h);
+
+	// Transition back to shader read-only
+	transitionImageLayout(ts->image, format, vk::ImageLayout::eTransferDstOptimal,
+	                      vk::ImageLayout::eShaderReadOnlyOptimal, ts->mipLevels);
+
+	// Update layout tracking
+	ts->currentLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+	// Cleanup staging buffer
+	m_device.destroyBuffer(stagingBuffer);
+	m_memoryManager->freeAllocation(stagingAllocation);
 }
 
 void VulkanTextureManager::get_bitmap_from_texture(void* data_out, int bitmap_num)
