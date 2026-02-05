@@ -37,6 +37,7 @@ public:
 
 	// For render targets
 	vk::Framebuffer framebuffer;
+	vk::ImageView framebufferView;  // Single-mip view for framebuffer (when mipLevels > 1)
 	vk::RenderPass renderPass;  // Render pass compatible with this target
 	bool isRenderTarget = false;
 

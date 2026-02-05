@@ -41,6 +41,7 @@ void tcache_slot_vulkan::reset()
 	arrayIndex = 0;
 	used = false;
 	framebuffer = nullptr;
+	framebufferView = nullptr;
 	renderPass = nullptr;
 	isRenderTarget = false;
 	uScale = 1.0f;
@@ -254,6 +255,11 @@ void VulkanTextureManager::bm_free_data(bitmap_slot* slot, bool release)
 			ts->imageView = nullptr;
 		}
 
+		if (ts->framebufferView) {
+			deletionQueue->queueImageView(ts->framebufferView);
+			ts->framebufferView = nullptr;
+		}
+
 		if (ts->image) {
 			deletionQueue->queueImage(ts->image, ts->allocation);
 			ts->image = nullptr;
@@ -274,6 +280,11 @@ void VulkanTextureManager::bm_free_data(bitmap_slot* slot, bool release)
 		if (ts->imageView) {
 			m_device.destroyImageView(ts->imageView);
 			ts->imageView = nullptr;
+		}
+
+		if (ts->framebufferView) {
+			m_device.destroyImageView(ts->framebufferView);
+			ts->framebufferView = nullptr;
 		}
 
 		if (ts->image) {
@@ -489,6 +500,20 @@ int VulkanTextureManager::bm_make_render_target(int handle, int* width, int* hei
 		return 0;
 	}
 
+	// For mipmapped render targets, create a single-mip view for framebuffer use
+	// (framebuffer attachments must have levelCount == 1)
+	if (mipLevels > 1) {
+		ts->framebufferView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, 1, true);
+		if (!ts->framebufferView) {
+			m_device.destroyImageView(ts->imageView);
+			m_device.destroyImage(ts->image);
+			ts->image = nullptr;
+			ts->imageView = nullptr;
+			m_memoryManager->freeAllocation(ts->allocation);
+			return 0;
+		}
+	}
+
 	// Create render pass for this target
 	vk::AttachmentDescription colorAttachment;
 	colorAttachment.format = format;
@@ -528,10 +553,12 @@ int VulkanTextureManager::bm_make_render_target(int handle, int* width, int* hei
 	}
 
 	// Create framebuffer
+	// Use framebufferView (single-mip) if available, otherwise imageView
+	vk::ImageView fbAttachment = ts->framebufferView ? ts->framebufferView : ts->imageView;
 	vk::FramebufferCreateInfo framebufferInfo;
 	framebufferInfo.renderPass = ts->renderPass;
 	framebufferInfo.attachmentCount = 1;
-	framebufferInfo.pAttachments = &ts->imageView;
+	framebufferInfo.pAttachments = &fbAttachment;
 	framebufferInfo.width = w;
 	framebufferInfo.height = h;
 	framebufferInfo.layers = 1;
