@@ -27,3 +27,10 @@ static_assert(offsetof(genericData_default_material_vert, srgb) == 108, "Offset 
 static_assert(offsetof(genericData_default_material_vert, intensity) == 112, "Offset of member intensity does not match the uniform buffer offset!");
 static_assert(offsetof(genericData_default_material_vert, alphaThreshold) == 116, "Offset of member alphaThreshold does not match the uniform buffer offset!");
 static_assert(offsetof(genericData_default_material_vert, clipEnabled) == 120, "Offset of member clipEnabled does not match the uniform buffer offset!");
+struct matrixData_default_material_vert {
+	SPIRV_FLOAT_MAT_4x4 modelViewMatrix;
+	SPIRV_FLOAT_MAT_4x4 projMatrix;
+};
+static_assert(sizeof(matrixData_default_material_vert) == 128, "Size of struct matrixData_default_material_vert does not match what is expected for the uniform block!");
+static_assert(offsetof(matrixData_default_material_vert, modelViewMatrix) == 0, "Offset of member modelViewMatrix does not match the uniform buffer offset!");
+static_assert(offsetof(matrixData_default_material_vert, projMatrix) == 64, "Offset of member projMatrix does not match the uniform buffer offset!");

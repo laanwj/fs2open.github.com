@@ -39,10 +39,9 @@ void main()
 	fragColor = color;  // Use uniform color instead of vertex color
 	debugMatrixVal = 0.5;  // Not used anymore
 
-	// WORKAROUND: Matrix uniforms aren't working correctly yet
-	// Convert screen coordinates (0-width, 0-height) to NDC (-1 to 1)
-	// FSO uses Y=0 at top, same as Vulkan, so no Y flip needed
-	vec2 screenSize = vec2(1920.0, 1080.0);
-	vec2 ndc = (vertPosition.xy / screenSize) * 2.0 - 1.0;
-	gl_Position = vec4(ndc.x, ndc.y, 0.0, 1.0);
+	gl_Position = projMatrix * modelViewMatrix * vertPosition;
+
+	if (clipEnabled != 0u) {
+		gl_ClipDistance[0] = dot(clipEquation, modelMatrix * vertPosition);
+	}
 }
