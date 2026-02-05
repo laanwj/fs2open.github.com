@@ -372,33 +372,5 @@ void main()
 		baseColor.rgb += emissiveColor.rgb;
 	}
 
-	// === DIAGNOSTIC: Visualize shader data for debugging ===
-	// Uncomment ONE of these to diagnose rendering issues:
-
-	// DIAGNOSTIC: Show base texture directly (no lighting)
-	fragOut0 = texture(materialTextures[0], vec3(fragTexCoord.xy, 0.0));
-	return;
-
-	// 2. Show flags as color: R=has diffuse, G=has light, B=has spec
-	//fragOut0 = vec4(
-	//	((flags & MODEL_SDR_FLAG_DIFFUSE) != 0) ? 1.0 : 0.0,
-	//	((flags & MODEL_SDR_FLAG_LIGHT) != 0) ? 1.0 : 0.0,
-	//	((flags & MODEL_SDR_FLAG_SPEC) != 0) ? 1.0 : 0.0,
-	//	1.0
-	//); return;
-
-	// 3. Show n_lights as brightness
-	//fragOut0 = vec4(vec3(float(n_lights) / 8.0), 1.0); return;
-
-	// 4. Show base texture directly (no lighting)
-	//if ((flags & MODEL_SDR_FLAG_DIFFUSE) != 0)
-	//	fragOut0 = texture(materialTextures[0], vec3(texCoord, float(sBasemapIndex)));
-	//else fragOut0 = vec4(1.0, 0.0, 0.0, 1.0);
-	//return;
-
-	// 5. Show normal output
-	//fragOut0 = vec4(fragNormal * 0.5 + 0.5, 1.0); return;
-	// === END DIAGNOSTIC ===
-
 	fragOut0 = baseColor;
 }

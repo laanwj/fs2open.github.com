@@ -2896,8 +2896,11 @@ void model_render_queue(const model_render_params* interp, model_draw_list* scen
 	}
 
 	if ( !(model_flags & MR_NO_BATCH) && pm->flags & PM_FLAG_BATCHED
-		&& !(is_outlines_only || is_outlines_only_htl) ) {
+		&& !(is_outlines_only || is_outlines_only_htl)
+		&& gr_screen.mode != GR_VULKAN ) {
 		// always set batched rendering on if supported
+		// Vulkan doesn't yet support the transform texture buffer, so use the
+		// non-batched path which stores transforms in the modelData uniform block.
 		tmap_flags |= TMAP_FLAG_BATCH_TRANSFORMS;
 	}
 
