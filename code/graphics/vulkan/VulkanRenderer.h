@@ -138,6 +138,7 @@ class VulkanRenderer {
 	SCP_vector<RenderFrame*> m_swapChainImageRenderImage;
 
 	uint32_t m_currentSwapChainImage = 0;
+	uint32_t m_previousSwapChainImage = UINT32_MAX;  // For frame-to-frame content blit
 
 	// Depth buffer
 	vk::UniqueImage m_depthImage;
