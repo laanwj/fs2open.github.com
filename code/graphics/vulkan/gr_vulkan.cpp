@@ -700,6 +700,10 @@ void init_function_pointers()
 	gr_screen.gf_deferred_lighting_end = stub_deferred_lighting_end;
 	gr_screen.gf_deferred_lighting_finish = stub_deferred_lighting_finish;
 
+	gr_screen.gf_calculate_irrmap = []() {}; // Stub - irradiance map not yet implemented
+	gr_screen.gf_dump_envmap = [](const char*) {}; // Stub - envmap dump not yet implemented
+	gr_screen.gf_override_fog = [](bool) {}; // Stub - fog override not yet implemented
+
 	gr_screen.gf_set_line_width = stub_set_line_width;
 
 	gr_screen.gf_sphere = stub_draw_sphere;
