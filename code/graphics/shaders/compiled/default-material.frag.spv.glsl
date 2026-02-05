@@ -14,7 +14,7 @@ layout(std140) uniform genericData
     uint clipEnabled;
 } _39;
 
-uniform sampler2D baseMap;
+uniform sampler2DArray baseMap;
 
 in vec4 fragTexCoord;
 in vec4 fragColor;
@@ -22,58 +22,36 @@ out vec4 fragOut0;
 
 void main()
 {
-    vec4 _33 = texture(baseMap, fragTexCoord.xy);
-    if (_39.alphaThreshold > _33.w)
+    vec4 _48 = texture(baseMap, vec3(fragTexCoord.xy, float(_39.baseMapIndex)));
+    if (_39.alphaThreshold > _48.w)
     {
         discard;
     }
-    bool _58 = _39.srgb == 1;
-    vec4 _158;
-    if (_58)
+    bool _66 = _39.srgb == 1;
+    vec3 _160;
+    if (_66)
     {
-        vec3 _137 = pow(_33.xyz, vec3(2.2000000476837158203125));
-        vec4 _144 = _33;
-        _144.x = _137.x;
-        vec4 _146 = _144;
-        _146.y = _137.y;
-        vec4 _148 = _146;
-        _148.z = _137.z;
-        _158 = _148;
+        _160 = pow(_48.xyz, vec3(2.2000000476837158203125));
     }
     else
     {
-        _158 = _33;
+        _160 = _48.xyz;
     }
-    vec4 _159;
-    if (_58)
+    vec4 _153 = _48;
+    _153.x = _160.x;
+    vec4 _155 = _153;
+    _155.y = _160.y;
+    vec4 _157 = _155;
+    _157.z = _160.z;
+    vec4 _162;
+    if (_66)
     {
-        vec3 _141 = pow(fragColor.xyz, vec3(2.2000000476837158203125));
-        vec4 _150 = fragColor;
-        _150.x = _141.x;
-        vec4 _152 = _150;
-        _152.y = _141.y;
-        vec4 _154 = _152;
-        _154.z = _141.z;
-        _159 = _154;
+        _162 = vec4(pow(fragColor.xyz, vec3(2.2000000476837158203125)), fragColor.w);
     }
     else
     {
-        _159 = fragColor;
+        _162 = fragColor;
     }
-    if (_39.noTexturing != 0)
-    {
-        fragOut0 = _159 * _39.intensity;
-    }
-    else
-    {
-        if (_39.alphaTexture != 0)
-        {
-            fragOut0 = vec4(_159.xyz, _158.x * _159.w) * _39.intensity;
-        }
-        else
-        {
-            fragOut0 = (_158 * _159) * _39.intensity;
-        }
-    }
+    fragOut0 = mix(mix(_157 * _162, vec4(_162.xyz, _160.x * _162.w), vec4(float(_39.alphaTexture))), _162, vec4(float(_39.noTexturing))) * _39.intensity;
 }
 
