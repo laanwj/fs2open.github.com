@@ -106,6 +106,10 @@ class VulkanRenderer {
 
 	void createFrameBuffers();
 
+	void createDepthResources();
+
+	vk::Format findDepthFormat();
+
 	void createCommandPool(const PhysicalDeviceValues& values);
 
 	void createPresentSyncObjects();
@@ -134,6 +138,12 @@ class VulkanRenderer {
 	SCP_vector<RenderFrame*> m_swapChainImageRenderImage;
 
 	uint32_t m_currentSwapChainImage = 0;
+
+	// Depth buffer
+	vk::UniqueImage m_depthImage;
+	vk::UniqueImageView m_depthImageView;
+	VulkanAllocation m_depthImageMemory;
+	vk::Format m_depthFormat = vk::Format::eUndefined;
 
 	vk::UniqueRenderPass m_renderPass;
 
