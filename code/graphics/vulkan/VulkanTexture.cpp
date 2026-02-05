@@ -619,13 +619,6 @@ void VulkanTextureManager::update_texture(int bitmap_handle, int bpp, const ubyt
 		return;
 	}
 
-	// Determine format from bpp
-	vk::Format format = bppToVkFormat(bpp);
-	if (format == vk::Format::eUndefined) {
-		mprintf(("VulkanTextureManager::update_texture: Unsupported bpp %d\n", bpp));
-		return;
-	}
-
 	uint32_t w = static_cast<uint32_t>(width);
 	uint32_t h = static_cast<uint32_t>(height);
 
@@ -636,7 +629,14 @@ void VulkanTextureManager::update_texture(int bitmap_handle, int bpp, const ubyt
 		return;
 	}
 
-	// Calculate data size
+	// Use bppToVkFormat to determine format, matching how bm_data creates textures
+	vk::Format format = bppToVkFormat(bpp);
+	if (format == vk::Format::eUndefined) {
+		mprintf(("VulkanTextureManager::update_texture: Unsupported bpp %d\n", bpp));
+		return;
+	}
+
+	// Calculate data size based on input bpp (the actual data being passed)
 	size_t bytesPerPixel = bpp / 8;
 	size_t dataSize = w * h * bytesPerPixel;
 
@@ -790,7 +790,8 @@ vk::Format VulkanTextureManager::bppToVkFormat(int bpp, bool compressed, int com
 	case 8:
 		return vk::Format::eR8Unorm;
 	case 16:
-		return vk::Format::eR8G8Unorm;
+		// OpenGL uses GL_UNSIGNED_SHORT_1_5_5_5_REV with GL_BGRA (A1R5G5B5)
+		return vk::Format::eA1R5G5B5UnormPack16;
 	case 24:
 		// FSO uses BGR format for 24bpp
 		return vk::Format::eB8G8R8Unorm;
