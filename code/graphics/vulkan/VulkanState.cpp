@@ -1,5 +1,7 @@
 #include "VulkanState.h"
 
+#include <cmath>
+
 namespace graphics {
 namespace vulkan {
 
@@ -240,11 +242,12 @@ void VulkanStateTracker::applyDynamicState()
 			m_cmdBuffer.setScissor(0, 1, &m_scissor);
 		} else {
 			// Set scissor to full viewport when disabled
+			// Note: viewport may have negative height (Y-flip), use abs values
 			vk::Rect2D fullScissor;
-			fullScissor.offset.x = 0;
-			fullScissor.offset.y = 0;
-			fullScissor.extent.width = static_cast<uint32_t>(m_viewport.width);
-			fullScissor.extent.height = static_cast<uint32_t>(m_viewport.height);
+			fullScissor.offset.x = static_cast<int32_t>(m_viewport.x);
+			fullScissor.offset.y = static_cast<int32_t>(std::min(m_viewport.y, m_viewport.y + m_viewport.height));
+			fullScissor.extent.width = static_cast<uint32_t>(std::abs(m_viewport.width));
+			fullScissor.extent.height = static_cast<uint32_t>(std::abs(m_viewport.height));
 			m_cmdBuffer.setScissor(0, 1, &fullScissor);
 		}
 		m_scissorDirty = false;
