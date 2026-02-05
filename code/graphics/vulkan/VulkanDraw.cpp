@@ -536,17 +536,20 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 		return;
 	}
 
-	// Bind vertex buffer with vertex source offset
-	stateTracker->bindVertexBuffer(0, vbuffer, static_cast<vk::DeviceSize>(vert_source->Vertex_offset));
+	// Bind vertex buffer at offset 0 (start of heap buffer), matching OpenGL behavior.
+	// The Base_vertex_offset in drawIndexed handles the heap allocation offset.
+	stateTracker->bindVertexBuffer(0, vbuffer, 0);
 
 	// Determine index type based on VB_FLAG_LARGE_INDEX flag
 	vk::IndexType indexType = (datap->flags & VB_FLAG_LARGE_INDEX) ?
 	                          vk::IndexType::eUint32 : vk::IndexType::eUint16;
 
-	// Bind index buffer with source offset
+	// Bind index buffer at the model's heap allocation offset.
+	// The firstIndex (from datap->index_offset) handles per-mesh offset within the model.
 	stateTracker->bindIndexBuffer(ibuffer, static_cast<vk::DeviceSize>(vert_source->Index_offset), indexType);
 
-	// Calculate the base vertex offset
+	// Base vertex offset: accounts for heap allocation position + per-mesh vertex offset.
+	// This matches OpenGL's glDrawElementsBaseVertex usage.
 	int32_t baseVertex = static_cast<int32_t>(vert_source->Base_vertex_offset + bufferp->vertex_num_offset);
 
 	// Calculate first index
