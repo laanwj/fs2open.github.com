@@ -1,5 +1,17 @@
 #version 150
 
+out float gl_ClipDistance[1];
+
+struct model_light
+{
+    vec4 position;
+    vec3 diffuse_color;
+    int light_type;
+    vec3 direction;
+    float attenuation;
+    float ml_sourceRadius;
+};
+
 layout(std140) uniform modelData
 {
     mat4 modelViewMatrix;
@@ -10,7 +22,7 @@ layout(std140) uniform modelData
     mat4 shadow_mv_matrix;
     mat4 shadow_proj_matrix[4];
     vec4 color;
-    vec4 lights_data[32];
+    model_light lights[8];
     float outlineWidth;
     float fogStart;
     float fogScale;
@@ -50,25 +62,69 @@ layout(std140) uniform modelData
     int sMiscmapIndex;
     float alphaMult;
     int flags;
-    int _pad0;
-} _21;
+    float _pad0;
+} _31;
 
-in vec4 vertPosition;
-out vec4 fragTexCoord;
 in vec4 vertTexCoord;
-out vec4 fragColor;
-out vec3 fragNormal;
+in vec4 vertPosition;
 in vec3 vertNormal;
-out vec3 fragPosition;
+in vec4 vertTangent;
+out vec3 outTangent;
+out vec3 outBitangent;
+out vec3 outTangentNormal;
+out float outFogDist;
+out vec4 outPosition;
+out vec3 outNormal;
+out vec4 outTexCoord;
 
 void main()
 {
-    vec4 _35 = _21.viewMatrix * (_21.modelMatrix * vertPosition);
-    gl_Position = _21.projMatrix * _35;
-    fragTexCoord = _21.textureMatrix * vertTexCoord;
-    fragColor = _21.color;
-    mat4 _67 = transpose(inverse(_21.modelViewMatrix));
-    fragNormal = normalize(mat3(_67[0].xyz, _67[1].xyz, _67[2].xyz) * vertNormal);
-    fragPosition = _35.xyz;
+    vec4 _212;
+    if ((_31.flags & 8192) != 0)
+    {
+        vec4 _213;
+        if (vertPosition.z < (-1.5))
+        {
+            vec4 _211 = vertPosition;
+            _211.z = vertPosition.z * _31.thruster_scale;
+            _213 = _211;
+        }
+        else
+        {
+            _213 = vertPosition;
+        }
+        _212 = _213;
+    }
+    else
+    {
+        _212 = vertPosition;
+    }
+    mat3 _90 = mat3(_31.modelViewMatrix[0].xyz, _31.modelViewMatrix[1].xyz, _31.modelViewMatrix[2].xyz) * mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0));
+    vec3 _95 = normalize(_90 * vertNormal);
+    vec4 _102 = (_31.modelViewMatrix * mat4(vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(0.0, 0.0, 0.0, 1.0))) * _212;
+    gl_Position = _31.projMatrix * _102;
+    vec3 _138 = normalize(_90 * vertTangent.xyz);
+    outTangent = _138;
+    outBitangent = cross(_95, _138) * vertTangent.w;
+    outTangentNormal = _95;
+    if ((_31.flags & 1024) != 0)
+    {
+        outFogDist = clamp(((gl_Position.z - _31.fogStart) * 0.75) * _31.fogScale, 0.0, 1.0);
+    }
+    else
+    {
+        outFogDist = 0.0;
+    }
+    if (_31.use_clip_plane != 0)
+    {
+        gl_ClipDistance[0] = dot(_31.clip_equation, (_31.modelMatrix * mat4(vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(0.0, 0.0, 0.0, 1.0))) * _212);
+    }
+    else
+    {
+        gl_ClipDistance[0] = 1.0;
+    }
+    outPosition = _102;
+    outNormal = _95;
+    outTexCoord = _31.textureMatrix * vertTexCoord;
 }
 

@@ -451,8 +451,10 @@ void vulkan_render_model(model_material* material_info,
 	vertex_buffer* bufferp,
 	size_t texi)
 {
-	gr_matrix_set_uniforms();
-	vulkan_set_default_material_uniforms(material_info);
+	// ModelData UBO (matrices, lights, material params) is already bound by the model
+	// rendering pipeline (model_draw_list::render_buffer) before this function is called.
+	// Do NOT call vulkan_set_default_material_uniforms here - that would set GenericData
+	// uniforms for SDR_TYPE_DEFAULT_MATERIAL, but models use SDR_TYPE_MODEL with ModelData.
 
 	auto* drawManager = getDrawManager();
 	if (drawManager) {
