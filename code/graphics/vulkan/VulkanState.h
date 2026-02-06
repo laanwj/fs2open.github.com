@@ -182,11 +182,17 @@ public:
 	void setCullMode(bool enabled) { m_cullEnabled = enabled; }
 	bool getCullMode() const { return m_cullEnabled; }
 
-private:
 	/**
 	 * @brief Apply pending dynamic state to command buffer
+	 *
+	 * Must be called before every draw command to ensure dirty dynamic state
+	 * (viewport, scissor, depth bias, stencil ref, line width) is flushed.
+	 * applyMaterial() sets depth bias/stencil AFTER bindPipeline(), so if
+	 * the pipeline didn't change, those changes would be lost without this.
 	 */
 	void applyDynamicState();
+
+private:
 
 	vk::Device m_device;
 	vk::CommandBuffer m_cmdBuffer;

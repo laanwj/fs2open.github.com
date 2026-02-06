@@ -626,6 +626,9 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 	m_frameStats.drawIndexedCalls++;
 	m_frameStats.totalIndices += datap->n_verts;
 
+	// Flush any dirty dynamic state before draw
+	stateTracker->applyDynamicState();
+
 	auto cmdBuffer = stateTracker->getCommandBuffer();
 	cmdBuffer.drawIndexed(
 		static_cast<uint32_t>(datap->n_verts),  // index count
@@ -1227,6 +1230,11 @@ void VulkanDrawManager::draw(primitive_type prim_type, int first_vertex, int ver
 	m_frameStats.drawCalls++;
 	m_frameStats.totalVertices += vertex_count;
 
+	// Flush any dirty dynamic state (viewport, scissor, depth bias, stencil ref)
+	// before issuing the draw command. applyMaterial sets these AFTER bindPipeline,
+	// so they may be dirty even when the pipeline didn't change.
+	stateTracker->applyDynamicState();
+
 	auto cmdBuffer = stateTracker->getCommandBuffer();
 	cmdBuffer.draw(static_cast<uint32_t>(vertex_count),
 	               1,
@@ -1249,6 +1257,9 @@ void VulkanDrawManager::drawIndexed(primitive_type prim_type, int index_count, i
 
 	m_frameStats.drawIndexedCalls++;
 	m_frameStats.totalIndices += index_count;
+
+	// Flush any dirty dynamic state before draw
+	stateTracker->applyDynamicState();
 
 	auto cmdBuffer = stateTracker->getCommandBuffer();
 	cmdBuffer.drawIndexed(static_cast<uint32_t>(index_count),
