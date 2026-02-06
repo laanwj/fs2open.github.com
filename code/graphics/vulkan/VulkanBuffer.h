@@ -207,6 +207,18 @@ public:
 	vk::Buffer getFallbackTexCoordBuffer() const { return m_fallbackTexCoordBuffer; }
 
 	/**
+	 * @brief Get the fallback uniform buffer for uninitialized descriptor bindings
+	 * This buffer contains zeros and is used to pre-fill all UBO descriptor bindings
+	 * to avoid undefined behavior from uninitialized descriptors after pool reset
+	 */
+	vk::Buffer getFallbackUniformBuffer() const { return m_fallbackUniformBuffer; }
+
+	/**
+	 * @brief Get the size of the fallback uniform buffer
+	 */
+	size_t getFallbackUniformBufferSize() const { return FALLBACK_UNIFORM_BUFFER_SIZE; }
+
+	/**
 	 * @brief Process deferred buffer destructions from previous frame
 	 * Called at frame start to destroy buffers that were queued last frame
 	 */
@@ -263,6 +275,11 @@ private:
 	// Fallback texcoord buffer containing (0,0,0,0) for vertex data without texcoords
 	vk::Buffer m_fallbackTexCoordBuffer;
 	VulkanAllocation m_fallbackTexCoordAllocation;
+
+	// Fallback uniform buffer (zeros) for uninitialized descriptor set UBO bindings
+	static constexpr size_t FALLBACK_UNIFORM_BUFFER_SIZE = 4096;
+	vk::Buffer m_fallbackUniformBuffer;
+	VulkanAllocation m_fallbackUniformAllocation;
 
 	size_t m_activeBufferCount = 0;
 	size_t m_totalBufferMemory = 0;

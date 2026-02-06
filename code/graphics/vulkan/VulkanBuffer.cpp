@@ -117,6 +117,40 @@ bool VulkanBufferManager::init(vk::Device device,
 		mprintf(("Created fallback zero texcoord buffer\n"));
 	}
 
+	// Create fallback uniform buffer (zeros) for uninitialized descriptor set bindings
+	// Without this, descriptor set UBO bindings left unwritten after pool reset
+	// contain undefined data, causing intermittent rendering failures
+	{
+		vk::BufferCreateInfo bufferInfo;
+		bufferInfo.size = FALLBACK_UNIFORM_BUFFER_SIZE;
+		bufferInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
+		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+		try {
+			m_fallbackUniformBuffer = m_device.createBuffer(bufferInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("Failed to create fallback uniform buffer: %s\n", e.what()));
+			return false;
+		}
+
+		if (!m_memoryManager->allocateBufferMemory(m_fallbackUniformBuffer, MemoryUsage::CpuToGpu, m_fallbackUniformAllocation)) {
+			m_device.destroyBuffer(m_fallbackUniformBuffer);
+			m_fallbackUniformBuffer = nullptr;
+			mprintf(("Failed to allocate fallback uniform buffer memory!\n"));
+			return false;
+		}
+
+		// Zero-fill the buffer
+		void* mapped = m_memoryManager->mapMemory(m_fallbackUniformAllocation);
+		if (mapped) {
+			memset(mapped, 0, FALLBACK_UNIFORM_BUFFER_SIZE);
+			m_memoryManager->flushMemory(m_fallbackUniformAllocation, 0, FALLBACK_UNIFORM_BUFFER_SIZE);
+			m_memoryManager->unmapMemory(m_fallbackUniformAllocation);
+		}
+
+		mprintf(("Created fallback uniform buffer (%zu bytes)\n", FALLBACK_UNIFORM_BUFFER_SIZE));
+	}
+
 	m_initialized = true;
 	mprintf(("Vulkan Buffer Manager initialized (per-frame streaming buffers enabled, %u frames)\n",
 		BUFFER_MAX_FRAMES_IN_FLIGHT));
@@ -147,6 +181,16 @@ void VulkanBufferManager::shutdown()
 	if (m_fallbackTexCoordAllocation.memory != VK_NULL_HANDLE) {
 		m_memoryManager->freeAllocation(m_fallbackTexCoordAllocation);
 		m_fallbackTexCoordAllocation = {};
+	}
+
+	// Destroy fallback uniform buffer
+	if (m_fallbackUniformBuffer) {
+		m_device.destroyBuffer(m_fallbackUniformBuffer);
+		m_fallbackUniformBuffer = nullptr;
+	}
+	if (m_fallbackUniformAllocation.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_fallbackUniformAllocation);
+		m_fallbackUniformAllocation = {};
 	}
 
 	// Free all remaining buffers

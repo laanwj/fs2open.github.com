@@ -987,13 +987,31 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 	}
 
 	// Allocate and bind descriptor sets for this draw
-	// Vulkan requires all sets in the pipeline layout to be bound
-	// We handle uniform bindings inline here (not via applyPendingUniformBindings)
-	// to avoid allocating duplicate sets that waste pool memory
+	// Vulkan requires all bindings in a descriptor set to be valid before use.
+	// After pool reset, descriptors contain undefined data. We MUST pre-initialize
+	// ALL bindings with fallback values, then overwrite with actual pending data.
 	if (descManager) {
-		// Set 0: Global - allocate, update uniforms, and bind
+		// Get fallback resources for uninitialized bindings
+		vk::Buffer fallbackUBO = bufferManager->getFallbackUniformBuffer();
+		vk::DeviceSize fallbackUBOSize = static_cast<vk::DeviceSize>(bufferManager->getFallbackUniformBufferSize());
+		auto* texManager = getTextureManager();
+		vk::Sampler fallbackSampler = texManager ? texManager->getDefaultSampler() : vk::Sampler{};
+		vk::ImageView fallbackView = texManager ? texManager->getFallbackTextureView() : vk::ImageView{};
+
+		// Set 0: Global - bindings: 0=Lights UBO, 1=DeferredGlobals UBO, 2=Shadow tex, 3=Env tex
 		vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
 		if (globalSet) {
+			// Pre-initialize ALL bindings with fallback values
+			if (fallbackUBO) {
+				descManager->updateUniformBuffer(globalSet, 0, fallbackUBO, 0, fallbackUBOSize);
+				descManager->updateUniformBuffer(globalSet, 1, fallbackUBO, 0, fallbackUBOSize);
+			}
+			if (fallbackSampler && fallbackView) {
+				descManager->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
+				descManager->updateTexture(globalSet, 3, fallbackView, fallbackSampler);
+			}
+
+			// Overwrite with actual pending uniform bindings
 			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
 				if (!m_pendingUniformBindings[i].valid) {
 					continue;
@@ -1014,13 +1032,19 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 			stateTracker->bindDescriptorSet(DescriptorSetIndex::Global, globalSet);
 		}
 
-		// Set 1: Material - allocate, update textures and uniforms, and bind
+		// Set 1: Material - bindings: 0=ModelData UBO, 1=Texture array, 2=DecalGlobals UBO
 		vk::DescriptorSet materialSet = descManager->allocateFrameSet(DescriptorSetIndex::Material);
 		if (materialSet) {
-			// Bind textures
+			// Pre-initialize UBO bindings with fallback
+			if (fallbackUBO) {
+				descManager->updateUniformBuffer(materialSet, 0, fallbackUBO, 0, fallbackUBOSize);
+				descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
+			}
+
+			// Bind textures (already handles fallback textures for unbound slots)
 			bindMaterialTextures(mat, materialSet);
 
-			// Bind any pending uniform buffers for the Material set
+			// Overwrite with actual pending uniform bindings
 			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
 				if (!m_pendingUniformBindings[i].valid) {
 					continue;
@@ -1042,9 +1066,19 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 			stateTracker->bindDescriptorSet(DescriptorSetIndex::Material, materialSet);
 		}
 
-		// Set 2: PerDraw - allocate, update uniforms, and bind
+		// Set 2: PerDraw - bindings: 0=GenericData, 1=Matrices, 2=NanoVGData, 3=DecalInfo, 4=MovieData
 		vk::DescriptorSet perDrawSet = descManager->allocateFrameSet(DescriptorSetIndex::PerDraw);
 		if (perDrawSet) {
+			// Pre-initialize ALL UBO bindings with fallback
+			if (fallbackUBO) {
+				descManager->updateUniformBuffer(perDrawSet, 0, fallbackUBO, 0, fallbackUBOSize);
+				descManager->updateUniformBuffer(perDrawSet, 1, fallbackUBO, 0, fallbackUBOSize);
+				descManager->updateUniformBuffer(perDrawSet, 2, fallbackUBO, 0, fallbackUBOSize);
+				descManager->updateUniformBuffer(perDrawSet, 3, fallbackUBO, 0, fallbackUBOSize);
+				descManager->updateUniformBuffer(perDrawSet, 4, fallbackUBO, 0, fallbackUBOSize);
+			}
+
+			// Overwrite with actual pending uniform bindings
 			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
 				if (!m_pendingUniformBindings[i].valid) {
 					continue;

@@ -27,6 +27,9 @@
 // GL_alpha_threshold is defined in gropengl.cpp, need extern here
 extern float GL_alpha_threshold;
 
+// PostProcessing_override is defined in globalincs/systemvars.cpp
+extern bool PostProcessing_override;
+
 namespace graphics {
 namespace vulkan {
 
@@ -312,9 +315,56 @@ void stub_post_process_begin() {}
 
 void stub_post_process_end() {}
 
-void stub_scene_texture_begin() {}
+void vulkan_scene_texture_begin()
+{
+	// Minimal implementation matching OpenGL's gr_opengl_scene_texture_begin():
+	// 1. Clear color + depth for the 3D scene
+	// 2. Set High_dynamic_range flag if post-processing is enabled
+	//
+	// Full implementation would switch to an offscreen FBO, but for now
+	// we render directly to the swap chain.
 
-void stub_scene_texture_end() {}
+	auto* drawManager = getDrawManager();
+	auto* stateTracker = getStateTracker();
+
+	if (drawManager && stateTracker && stateTracker->hasCommandBuffer()) {
+		// Clear color buffer to black (matching OpenGL behavior)
+		auto cmdBuffer = stateTracker->getCommandBuffer();
+
+		vk::ClearAttachment clearAttachments[2];
+		clearAttachments[0].aspectMask = vk::ImageAspectFlagBits::eColor;
+		clearAttachments[0].colorAttachment = 0;
+		clearAttachments[0].clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+
+		clearAttachments[1].aspectMask = vk::ImageAspectFlagBits::eDepth;
+		clearAttachments[1].clearValue.depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+
+		vk::ClearRect clearRect;
+		clearRect.rect.offset = vk::Offset2D(0, 0);
+		clearRect.rect.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.max_w),
+		                                      static_cast<uint32_t>(gr_screen.max_h));
+		clearRect.baseArrayLayer = 0;
+		clearRect.layerCount = 1;
+
+		cmdBuffer.clearAttachments(2, clearAttachments, 1, &clearRect);
+	}
+
+	// Enable HDR for 3D scene rendering (affects intensity/srgb in shaders)
+	if (Gr_post_processing_enabled && !PostProcessing_override) {
+		High_dynamic_range = true;
+	}
+}
+
+void vulkan_scene_texture_end()
+{
+	// Minimal implementation matching OpenGL's gr_opengl_scene_texture_end():
+	// Reset HDR flag after 3D scene rendering
+	//
+	// Full implementation would composite the scene texture to screen with
+	// post-processing (bloom, FXAA, tonemapping). For now we just reset the flag.
+
+	High_dynamic_range = false;
+}
 
 void stub_copy_effect_texture() {}
 
@@ -693,8 +743,8 @@ void init_function_pointers()
 	gr_screen.gf_post_process_save_zbuffer = stub_post_process_save_zbuffer;
 	gr_screen.gf_post_process_restore_zbuffer = []() {};
 
-	gr_screen.gf_scene_texture_begin = stub_scene_texture_begin;
-	gr_screen.gf_scene_texture_end = stub_scene_texture_end;
+	gr_screen.gf_scene_texture_begin = vulkan_scene_texture_begin;
+	gr_screen.gf_scene_texture_end = vulkan_scene_texture_end;
 	gr_screen.gf_copy_effect_texture = stub_copy_effect_texture;
 
 	gr_screen.gf_deferred_lighting_begin = stub_deferred_lighting_begin;
