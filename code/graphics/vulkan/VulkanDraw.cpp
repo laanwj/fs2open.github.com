@@ -67,17 +67,26 @@ void VulkanDrawManager::clear()
 		return;
 	}
 
-	// In Vulkan, clears are typically done at render pass begin or via vkCmdClearAttachments
-	// For now, we'll use vkCmdClearAttachments within an active render pass
+	// Use the current clip/scissor region for clearing, matching OpenGL behavior.
+	// In OpenGL, glClear() respects the scissor test - if a clip region is set,
+	// only that region is cleared. Without this, HUD code that does
+	// gr_set_clip(panel) + gr_clear() would wipe the entire screen in Vulkan.
 	vk::ClearAttachment clearAttachment;
 	clearAttachment.aspectMask = vk::ImageAspectFlagBits::eColor;
 	clearAttachment.colorAttachment = 0;
 	clearAttachment.clearValue.color = stateTracker->getClearColor();
 
 	vk::ClearRect clearRect;
-	clearRect.rect.offset = vk::Offset2D(0, 0);
-	clearRect.rect.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.max_w),
-	                                      static_cast<uint32_t>(gr_screen.max_h));
+	if (stateTracker->isScissorEnabled()) {
+		// Respect the current clip region (matches OpenGL scissor behavior)
+		clearRect.rect.offset = vk::Offset2D(gr_screen.clip_left, gr_screen.clip_top);
+		clearRect.rect.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.clip_width),
+		                                      static_cast<uint32_t>(gr_screen.clip_height));
+	} else {
+		clearRect.rect.offset = vk::Offset2D(0, 0);
+		clearRect.rect.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.max_w),
+		                                      static_cast<uint32_t>(gr_screen.max_h));
+	}
 	clearRect.baseArrayLayer = 0;
 	clearRect.layerCount = 1;
 
