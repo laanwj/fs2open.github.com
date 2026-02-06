@@ -2,10 +2,17 @@
 
 layout(std140) uniform genericData
 {
+    mat4 modelMatrix;
     vec4 color;
+    vec4 clipEquation;
+    int baseMapIndex;
+    int alphaTexture;
+    int noTexturing;
+    int srgb;
     float intensity;
-    float pad[3];
-} _81;
+    float alphaThreshold;
+    uint clipEnabled;
+} _82;
 
 uniform sampler2DArray baseMap;
 
@@ -23,6 +30,6 @@ void main()
     _100.y = _92.y;
     vec4 _102 = _100;
     _102.z = _92.z;
-    fragOut0 = (_102 * vec4(pow(fragColor.xyz, vec3(2.2000000476837158203125)), fragColor.w)) * _81.intensity;
+    fragOut0 = (_102 * vec4(pow(fragColor.xyz, vec3(2.2000000476837158203125)), fragColor.w)) * _82.intensity;
 }
 
