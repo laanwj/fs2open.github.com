@@ -17,10 +17,22 @@ layout (set = 2, binding = 1, std140) uniform matrixData {
 };
 
 // Uniform buffer: GenericData (binding 0 in PerDraw set)
+// Must match the layout used by vulkan_set_default_material_uniforms()
 layout (set = 2, binding = 0, std140) uniform genericData {
+	mat4 modelMatrix;
+
 	vec4 color;
+
+	vec4 clipEquation;
+
+	int baseMapIndex;
+	int alphaTexture;
+	int noTexturing;
+	int srgb;
+
 	float intensity;
-	float pad[3];
+	float alphaThreshold;
+	uint clipEnabled;
 };
 
 void main()

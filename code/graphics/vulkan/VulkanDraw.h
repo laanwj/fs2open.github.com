@@ -195,6 +195,16 @@ public:
 	 */
 	void clearPendingUniformBindings();
 
+	/**
+	 * @brief Reset per-frame diagnostic counters (called at start of frame)
+	 */
+	void resetFrameStats();
+
+	/**
+	 * @brief Print per-frame diagnostic summary (called at end of frame)
+	 */
+	void printFrameStats();
+
 private:
 	/**
 	 * @brief Apply material state and bind pipeline
@@ -242,6 +252,30 @@ private:
 	// Pending uniform buffer bindings (indexed by uniform_block_type)
 	static constexpr size_t NUM_UNIFORM_BLOCK_TYPES = static_cast<size_t>(uniform_block_type::NUM_BLOCK_TYPES);
 	std::array<PendingUniformBinding, NUM_UNIFORM_BLOCK_TYPES> m_pendingUniformBindings;
+
+	// Per-frame diagnostic counters
+	struct FrameStats {
+		int drawCalls = 0;
+		int drawIndexedCalls = 0;
+		int applyMaterialCalls = 0;
+		int applyMaterialFailures = 0;
+		int noPipelineSkips = 0;
+		int noCommandBufferSkips = 0;
+		int shaderHandleNeg1 = 0;
+		int totalVertices = 0;
+		int totalIndices = 0;
+
+		// Per-function call counters
+		int renderPrimitiveCalls = 0;
+		int renderBatchedCalls = 0;
+		int renderModelCalls = 0;
+		int renderParticleCalls = 0;
+		int renderNanoVGCalls = 0;
+		int renderRocketCalls = 0;
+		int renderMovieCalls = 0;
+	};
+	FrameStats m_frameStats;
+	int m_frameStatsFrameNum = 0;
 
 	bool m_initialized = false;
 };

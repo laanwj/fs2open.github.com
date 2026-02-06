@@ -2,11 +2,17 @@
 
 layout(std140) uniform genericData
 {
+    mat4 modelMatrix;
+    vec4 color;
+    vec4 clipEquation;
+    int baseMapIndex;
+    int alphaTexture;
     int noTexturing;
     int srgb;
-    int baseMapIndex;
-    float pad;
-} _37;
+    float intensity;
+    float alphaThreshold;
+    uint clipEnabled;
+} _39;
 
 uniform sampler2DArray baseMap;
 
@@ -16,32 +22,32 @@ out vec4 fragOut0;
 
 void main()
 {
-    vec4 _46 = texture(baseMap, vec3(fragTexCoord.xy, float(_37.baseMapIndex)));
-    bool _51 = _37.srgb == 1;
-    vec3 _124;
-    if (_51)
+    vec4 _48 = texture(baseMap, vec3(fragTexCoord.xy, float(_39.baseMapIndex)));
+    bool _54 = _39.srgb == 1;
+    vec3 _126;
+    if (_54)
     {
-        _124 = pow(_46.xyz, vec3(2.2000000476837158203125));
+        _126 = pow(_48.xyz, vec3(2.2000000476837158203125));
     }
     else
     {
-        _124 = _46.xyz;
+        _126 = _48.xyz;
     }
-    vec4 _119 = _46;
-    _119.x = _124.x;
-    vec4 _121 = _119;
-    _121.y = _124.y;
+    vec4 _121 = _48;
+    _121.x = _126.x;
     vec4 _123 = _121;
-    _123.z = _124.z;
-    vec4 _126;
-    if (_51)
+    _123.y = _126.y;
+    vec4 _125 = _123;
+    _125.z = _126.z;
+    vec4 _128;
+    if (_54)
     {
-        _126 = vec4(pow(fragColor.xyz, vec3(2.2000000476837158203125)), fragColor.w);
+        _128 = vec4(pow(fragColor.xyz, vec3(2.2000000476837158203125)), fragColor.w);
     }
     else
     {
-        _126 = fragColor;
+        _128 = fragColor;
     }
-    fragOut0 = mix(_123 * _126, _126, vec4(float(_37.noTexturing)));
+    fragOut0 = mix(_125 * _128, _128, vec4(float(_39.noTexturing)));
 }
 

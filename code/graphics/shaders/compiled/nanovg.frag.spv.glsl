@@ -11,8 +11,8 @@ layout(std140) uniform genericData
     int srgb;
     float intensity;
     float alphaThreshold;
-    int clipEnabled;
-} _25;
+    uint clipEnabled;
+} _26;
 
 uniform sampler2DArray baseMap;
 
@@ -22,20 +22,20 @@ in vec4 fragColor;
 
 void main()
 {
-    vec4 _35 = texture(baseMap, vec3(fragTexCoord.xy, float(_25.baseMapIndex)));
-    if (_25.noTexturing != 0)
+    vec4 _36 = texture(baseMap, vec3(fragTexCoord.xy, float(_26.baseMapIndex)));
+    if (_26.noTexturing != 0)
     {
-        fragOut0 = fragColor * _25.intensity;
+        fragOut0 = fragColor * _26.intensity;
     }
     else
     {
-        if (_25.alphaTexture != 0)
+        if (_26.alphaTexture != 0)
         {
-            fragOut0 = vec4(fragColor.xyz, _35.x * fragColor.w) * _25.intensity;
+            fragOut0 = vec4(fragColor.xyz, _36.x * fragColor.w) * _26.intensity;
         }
         else
         {
-            fragOut0 = (_35 * fragColor) * _25.intensity;
+            fragOut0 = (_36 * fragColor) * _26.intensity;
         }
     }
 }

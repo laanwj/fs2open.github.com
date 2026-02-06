@@ -1048,6 +1048,11 @@ void VulkanRenderer::setupFrame()
 		m_stateTracker->beginFrame(m_currentCommandBuffer);
 	}
 
+	// Reset per-frame draw statistics
+	if (m_drawManager) {
+		m_drawManager->resetFrameStats();
+	}
+
 	// Begin render pass
 	vk::RenderPassBeginInfo renderPassBegin;
 	renderPassBegin.renderPass = m_renderPass.get();
@@ -1086,6 +1091,11 @@ void VulkanRenderer::flip()
 	if (!m_frameInProgress) {
 		mprintf(("VulkanRenderer::flip called without frame in progress, skipping\n"));
 		return;
+	}
+
+	// Print per-frame diagnostic summary before ending
+	if (m_drawManager) {
+		m_drawManager->printFrameStats();
 	}
 
 	// End render pass

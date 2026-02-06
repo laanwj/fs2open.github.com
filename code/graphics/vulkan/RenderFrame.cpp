@@ -63,7 +63,10 @@ void RenderFrame::submitAndPresent(const std::vector<vk::CommandBuffer>& cmdBuff
 
 	Assertion(!m_inFlight, "Cannot submit a frame for presentation when it is still in flight.");
 
-	const std::array<vk::PipelineStageFlags, 1> waitStages = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
+	// Wait at transfer stage because setupFrame() may blit the previous swap chain
+	// image to the current one before the render pass. Without this, the blit could
+	// execute before the presentation engine releases the image.
+	const std::array<vk::PipelineStageFlags, 1> waitStages = {vk::PipelineStageFlagBits::eTransfer};
 	const std::array<vk::Semaphore, 1> waitSemaphores = {m_imageAvailableSemaphore.get()};
 
 	vk::SubmitInfo submitInfo;

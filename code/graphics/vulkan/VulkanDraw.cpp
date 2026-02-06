@@ -375,6 +375,8 @@ void VulkanDrawManager::renderPrimitives(material* material_info, primitive_type
 		return;
 	}
 
+	m_frameStats.renderPrimitiveCalls++;
+
 	// Apply material state and bind pipeline
 	if (!applyMaterial(material_info, prim_type, layout)) {
 		return;
@@ -400,6 +402,8 @@ void VulkanDrawManager::renderPrimitivesBatched(batched_bitmap_material* materia
 		return;
 	}
 
+	m_frameStats.renderBatchedCalls++;
+
 	// Apply base material state and bind pipeline
 	if (!applyMaterial(material_info, prim_type, layout)) {
 		return;
@@ -424,6 +428,8 @@ void VulkanDrawManager::renderPrimitivesParticle(particle_material* material_inf
 	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
 		return;
 	}
+
+	m_frameStats.renderParticleCalls++;
 
 	if (!applyMaterial(material_info, prim_type, layout)) {
 		return;
@@ -464,6 +470,8 @@ void VulkanDrawManager::renderMovie(movie_material* material_info, primitive_typ
 		return;
 	}
 
+	m_frameStats.renderMovieCalls++;
+
 	if (!applyMaterial(material_info, prim_type, layout)) {
 		return;
 	}
@@ -483,6 +491,8 @@ void VulkanDrawManager::renderNanoVG(nanovg_material* material_info, primitive_t
 	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
 		return;
 	}
+
+	m_frameStats.renderNanoVGCalls++;
 
 	if (!applyMaterial(material_info, prim_type, layout)) {
 		return;
@@ -505,6 +515,8 @@ void VulkanDrawManager::renderRocketPrimitives(interface_material* material_info
 		return;
 	}
 
+	m_frameStats.renderRocketCalls++;
+
 	if (!applyMaterial(material_info, prim_type, layout)) {
 		return;
 	}
@@ -519,6 +531,8 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 	if (!material_info || !vert_source || !bufferp) {
 		return;
 	}
+
+	m_frameStats.renderModelCalls++;
 
 	// Validate buffers
 	if (!vert_source->Vbuffer_handle.isValid() || !vert_source->Ibuffer_handle.isValid()) {
@@ -609,6 +623,9 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 	}
 
 	// Issue indexed draw call
+	m_frameStats.drawIndexedCalls++;
+	m_frameStats.totalIndices += datap->n_verts;
+
 	auto cmdBuffer = stateTracker->getCommandBuffer();
 	cmdBuffer.drawIndexed(
 		static_cast<uint32_t>(datap->n_verts),  // index count
@@ -671,6 +688,41 @@ void VulkanDrawManager::clearPendingUniformBindings()
 		binding.offset = 0;
 		binding.size = 0;
 	}
+}
+
+void VulkanDrawManager::resetFrameStats()
+{
+	m_frameStats = {};
+}
+
+void VulkanDrawManager::printFrameStats()
+{
+	// Print summary every frame for the first 200 frames, then every 60 frames
+	bool shouldPrint = (m_frameStatsFrameNum < 200) || (m_frameStatsFrameNum % 60 == 0);
+
+	if (shouldPrint) {
+		mprintf(("FRAME %d STATS: draws=%d indexed=%d verts=%d idxs=%d | applyMat=%d/%d fails | noPipeline=%d noCmdBuf=%d sdrNeg1=%d\n",
+			m_frameStatsFrameNum,
+			m_frameStats.drawCalls,
+			m_frameStats.drawIndexedCalls,
+			m_frameStats.totalVertices,
+			m_frameStats.totalIndices,
+			m_frameStats.applyMaterialFailures,
+			m_frameStats.applyMaterialCalls,
+			m_frameStats.noPipelineSkips,
+			m_frameStats.noCommandBufferSkips,
+			m_frameStats.shaderHandleNeg1));
+		mprintf(("  CALLS: prim=%d batch=%d model=%d particle=%d nanovg=%d rocket=%d movie=%d\n",
+			m_frameStats.renderPrimitiveCalls,
+			m_frameStats.renderBatchedCalls,
+			m_frameStats.renderModelCalls,
+			m_frameStats.renderParticleCalls,
+			m_frameStats.renderNanoVGCalls,
+			m_frameStats.renderRocketCalls,
+			m_frameStats.renderMovieCalls));
+	}
+
+	m_frameStatsFrameNum++;
 }
 
 
@@ -935,35 +987,30 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 		return static_cast<vk::DeviceSize>(frameOffset + binding.offset);
 	};
 
+	m_frameStats.applyMaterialCalls++;
+
 	// Build pipeline configuration from material
 	PipelineConfig config = buildPipelineConfig(mat, prim_type);
 
-	// Debug: Log material and shader type
-	static int matLogCount = 0;
-	if (matLogCount < 50) {
-		const char* matType = "unknown";
-		if (dynamic_cast<movie_material*>(mat)) matType = "movie";
-		else if (dynamic_cast<batched_bitmap_material*>(mat)) matType = "batched";
-		else if (dynamic_cast<interface_material*>(mat)) matType = "interface";
-		else if (dynamic_cast<nanovg_material*>(mat)) matType = "nanovg";
-		else if (dynamic_cast<particle_material*>(mat)) matType = "particle";
-		else if (dynamic_cast<distortion_material*>(mat)) matType = "distortion";
-		else if (dynamic_cast<shield_material*>(mat)) matType = "shield";
-		else if (dynamic_cast<model_material*>(mat)) matType = "model";
-		mprintf(("applyMaterial #%d: matType=%s shaderType=%d\n", matLogCount++, matType, static_cast<int>(config.shaderType)));
+	// Track shader handle issues
+	if (mat->get_shader_handle() < 0) {
+		m_frameStats.shaderHandleNeg1++;
 	}
 
 	// Check if we have a valid render pass
 	if (!config.renderPass) {
-		nprintf(("Vulkan", "VulkanDrawManager: No active render pass for drawing\n"));
+		m_frameStats.applyMaterialFailures++;
+		mprintf(("VulkanDrawManager: applyMaterial FAIL - no render pass (shaderType=%d)\n",
+			static_cast<int>(config.shaderType)));
 		return false;
 	}
 
 	// Get or create pipeline
 	vk::Pipeline pipeline = pipelineManager->getPipeline(config, *layout);
 	if (!pipeline) {
-		nprintf(("Vulkan", "VulkanDrawManager: Failed to get pipeline for shader type %d\n",
-			static_cast<int>(config.shaderType)));
+		m_frameStats.applyMaterialFailures++;
+		mprintf(("VulkanDrawManager: applyMaterial FAIL - no pipeline (shaderType=%d flags=0x%x handle=%d)\n",
+			static_cast<int>(config.shaderType), config.shaderFlags, mat->get_shader_handle()));
 		return false;
 	}
 
@@ -1168,28 +1215,17 @@ void VulkanDrawManager::draw(primitive_type prim_type, int first_vertex, int ver
 {
 	auto* stateTracker = getStateTracker();
 	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
-		// No state tracker or no command buffer - skip silently
+		m_frameStats.noCommandBufferSkips++;
 		return;
 	}
 
-	// Check if pipeline is bound - drawing without a pipeline causes corruption
 	if (!stateTracker->getCurrentPipeline()) {
-		static int warnCount = 0;
-		if (warnCount < 5) {
-			mprintf(("VulkanDrawManager::draw - WARNING: no pipeline bound! Skipping draw.\n"));
-			warnCount++;
-		}
+		m_frameStats.noPipelineSkips++;
 		return;
 	}
 
-	// Per-frame draw counter for debugging
-	static int totalDraws = 0;
-	if (totalDraws < 50) {
-		mprintf(("VulkanDrawManager::draw #%d - vertices=%d first=%d pipeline=%p\n",
-			totalDraws, vertex_count, first_vertex,
-			static_cast<void*>(static_cast<VkPipeline>(stateTracker->getCurrentPipeline()))));
-	}
-	totalDraws++;
+	m_frameStats.drawCalls++;
+	m_frameStats.totalVertices += vertex_count;
 
 	auto cmdBuffer = stateTracker->getCommandBuffer();
 	cmdBuffer.draw(static_cast<uint32_t>(vertex_count),
@@ -1202,18 +1238,17 @@ void VulkanDrawManager::drawIndexed(primitive_type prim_type, int index_count, i
 {
 	auto* stateTracker = getStateTracker();
 	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+		m_frameStats.noCommandBufferSkips++;
 		return;
 	}
 
-	// Check if pipeline is bound - drawing without a pipeline causes corruption
 	if (!stateTracker->getCurrentPipeline()) {
-		static int warnCount = 0;
-		if (warnCount < 5) {
-			mprintf(("VulkanDrawManager::drawIndexed - WARNING: no pipeline bound! Skipping draw.\n"));
-			warnCount++;
-		}
+		m_frameStats.noPipelineSkips++;
 		return;
 	}
+
+	m_frameStats.drawIndexedCalls++;
+	m_frameStats.totalIndices += index_count;
 
 	auto cmdBuffer = stateTracker->getCommandBuffer();
 	cmdBuffer.drawIndexed(static_cast<uint32_t>(index_count),

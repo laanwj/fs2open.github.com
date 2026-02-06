@@ -18,7 +18,7 @@ layout (set = 2, binding = 0, std140) uniform genericData {
 	int srgb;
 	float intensity;
 	float alphaThreshold;
-	int clipEnabled;
+	uint clipEnabled;
 };
 
 // Set 1 = Material, Binding 1 = texture

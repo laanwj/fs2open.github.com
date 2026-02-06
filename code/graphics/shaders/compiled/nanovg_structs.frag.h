@@ -14,7 +14,7 @@ struct genericData_nanovg_frag {
 	std::int32_t srgb;
 	float intensity;
 	float alphaThreshold;
-	std::int32_t clipEnabled;
+	std::uint32_t clipEnabled;
 };
 static_assert(sizeof(genericData_nanovg_frag) == 124, "Size of struct genericData_nanovg_frag does not match what is expected for the uniform block!");
 static_assert(offsetof(genericData_nanovg_frag, modelMatrix) == 0, "Offset of member modelMatrix does not match the uniform buffer offset!");
