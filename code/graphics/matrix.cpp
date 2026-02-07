@@ -57,12 +57,9 @@ static void create_perspective_projection_matrix(matrix4 *out, float left, float
 
 	if (gr_screen.mode == GR_VULKAN) {
 		// Vulkan NDC Z range is [0, 1] (OpenGL is [-1, 1])
+		// Y-flip is handled by negative viewport height (VK_KHR_maintenance1)
 		out->a1d[10] = -far_dist / (far_dist - near_dist);
 		out->a1d[14] = -far_dist * near_dist / (far_dist - near_dist);
-
-		// Vulkan uses Y-down NDC (opposite of OpenGL), so flip Y
-		out->a1d[5] = -out->a1d[5];
-		out->a1d[9] = -out->a1d[9];
 	} else {
 		// OpenGL NDC Z range is [-1, 1]
 		out->a1d[10] = -(far_dist + near_dist) / (far_dist - near_dist);
@@ -82,12 +79,9 @@ static void create_orthographic_projection_matrix(matrix4* out, float left, floa
 
 	if (gr_screen.mode == GR_VULKAN) {
 		// Vulkan NDC Z range is [0, 1] (OpenGL is [-1, 1])
+		// Y-flip is handled by negative viewport height (VK_KHR_maintenance1)
 		out->a1d[10] = -1.0f / (far_dist - near_dist);
 		out->a1d[14] = -near_dist / (far_dist - near_dist);
-
-		// Vulkan uses Y-down NDC (opposite of OpenGL), so flip Y
-		out->a1d[5] = -out->a1d[5];
-		out->a1d[13] = -out->a1d[13];
 	} else {
 		// OpenGL NDC Z range is [-1, 1]
 		out->a1d[10] = -2.0f / (far_dist - near_dist);
@@ -143,11 +137,12 @@ void gr_end_instance_matrix()
 
 // the projection matrix; fov, aspect ratio, near, far
 void gr_set_proj_matrix(fov_t fov, float aspect, float z_near, float z_far) {
-	if (gr_screen.rendering_to_texture != -1 || gr_screen.mode == GR_VULKAN) {
-		// RTT and Vulkan both use top-left origin, same as FSO's coordinate system
+	if (gr_screen.rendering_to_texture != -1) {
+		// RTT uses top-left origin, same as FSO's coordinate system
 		gr_set_viewport(gr_screen.offset_x, gr_screen.offset_y, gr_screen.clip_width, gr_screen.clip_height);
 	} else {
-		// OpenGL uses bottom-left origin, need to flip Y
+		// Screen rendering uses bottom-left origin (OpenGL convention)
+		// Vulkan handles this via negative viewport height (VK_KHR_maintenance1)
 		gr_set_viewport(gr_screen.offset_x, (gr_screen.max_h - gr_screen.offset_y - gr_screen.clip_height), gr_screen.clip_width, gr_screen.clip_height);
 	}
 
@@ -298,7 +293,7 @@ void gr_end_2d_matrix()
 	Assert( htl_2d_matrix_depth == 1 );
 
 	// reset viewport to what it was originally set to by the proj matrix
-	if (gr_screen.mode == GR_VULKAN) {
+	if (gr_screen.rendering_to_texture != -1) {
 		gr_set_viewport(gr_screen.offset_x, gr_screen.offset_y, gr_screen.clip_width, gr_screen.clip_height);
 	} else {
 		gr_set_viewport(gr_screen.offset_x, (gr_screen.max_h - gr_screen.offset_y - gr_screen.clip_height), gr_screen.clip_width, gr_screen.clip_height);

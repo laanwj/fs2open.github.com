@@ -27,8 +27,10 @@ void main()
 	fragTexCoord = vertTexCoord;
 	fragColor = color;
 
-	// Simple screen coordinate to NDC conversion
+	// Screen coordinate to NDC conversion (matches OpenGL nanovg convention)
+	// Screen coords are Y-down, NDC is Y-up (negative viewport makes Vulkan match OpenGL)
 	vec2 screenSize = vec2(1920.0, 1080.0);
-	vec2 ndc = (vertPosition.xy / screenSize) * 2.0 - 1.0;
-	gl_Position = vec4(ndc.x, ndc.y, 0.0, 1.0);
+	gl_Position = vec4(2.0 * vertPosition.x / screenSize.x - 1.0,
+	                   1.0 - 2.0 * vertPosition.y / screenSize.y,
+	                   0.0, 1.0);
 }

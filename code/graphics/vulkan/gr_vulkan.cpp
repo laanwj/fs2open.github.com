@@ -853,9 +853,20 @@ void init_function_pointers()
 	gr_screen.gf_set_viewport = [](int x, int y, int width, int height) {
 		auto* stateTracker = graphics::vulkan::getStateTracker();
 		if (stateTracker) {
-			stateTracker->setViewport(
-				static_cast<float>(x), static_cast<float>(y),
-				static_cast<float>(width), static_cast<float>(height));
+			if (gr_screen.rendering_to_texture == -1) {
+				// Screen rendering: use negative viewport height for OpenGL-compatible Y-up NDC
+				// (VK_KHR_maintenance1, core since Vulkan 1.1)
+				stateTracker->setViewport(
+					static_cast<float>(x),
+					static_cast<float>(gr_screen.max_h - y),
+					static_cast<float>(width),
+					static_cast<float>(-height));
+			} else {
+				// RTT: standard positive viewport (RTT projection matrix handles Y-flip)
+				stateTracker->setViewport(
+					static_cast<float>(x), static_cast<float>(y),
+					static_cast<float>(width), static_cast<float>(height));
+			}
 		}
 	};
 

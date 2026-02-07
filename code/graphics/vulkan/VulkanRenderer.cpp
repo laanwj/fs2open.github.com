@@ -1073,9 +1073,11 @@ void VulkanRenderer::setupFrame()
 	// Set up state tracker for FSO draws
 	if (m_stateTracker) {
 		m_stateTracker->setRenderPass(m_renderPass.get(), 0);
-		m_stateTracker->setViewport(0.0f, 0.0f,
+		// Negative viewport height for OpenGL-compatible Y-up NDC (VK_KHR_maintenance1)
+		m_stateTracker->setViewport(0.0f,
+			static_cast<float>(m_swapChainExtent.height),
 			static_cast<float>(m_swapChainExtent.width),
-			static_cast<float>(m_swapChainExtent.height));
+			-static_cast<float>(m_swapChainExtent.height));
 	}
 
 	m_frameInProgress = true;
