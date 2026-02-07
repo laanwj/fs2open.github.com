@@ -38,6 +38,8 @@ struct PipelineConfig {
 	bool stencilEnabled = false;
 	ComparisionFunction stencilFunc = ComparisionFunction::Always;
 	uint32_t stencilMask = 0xFF;
+	material::StencilOp frontStencilOp;
+	material::StencilOp backStencilOp;
 
 	// Render pass compatibility
 	vk::RenderPass renderPass;

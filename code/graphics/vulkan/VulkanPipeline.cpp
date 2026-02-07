@@ -32,6 +32,12 @@ bool PipelineConfig::operator==(const PipelineConfig& other) const
 	       stencilEnabled == other.stencilEnabled &&
 	       stencilFunc == other.stencilFunc &&
 	       stencilMask == other.stencilMask &&
+	       frontStencilOp.stencilFailOperation == other.frontStencilOp.stencilFailOperation &&
+	       frontStencilOp.depthFailOperation == other.frontStencilOp.depthFailOperation &&
+	       frontStencilOp.successOperation == other.frontStencilOp.successOperation &&
+	       backStencilOp.stencilFailOperation == other.backStencilOp.stencilFailOperation &&
+	       backStencilOp.depthFailOperation == other.backStencilOp.depthFailOperation &&
+	       backStencilOp.successOperation == other.backStencilOp.successOperation &&
 	       renderPass == other.renderPass &&
 	       subpass == other.subpass &&
 	       colorAttachmentCount == other.colorAttachmentCount;
@@ -53,9 +59,15 @@ size_t PipelineConfig::hash() const
 	h ^= std::hash<bool>()(stencilEnabled) << 26;
 	h ^= std::hash<int>()(static_cast<int>(stencilFunc)) << 27;
 	h ^= std::hash<uint32_t>()(stencilMask) << 31;
-	h ^= std::hash<uint64_t>()(reinterpret_cast<uint64_t>(static_cast<VkRenderPass>(renderPass))) << 35;
-	h ^= std::hash<uint32_t>()(subpass) << 39;
-	h ^= std::hash<uint32_t>()(colorAttachmentCount) << 43;
+	h ^= std::hash<int>()(static_cast<int>(frontStencilOp.stencilFailOperation)) << 33;
+	h ^= std::hash<int>()(static_cast<int>(frontStencilOp.depthFailOperation)) << 35;
+	h ^= std::hash<int>()(static_cast<int>(frontStencilOp.successOperation)) << 37;
+	h ^= std::hash<int>()(static_cast<int>(backStencilOp.stencilFailOperation)) << 39;
+	h ^= std::hash<int>()(static_cast<int>(backStencilOp.depthFailOperation)) << 41;
+	h ^= std::hash<int>()(static_cast<int>(backStencilOp.successOperation)) << 43;
+	h ^= std::hash<uint64_t>()(reinterpret_cast<uint64_t>(static_cast<VkRenderPass>(renderPass))) << 45;
+	h ^= std::hash<uint32_t>()(subpass) << 49;
+	h ^= std::hash<uint32_t>()(colorAttachmentCount) << 53;
 
 	return h;
 }
@@ -321,7 +333,8 @@ vk::UniquePipeline VulkanPipelineManager::createPipeline(const PipelineConfig& c
 		config.depthMode,
 		config.stencilEnabled,
 		config.stencilFunc,
-		nullptr, nullptr,  // Default stencil ops
+		config.stencilEnabled ? &config.frontStencilOp : nullptr,
+		config.stencilEnabled ? &config.backStencilOp : nullptr,
 		config.stencilMask);
 
 	// Override depth write if specified

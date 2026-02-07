@@ -774,6 +774,8 @@ PipelineConfig VulkanDrawManager::buildPipelineConfig(material* mat, primitive_t
 	if (config.stencilEnabled) {
 		config.stencilFunc = mat->get_stencil_func().compare;
 		config.stencilMask = mat->get_stencil_func().mask;
+		config.frontStencilOp = mat->get_front_stencil_op();
+		config.backStencilOp = mat->get_back_stencil_op();
 	}
 
 	// Get current render pass from state tracker

@@ -239,12 +239,20 @@ void VulkanStateTracker::applyDynamicState()
 		if (m_scissorEnabled) {
 			m_cmdBuffer.setScissor(0, 1, &m_scissor);
 		} else {
-			// Set scissor to full viewport when disabled
+			// Set scissor to full viewport when disabled.
+			// Handle negative viewport height (VK_KHR_maintenance1 Y-flip):
+			// when height < 0, the viewport covers [y+height, y] in framebuffer Y.
 			vk::Rect2D fullScissor;
-			fullScissor.offset.x = 0;
-			fullScissor.offset.y = 0;
+			float vy = m_viewport.y;
+			float vh = m_viewport.height;
+			if (vh < 0.0f) {
+				vy = vy + vh;
+				vh = -vh;
+			}
+			fullScissor.offset.x = static_cast<int32_t>(m_viewport.x);
+			fullScissor.offset.y = static_cast<int32_t>(vy);
 			fullScissor.extent.width = static_cast<uint32_t>(m_viewport.width);
-			fullScissor.extent.height = static_cast<uint32_t>(m_viewport.height);
+			fullScissor.extent.height = static_cast<uint32_t>(vh);
 			m_cmdBuffer.setScissor(0, 1, &fullScissor);
 		}
 		m_scissorDirty = false;
