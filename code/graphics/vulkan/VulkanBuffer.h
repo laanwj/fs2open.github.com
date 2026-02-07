@@ -1,15 +1,13 @@
 #pragma once
 
 #include "graphics/2d.h"
+#include "VulkanConstants.h"
 #include "VulkanMemory.h"
 
 #include <vulkan/vulkan.hpp>
 
 namespace graphics {
 namespace vulkan {
-
-// Must match VulkanRenderer::MAX_FRAMES_IN_FLIGHT
-static constexpr uint32_t BUFFER_MAX_FRAMES_IN_FLIGHT = 2;
 
 /**
  * @brief Internal representation of a Vulkan buffer

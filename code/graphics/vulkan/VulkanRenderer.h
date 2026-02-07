@@ -92,8 +92,6 @@ class VulkanRenderer {
 	void waitIdle();
 
   private:
-	static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
-
 	bool initDisplayDevice() const;
 
 	bool initializeInstance();

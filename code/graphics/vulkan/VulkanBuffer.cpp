@@ -154,7 +154,7 @@ bool VulkanBufferManager::init(vk::Device device,
 
 	m_initialized = true;
 	mprintf(("Vulkan Buffer Manager initialized (per-frame streaming buffers enabled, %u frames)\n",
-		BUFFER_MAX_FRAMES_IN_FLIGHT));
+		MAX_FRAMES_IN_FLIGHT));
 	return true;
 }
 
@@ -218,7 +218,7 @@ void VulkanBufferManager::shutdown()
 
 void VulkanBufferManager::setCurrentFrame(uint32_t frameIndex)
 {
-	m_currentFrame = frameIndex % BUFFER_MAX_FRAMES_IN_FLIGHT;
+	m_currentFrame = frameIndex % MAX_FRAMES_IN_FLIGHT;
 }
 
 vk::BufferUsageFlags VulkanBufferManager::getVkUsageFlags(BufferType type) const
@@ -328,7 +328,7 @@ bool VulkanBufferManager::createOrResizeBuffer(VulkanBufferObject& bufferObj, si
 	// For streaming buffers: need space for all frames
 	// For static buffers: just the span size
 	size_t requiredTotal = bufferObj.isStreaming()
-		? spanSize * BUFFER_MAX_FRAMES_IN_FLIGHT
+		? spanSize * MAX_FRAMES_IN_FLIGHT
 		: spanSize;
 
 	// If buffer exists and is large enough, just update span size

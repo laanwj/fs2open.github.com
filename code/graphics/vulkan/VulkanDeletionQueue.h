@@ -2,6 +2,7 @@
 #pragma once
 
 #include "globalincs/pstypes.h"
+#include "VulkanConstants.h"
 #include "VulkanMemory.h"
 
 #include <vulkan/vulkan.hpp>
@@ -23,9 +24,7 @@ namespace vulkan {
  */
 class VulkanDeletionQueue {
 public:
-	// Number of frames to wait before destroying resources
-	// Matches MAX_FRAMES_IN_FLIGHT to ensure all command buffers have completed
-	static constexpr uint32_t FRAMES_TO_WAIT = 2;
+	static constexpr uint32_t FRAMES_TO_WAIT = MAX_FRAMES_IN_FLIGHT;
 
 	VulkanDeletionQueue() = default;
 	~VulkanDeletionQueue();

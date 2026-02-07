@@ -2,6 +2,7 @@
 
 #include "globalincs/pstypes.h"
 #include "graphics/2d.h"
+#include "VulkanConstants.h"
 
 #include <vulkan/vulkan.hpp>
 
@@ -42,7 +43,6 @@ struct DescriptorBindingInfo {
  */
 class VulkanDescriptorManager {
 public:
-	static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 	static constexpr uint32_t MAX_TEXTURE_BINDINGS = 16;  // Texture array size
 
 	VulkanDescriptorManager() = default;
