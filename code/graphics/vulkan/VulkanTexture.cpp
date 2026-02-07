@@ -1162,5 +1162,93 @@ uint32_t VulkanTextureManager::calculateMipLevels(uint32_t width, uint32_t heigh
 	return static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
 }
 
+// ========== gr_screen function pointer implementations ==========
+
+int vulkan_preload(int bitmap_num, int /*is_aabitmap*/)
+{
+	auto* texManager = getTextureManager();
+
+	// Check if texture is already loaded
+	auto* slot = texManager->getTextureSlot(bitmap_num);
+	if (slot && slot->imageView) {
+		return 1;  // Already loaded
+	}
+
+	// Lock bitmap to get data pointer - use 32bpp for best compatibility
+	bitmap* bmp = bm_lock(bitmap_num, 32, BMP_TEX_XPARENT);
+	if (!bmp) {
+		static int warnCount = 0;
+		if (warnCount < 10) {
+			mprintf(("vulkan_preload: Failed to lock bitmap %d\n", bitmap_num));
+			warnCount++;
+		}
+		return 0;
+	}
+
+	// Upload the texture
+	bool success = texManager->bm_data(bitmap_num, bmp);
+
+	// Unlock bitmap
+	bm_unlock(bitmap_num);
+
+	if (success) {
+		static int successCount = 0;
+		if (successCount < 10) {
+			mprintf(("vulkan_preload: Successfully uploaded texture %d\n", bitmap_num));
+			successCount++;
+		}
+	}
+
+	return success ? 1 : 0;
+}
+
+void vulkan_bm_create(bitmap_slot* slot)
+{
+	auto* texManager = getTextureManager();
+	texManager->bm_create(slot);
+}
+
+void vulkan_bm_free_data(bitmap_slot* slot, bool release)
+{
+	auto* texManager = getTextureManager();
+	texManager->bm_free_data(slot, release);
+}
+
+void vulkan_bm_init(bitmap_slot* slot)
+{
+	auto* texManager = getTextureManager();
+	texManager->bm_init(slot);
+}
+
+bool vulkan_bm_data(int handle, bitmap* bm)
+{
+	auto* texManager = getTextureManager();
+	return texManager->bm_data(handle, bm);
+}
+
+int vulkan_bm_make_render_target(int handle, int* width, int* height, int* bpp, int* mm_lvl, int flags)
+{
+	auto* texManager = getTextureManager();
+	return texManager->bm_make_render_target(handle, width, height, bpp, mm_lvl, flags);
+}
+
+int vulkan_bm_set_render_target(int handle, int face)
+{
+	auto* texManager = getTextureManager();
+	return texManager->bm_set_render_target(handle, face);
+}
+
+void vulkan_update_texture(int bitmap_handle, int bpp, const ubyte* data, int width, int height)
+{
+	auto* texManager = getTextureManager();
+	texManager->update_texture(bitmap_handle, bpp, data, width, height);
+}
+
+void vulkan_get_bitmap_from_texture(void* data_out, int bitmap_num)
+{
+	auto* texManager = getTextureManager();
+	texManager->get_bitmap_from_texture(data_out, bitmap_num);
+}
+
 } // namespace vulkan
 } // namespace graphics

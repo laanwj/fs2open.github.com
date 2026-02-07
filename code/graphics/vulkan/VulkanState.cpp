@@ -1,4 +1,5 @@
 #include "VulkanState.h"
+#include "VulkanDraw.h"
 
 namespace graphics {
 namespace vulkan {
@@ -272,6 +273,64 @@ void VulkanStateTracker::applyDynamicState()
 	if (m_lineWidthDirty) {
 		m_cmdBuffer.setLineWidth(m_lineWidth);
 		m_lineWidthDirty = false;
+	}
+}
+
+} // namespace vulkan
+} // namespace graphics
+
+// GL_alpha_threshold is defined in gropengl.cpp
+extern float GL_alpha_threshold;
+
+namespace graphics {
+namespace vulkan {
+
+// ========== gr_screen function pointer implementations ==========
+
+void vulkan_zbias(int bias)
+{
+	auto* stateTracker = getStateTracker();
+	auto* drawManager = getDrawManager();
+
+	if (bias) {
+		drawManager->setDepthBiasEnabled(true);
+		if (bias < 0) {
+			stateTracker->setDepthBias(1.0f, static_cast<float>(-bias));
+		} else {
+			stateTracker->setDepthBias(0.0f, static_cast<float>(-bias));
+		}
+	} else {
+		drawManager->setDepthBiasEnabled(false);
+		stateTracker->setDepthBias(0.0f, 0.0f);
+	}
+}
+
+int vulkan_alpha_mask_set(int mode, float alpha)
+{
+	if (mode) {
+		GL_alpha_threshold = alpha;
+	} else {
+		GL_alpha_threshold = 0.0f;
+	}
+	return mode;
+}
+
+void vulkan_set_viewport(int x, int y, int width, int height)
+{
+	auto* stateTracker = getStateTracker();
+	if (gr_screen.rendering_to_texture == -1) {
+		// Screen rendering: use negative viewport height for OpenGL-compatible Y-up NDC
+		// (VK_KHR_maintenance1, core since Vulkan 1.1)
+		stateTracker->setViewport(
+			static_cast<float>(x),
+			static_cast<float>(gr_screen.max_h - y),
+			static_cast<float>(width),
+			static_cast<float>(-height));
+	} else {
+		// RTT: standard positive viewport (RTT projection matrix handles Y-flip)
+		stateTracker->setViewport(
+			static_cast<float>(x), static_cast<float>(y),
+			static_cast<float>(width), static_cast<float>(height));
 	}
 }
 

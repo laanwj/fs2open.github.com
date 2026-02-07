@@ -211,5 +211,10 @@ extern const size_t VULKAN_SHADER_VARIANTS_COUNT;
 VulkanShaderManager* getShaderManager();
 void setShaderManager(VulkanShaderManager* manager);
 
+// ========== gr_screen function pointer implementations ==========
+
+int vulkan_maybe_create_shader(shader_type shader_t, unsigned int flags);
+void vulkan_recompile_all_shaders(const std::function<void(size_t, size_t)>& progressCallback);
+
 } // namespace vulkan
 } // namespace graphics

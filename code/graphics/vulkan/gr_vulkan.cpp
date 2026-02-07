@@ -11,25 +11,12 @@
 
 #include "backends/imgui_impl_sdl.h"
 #include "backends/imgui_impl_vulkan.h"
-#include "mod_table/mod_table.h"
 #include "osapi/osapi.h"
 
 #include "cmdline/cmdline.h"
 #include "graphics/2d.h"
 #include "graphics/matrix.h"
 #include "graphics/material.h"
-#include "graphics/util/uniform_structs.h"
-#include "graphics/util/UniformBuffer.h"
-#include "graphics/shaders/compiled/default-material_structs.vert.h"
-
-#define BMPMAN_INTERNAL
-#include "bmpman/bm_internal.h"
-
-// GL_alpha_threshold is defined in gropengl.cpp, need extern here
-extern float GL_alpha_threshold;
-
-// PostProcessing_override is defined in globalincs/systemvars.cpp
-extern bool PostProcessing_override;
 
 namespace graphics {
 namespace vulkan {
@@ -43,96 +30,7 @@ struct VulkanSyncObject {
 	uint64_t frameNumber;
 };
 
-// Helper to set up GenericData uniform for default material shader
-// Similar to opengl_shader_set_default_material() in gropenglshader.cpp
-void vulkan_set_default_material_uniforms(material* material_info)
-{
-	if (!material_info) {
-		return;
-	}
-
-	// Get uniform buffer for GenericData
-	auto buffer = gr_get_uniform_buffer(uniform_block_type::GenericData, 1, sizeof(genericData_default_material_vert));
-	auto* data = buffer.aligner().addTypedElement<genericData_default_material_vert>();
-
-	// Get base map from material
-	int base_map = material_info->get_texture_map(TM_BASE_TYPE);
-	bool textured = (base_map >= 0);
-	bool alpha = (material_info->get_texture_type() == TCACHE_TYPE_AABITMAP);
-
-	// Texturing flags
-	if (textured) {
-		data->noTexturing = 0;
-		data->baseMapIndex = 0;  // Array index in texture array
-	} else {
-		data->noTexturing = 1;
-		data->baseMapIndex = 0;
-	}
-
-	// Alpha texture flag
-	data->alphaTexture = alpha ? 1 : 0;
-
-	// HDR / intensity settings
-	if (High_dynamic_range) {
-		data->srgb = 1;
-		data->intensity = material_info->get_color_scale();
-	} else {
-		data->srgb = 0;
-		data->intensity = 1.0f;
-	}
-
-	// Alpha threshold
-	data->alphaThreshold = GL_alpha_threshold;
-
-	// Color from material
-	vec4 clr = material_info->get_color();
-	data->color.a1d[0] = clr.xyzw.x;
-	data->color.a1d[1] = clr.xyzw.y;
-	data->color.a1d[2] = clr.xyzw.z;
-	data->color.a1d[3] = clr.xyzw.w;
-
-	static int debugCount = 0;
-	if (debugCount < 5) {
-		mprintf(("Vulkan GenericData: noTex=%d, alphaTex=%d, srgb=%d, intensity=%.2f, color=(%.2f,%.2f,%.2f,%.2f), alphaThresh=%.2f\n",
-			data->noTexturing, data->alphaTexture, data->srgb, data->intensity,
-			clr.xyzw.x, clr.xyzw.y, clr.xyzw.z, clr.xyzw.w, data->alphaThreshold));
-		debugCount++;
-	}
-
-	// Clip plane
-	const auto& clip_plane = material_info->get_clip_plane();
-	if (clip_plane.enabled) {
-		data->clipEnabled = 1;
-
-		data->clipEquation.a1d[0] = clip_plane.normal.xyz.x;
-		data->clipEquation.a1d[1] = clip_plane.normal.xyz.y;
-		data->clipEquation.a1d[2] = clip_plane.normal.xyz.z;
-		// Calculate 'd' value: d = -dot(normal, position)
-		data->clipEquation.a1d[3] = -(clip_plane.normal.xyz.x * clip_plane.position.xyz.x +
-		                              clip_plane.normal.xyz.y * clip_plane.position.xyz.y +
-		                              clip_plane.normal.xyz.z * clip_plane.position.xyz.z);
-
-		// Model matrix (identity for now, material doesn't provide one)
-		vm_matrix4_set_identity(&data->modelMatrix);
-	} else {
-		data->clipEnabled = 0;
-		vm_matrix4_set_identity(&data->modelMatrix);
-		data->clipEquation.a1d[0] = 0.0f;
-		data->clipEquation.a1d[1] = 0.0f;
-		data->clipEquation.a1d[2] = 0.0f;
-		data->clipEquation.a1d[3] = 0.0f;
-	}
-
-	buffer.submitData();
-	gr_bind_uniform_buffer(uniform_block_type::GenericData, buffer.getBufferOffset(0),
-	                       sizeof(genericData_default_material_vert), buffer.bufferHandle());
-}
-
-gr_buffer_handle vulkan_create_buffer(BufferType type, BufferUsageHint usage)
-{
-	auto* bufferManager = getBufferManager();
-	return bufferManager->createBuffer(type, usage);
-}
+// ========== Renderer-level functions ==========
 
 void vulkan_setup_frame()
 {
@@ -140,515 +38,9 @@ void vulkan_setup_frame()
 	renderer->setupFrame();
 }
 
-void vulkan_delete_buffer(gr_buffer_handle handle)
+void vulkan_flip()
 {
-	auto* bufferManager = getBufferManager();
-	bufferManager->deleteBuffer(handle);
-}
-
-int vulkan_preload(int bitmap_num, int /*is_aabitmap*/)
-{
-	auto* texManager = getTextureManager();
-
-	// Check if texture is already loaded
-	auto* slot = texManager->getTextureSlot(bitmap_num);
-	if (slot && slot->imageView) {
-		return 1;  // Already loaded
-	}
-
-	// Lock bitmap to get data pointer - use 32bpp for best compatibility
-	bitmap* bmp = bm_lock(bitmap_num, 32, BMP_TEX_XPARENT);
-	if (!bmp) {
-		static int warnCount = 0;
-		if (warnCount < 10) {
-			mprintf(("vulkan_preload: Failed to lock bitmap %d\n", bitmap_num));
-			warnCount++;
-		}
-		return 0;
-	}
-
-	// Upload the texture
-	bool success = texManager->bm_data(bitmap_num, bmp);
-
-	// Unlock bitmap
-	bm_unlock(bitmap_num);
-
-	if (success) {
-		static int successCount = 0;
-		if (successCount < 10) {
-			mprintf(("vulkan_preload: Successfully uploaded texture %d\n", bitmap_num));
-			successCount++;
-		}
-	}
-
-	return success ? 1 : 0;
-}
-
-int stub_save_screen() { return 1; }
-
-int vulkan_zbuffer_get()
-{
-	auto* drawManager = getDrawManager();
-	return drawManager->zbufferGet();
-}
-
-int vulkan_zbuffer_set(int mode)
-{
-	auto* drawManager = getDrawManager();
-	return drawManager->zbufferSet(mode);
-}
-
-void vulkan_set_fill_mode(int mode)
-{
-	auto* drawManager = getDrawManager();
-	// GR_FILL_MODE_WIRE = 1, GR_FILL_MODE_SOLID = 2
-	drawManager->setFillMode(mode);
-}
-
-void vulkan_clear()
-{
-	auto* drawManager = getDrawManager();
-	drawManager->clear();
-}
-
-void stub_free_screen(int /*id*/) {}
-
-void stub_get_region(int /*front*/, int /*w*/, int /*h*/, ubyte* /*data*/) {}
-
-void stub_print_screen(const char* /*filename*/) {}
-
-SCP_string stub_blob_screen() { return ""; }
-
-void vulkan_reset_clip()
-{
-	auto* drawManager = getDrawManager();
-	drawManager->resetClip();
-}
-
-void stub_restore_screen(int /*id*/) {}
-
-void vulkan_update_buffer_data(gr_buffer_handle handle, size_t size, const void* data)
-{
-	auto* bufferManager = getBufferManager();
-	bufferManager->updateBufferData(handle, size, data);
-}
-
-void vulkan_update_buffer_data_offset(gr_buffer_handle handle, size_t offset, size_t size, const void* data)
-{
-	auto* bufferManager = getBufferManager();
-	bufferManager->updateBufferDataOffset(handle, offset, size, data);
-}
-
-void stub_update_transform_buffer(void* /*data*/, size_t /*size*/) {}
-
-void vulkan_set_clear_color(int r, int g, int b)
-{
-	auto* drawManager = getDrawManager();
-	drawManager->setClearColor(r, g, b);
-}
-
-void vulkan_set_clip(int x, int y, int w, int h, int resize_mode)
-{
-	auto* drawManager = getDrawManager();
-	drawManager->setClip(x, y, w, h, resize_mode);
-}
-
-int vulkan_set_cull(int cull)
-{
-	auto* drawManager = getDrawManager();
-	return drawManager->setCull(cull);
-}
-
-int vulkan_set_color_buffer(int mode)
-{
-	auto* drawManager = getDrawManager();
-	return drawManager->setColorBuffer(mode);
-}
-
-void vulkan_set_texture_addressing(int mode)
-{
-	auto* drawManager = getDrawManager();
-	drawManager->setTextureAddressing(mode);
-}
-
-void vulkan_zbias(int bias)
-{
-	auto* stateTracker = getStateTracker();
-	auto* drawManager = getDrawManager();
-
-	if (bias) {
-		drawManager->setDepthBiasEnabled(true);
-		if (bias < 0) {
-			stateTracker->setDepthBias(1.0f, static_cast<float>(-bias));
-		} else {
-			stateTracker->setDepthBias(0.0f, static_cast<float>(-bias));
-		}
-	} else {
-		drawManager->setDepthBiasEnabled(false);
-		stateTracker->setDepthBias(0.0f, 0.0f);
-	}
-}
-
-void vulkan_zbuffer_clear(int mode)
-{
-	auto* drawManager = getDrawManager();
-	drawManager->zbufferClear(mode);
-}
-
-int vulkan_stencil_set(int mode)
-{
-	auto* drawManager = getDrawManager();
-	return drawManager->stencilSet(mode);
-}
-
-void vulkan_stencil_clear()
-{
-	auto* drawManager = getDrawManager();
-	drawManager->stencilClear();
-}
-
-int vulkan_alpha_mask_set(int mode, float alpha)
-{
-	if (mode) {
-		GL_alpha_threshold = alpha;
-	} else {
-		GL_alpha_threshold = 0.0f;
-	}
-	return mode;
-}
-
-void stub_post_process_set_effect(const char* /*name*/, int /*x*/, const vec3d* /*rgb*/) {}
-
-void stub_post_process_set_defaults() {}
-
-void stub_post_process_save_zbuffer() {}
-
-void stub_post_process_begin() {}
-
-void stub_post_process_end() {}
-
-void vulkan_scene_texture_begin()
-{
-	// Minimal implementation matching OpenGL's gr_opengl_scene_texture_begin():
-	// 1. Clear color + depth for the 3D scene
-	// 2. Set High_dynamic_range flag if post-processing is enabled
-	//
-	// Full implementation would switch to an offscreen FBO, but for now
-	// we render directly to the swap chain.
-
-	auto* stateTracker = getStateTracker();
-
-	if (stateTracker->hasCommandBuffer()) {
-		// Clear color buffer to black (matching OpenGL behavior)
-		auto cmdBuffer = stateTracker->getCommandBuffer();
-
-		vk::ClearAttachment clearAttachments[2];
-		clearAttachments[0].aspectMask = vk::ImageAspectFlagBits::eColor;
-		clearAttachments[0].colorAttachment = 0;
-		clearAttachments[0].clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
-
-		clearAttachments[1].aspectMask = vk::ImageAspectFlagBits::eDepth;
-		clearAttachments[1].clearValue.depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
-
-		vk::ClearRect clearRect;
-		clearRect.rect.offset = vk::Offset2D(0, 0);
-		clearRect.rect.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.max_w),
-		                                      static_cast<uint32_t>(gr_screen.max_h));
-		clearRect.baseArrayLayer = 0;
-		clearRect.layerCount = 1;
-
-		cmdBuffer.clearAttachments(2, clearAttachments, 1, &clearRect);
-	}
-
-	// Enable HDR for 3D scene rendering (affects intensity/srgb in shaders)
-	if (Gr_post_processing_enabled && !PostProcessing_override) {
-		High_dynamic_range = true;
-	}
-}
-
-void vulkan_scene_texture_end()
-{
-	// Minimal implementation matching OpenGL's gr_opengl_scene_texture_end():
-	// Reset HDR flag after 3D scene rendering
-	//
-	// Full implementation would composite the scene texture to screen with
-	// post-processing (bloom, FXAA, tonemapping). For now we just reset the flag.
-
-	High_dynamic_range = false;
-}
-
-void stub_copy_effect_texture() {}
-
-void stub_deferred_lighting_begin(bool /*clearNonColorBufs*/) {}
-
-void stub_deferred_lighting_msaa() {}
-
-void stub_deferred_lighting_end() {}
-
-void stub_deferred_lighting_finish() {}
-
-void vulkan_set_line_width(float width)
-{
-	auto* stateTracker = getStateTracker();
-	if (width <= 1.0f) {
-		stateTracker->setLineWidth(width);
-	}
-	gr_screen.line_width = width;
-}
-
-void vulkan_draw_sphere(material* material_def, float /*rad*/)
-{
-	auto* drawManager = getDrawManager();
-	drawManager->drawSphere(material_def);
-}
-
-void vulkan_clear_states()
-{
-	auto* drawManager = getDrawManager();
-	drawManager->clearStates();
-}
-
-void vulkan_update_texture(int bitmap_handle, int bpp, const ubyte* data, int width, int height)
-{
-	auto* texManager = getTextureManager();
-	texManager->update_texture(bitmap_handle, bpp, data, width, height);
-}
-
-void vulkan_get_bitmap_from_texture(void* data_out, int bitmap_num)
-{
-	auto* texManager = getTextureManager();
-	texManager->get_bitmap_from_texture(data_out, bitmap_num);
-}
-
-int vulkan_bm_make_render_target(int handle, int* width, int* height, int* bpp, int* mm_lvl, int flags)
-{
-	auto* texManager = getTextureManager();
-	return texManager->bm_make_render_target(handle, width, height, bpp, mm_lvl, flags);
-}
-
-int vulkan_bm_set_render_target(int handle, int face)
-{
-	auto* texManager = getTextureManager();
-	return texManager->bm_set_render_target(handle, face);
-}
-
-void vulkan_bm_create(bitmap_slot* slot)
-{
-	auto* texManager = getTextureManager();
-	texManager->bm_create(slot);
-}
-
-void vulkan_bm_free_data(bitmap_slot* slot, bool release)
-{
-	auto* texManager = getTextureManager();
-	texManager->bm_free_data(slot, release);
-}
-
-void vulkan_bm_init(bitmap_slot* slot)
-{
-	auto* texManager = getTextureManager();
-	texManager->bm_init(slot);
-}
-
-void stub_bm_page_in_start() {}
-
-bool vulkan_bm_data(int handle, bitmap* bm)
-{
-	auto* texManager = getTextureManager();
-	return texManager->bm_data(handle, bm);
-}
-
-int vulkan_maybe_create_shader(shader_type shader_t, unsigned int flags)
-{
-	auto* shaderManager = getShaderManager();
-	return shaderManager->maybeCreateShader(shader_t, flags);
-}
-
-void vulkan_recompile_all_shaders(const std::function<void(size_t, size_t)>& progressCallback)
-{
-	auto* shaderManager = getShaderManager();
-	shaderManager->recompileAllShaders(progressCallback);
-}
-
-void stub_shadow_map_start(matrix4* /*shadow_view_matrix*/, const matrix* /*light_matrix*/, vec3d* /*eye_pos*/) {}
-
-void stub_shadow_map_end() {}
-
-void stub_start_decal_pass() {}
-void stub_stop_decal_pass() {}
-void stub_render_decals(decal_material* /*material_info*/,
-                       primitive_type /*prim_type*/,
-                       vertex_layout* /*layout*/,
-                       int /*num_elements*/,
-                       const indexed_vertex_source& /*buffers*/,
-                       const gr_buffer_handle& /*instance_buffer*/,
-                       int /*num_instances*/) {}
-
-void vulkan_render_shield_impact(shield_material* material_info,
-	primitive_type prim_type,
-	vertex_layout* layout,
-	gr_buffer_handle buffer_handle,
-	int n_verts)
-{
-	auto* drawManager = getDrawManager();
-
-	// Compute impact projection matrices
-	float radius = material_info->get_impact_radius();
-	vec3d min_v, max_v;
-	min_v.xyz.x = min_v.xyz.y = min_v.xyz.z = -radius;
-	max_v.xyz.x = max_v.xyz.y = max_v.xyz.z = radius;
-
-	matrix4 impact_projection;
-	vm_matrix4_set_orthographic(&impact_projection, &max_v, &min_v);
-
-	matrix impact_orient = material_info->get_impact_orient();
-	vec3d impact_pos = material_info->get_impact_pos();
-
-	matrix4 impact_transform;
-	vm_matrix4_set_inverse_transform(&impact_transform, &impact_orient, &impact_pos);
-
-	// Set shield impact uniform data (GenericData UBO)
-	auto buffer = gr_get_uniform_buffer(uniform_block_type::GenericData, 1,
-	                                     sizeof(graphics::generic_data::shield_impact_data));
-	auto* data = buffer.aligner().addTypedElement<graphics::generic_data::shield_impact_data>();
-	data->hitNormal             = impact_orient.vec.fvec;
-	data->shieldProjMatrix      = impact_projection;
-	data->shieldModelViewMatrix = impact_transform;
-	data->shieldMapIndex        = 0; // Vulkan binds textures individually, always layer 0
-	data->srgb                  = High_dynamic_range ? 1 : 0;
-	data->color                 = material_info->get_color();
-	buffer.submitData();
-	gr_bind_uniform_buffer(uniform_block_type::GenericData, buffer.getBufferOffset(0),
-	                       sizeof(graphics::generic_data::shield_impact_data), buffer.bufferHandle());
-
-	// Set matrix uniforms
-	gr_matrix_set_uniforms();
-
-	// Draw the shield mesh
-	drawManager->renderPrimitives(material_info, prim_type, layout, 0, n_verts, buffer_handle, 0);
-}
-
-void vulkan_render_model(model_material* material_info,
-	indexed_vertex_source* vert_source,
-	vertex_buffer* bufferp,
-	size_t texi)
-{
-	// ModelData UBO (matrices, lights, material params) is already bound by the model
-	// rendering pipeline (model_draw_list::render_buffer) before this function is called.
-	// Do NOT call vulkan_set_default_material_uniforms here - that would set GenericData
-	// uniforms for SDR_TYPE_DEFAULT_MATERIAL, but models use SDR_TYPE_MODEL with ModelData.
-
-	auto* drawManager = getDrawManager();
-	drawManager->renderModel(material_info, vert_source, bufferp, texi);
-}
-
-void vulkan_render_primitives(material* material_info,
-	primitive_type prim_type,
-	vertex_layout* layout,
-	int offset,
-	int n_verts,
-	gr_buffer_handle buffer_handle,
-	size_t buffer_offset)
-{
-	// Set up uniform buffers before rendering (like OpenGL does)
-	gr_matrix_set_uniforms();
-	vulkan_set_default_material_uniforms(material_info);
-
-	auto* drawManager = getDrawManager();
-	drawManager->renderPrimitives(material_info, prim_type, layout, offset, n_verts, buffer_handle, buffer_offset);
-}
-
-void vulkan_render_primitives_particle(particle_material* material_info,
-	primitive_type prim_type,
-	vertex_layout* layout,
-	int offset,
-	int n_verts,
-	gr_buffer_handle buffer_handle)
-{
-	gr_matrix_set_uniforms();
-	vulkan_set_default_material_uniforms(material_info);
-
-	auto* drawManager = getDrawManager();
-	drawManager->renderPrimitivesParticle(material_info, prim_type, layout, offset, n_verts, buffer_handle);
-}
-
-void vulkan_render_primitives_distortion(distortion_material* material_info,
-	primitive_type prim_type,
-	vertex_layout* layout,
-	int offset,
-	int n_verts,
-	gr_buffer_handle buffer_handle)
-{
-	gr_matrix_set_uniforms();
-	vulkan_set_default_material_uniforms(material_info);
-
-	auto* drawManager = getDrawManager();
-	drawManager->renderPrimitivesDistortion(material_info, prim_type, layout, n_verts, buffer_handle);
-}
-void vulkan_render_movie(movie_material* material_info,
-	primitive_type prim_type,
-	vertex_layout* layout,
-	int n_verts,
-	gr_buffer_handle buffer,
-	size_t buffer_offset)
-{
-	gr_matrix_set_uniforms();
-	vulkan_set_default_material_uniforms(material_info);
-
-	auto* drawManager = getDrawManager();
-	drawManager->renderMovie(material_info, prim_type, layout, n_verts, buffer);
-}
-
-void vulkan_render_nanovg(nanovg_material* material_info,
-	primitive_type prim_type,
-	vertex_layout* layout,
-	int offset,
-	int n_verts,
-	gr_buffer_handle buffer_handle)
-{
-	// NanoVG shader reads from NanoVGData UBO (set 2 binding 2), not GenericData.
-	// The NanoVGRenderer binds NanoVGData before calling gr_render_nanovg().
-
-	// NanoVG uses its own software scissor (scissorMat/scissorExt in the fragment shader).
-	// Disable hardware scissor to match nanovg_gl.h which calls glDisable(GL_SCISSOR_TEST).
-	// Without this, NanoVG draws get clipped by gr_set_clip's hardware scissor.
-	auto* stateTracker = getStateTracker();
-	bool savedScissorEnabled = stateTracker->isScissorEnabled();
-	stateTracker->setScissorEnabled(false);
-
-	auto* drawManager = getDrawManager();
-	drawManager->renderNanoVG(material_info, prim_type, layout, offset, n_verts, buffer_handle);
-
-	// Restore scissor state
-	stateTracker->setScissorEnabled(savedScissorEnabled);
-}
-
-void vulkan_render_primitives_batched(batched_bitmap_material* material_info,
-	primitive_type prim_type,
-	vertex_layout* layout,
-	int offset,
-	int n_verts,
-	gr_buffer_handle buffer_handle)
-{
-	gr_matrix_set_uniforms();
-	vulkan_set_default_material_uniforms(material_info);
-
-	auto* drawManager = getDrawManager();
-	drawManager->renderPrimitivesBatched(material_info, prim_type, layout, offset, n_verts, buffer_handle);
-}
-
-void vulkan_render_rocket_primitives(interface_material* material_info,
-	primitive_type prim_type,
-	vertex_layout* layout,
-	int n_indices,
-	gr_buffer_handle vertex_buffer,
-	gr_buffer_handle index_buffer)
-{
-	gr_matrix_set_uniforms();
-	vulkan_set_default_material_uniforms(material_info);
-
-	auto* drawManager = getDrawManager();
-	drawManager->renderRocketPrimitives(material_info, prim_type, layout, n_indices, vertex_buffer, index_buffer);
+	renderer_instance->flip();
 }
 
 bool vulkan_is_capable(gr_capability capability)
@@ -758,59 +150,17 @@ void vulkan_pop_debug_group()
 	stateTracker->getCommandBuffer().endDebugUtilsLabelEXT();
 }
 
-int stub_create_query_object() { return -1; }
-
-void stub_query_value(int /*obj*/, QueryType /*type*/) {}
-
-bool stub_query_value_available(int /*obj*/) { return false; }
-
-std::uint64_t stub_get_query_value(int /*obj*/) { return 0; }
-
-void stub_delete_query_object(int /*obj*/) {}
-
-SCP_vector<const char*> stub_openxr_get_extensions() { return {}; }
-
-bool stub_openxr_test_capabilities() { return false; }
-
-bool stub_openxr_create_session() { return false; }
-
-int64_t stub_openxr_get_swapchain_format(const SCP_vector<int64_t>& /*allowed*/) { return 0; }
-
-bool stub_openxr_acquire_swapchain_buffers() { return false; }
-
-bool stub_openxr_flip() { return false; }
-
-void* vulkan_map_buffer(gr_buffer_handle handle)
+void vulkan_imgui_new_frame()
 {
-	auto* bufferManager = getBufferManager();
-	return bufferManager->mapBuffer(handle);
+	ImGui_ImplVulkan_NewFrame();
 }
 
-void vulkan_flush_mapped_buffer(gr_buffer_handle handle, size_t offset, size_t size)
+void vulkan_imgui_render_draw_data()
 {
-	auto* bufferManager = getBufferManager();
-	bufferManager->flushMappedBuffer(handle, offset, size);
-}
-
-void stub_post_process_restore_zbuffer() {}
-
-void stub_calculate_irrmap() {}
-
-void stub_dump_envmap(const char* /*filename*/) {}
-
-void stub_override_fog(bool /*set_override*/) {}
-
-std::unique_ptr<os::Viewport> stub_create_viewport(const os::ViewPortProperties& /*props*/)
-{
-	return std::unique_ptr<os::Viewport>();
-}
-
-void stub_use_viewport(os::Viewport* /*view*/) {}
-
-void vulkan_bind_uniform_buffer(uniform_block_type blockType, size_t offset, size_t size, gr_buffer_handle buffer)
-{
-	auto* bufferManager = getBufferManager();
-	bufferManager->bindUniformBuffer(blockType, offset, size, buffer);
+	auto* renderer = getRendererInstance();
+	if (renderer) {
+		ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), renderer->getVkCurrentCommandBuffer());
+	}
 }
 
 gr_sync vulkan_sync_fence()
@@ -842,42 +192,61 @@ void vulkan_sync_delete(gr_sync sync)
 	}
 }
 
-void vulkan_set_viewport(int x, int y, int width, int height)
-{
-	auto* stateTracker = graphics::vulkan::getStateTracker();
-	if (gr_screen.rendering_to_texture == -1) {
-		// Screen rendering: use negative viewport height for OpenGL-compatible Y-up NDC
-		// (VK_KHR_maintenance1, core since Vulkan 1.1)
-		stateTracker->setViewport(
-			static_cast<float>(x),
-			static_cast<float>(gr_screen.max_h - y),
-			static_cast<float>(width),
-			static_cast<float>(-height));
-	} else {
-		// RTT: standard positive viewport (RTT projection matrix handles Y-flip)
-		stateTracker->setViewport(
-			static_cast<float>(x), static_cast<float>(y),
-			static_cast<float>(width), static_cast<float>(height));
-	}
-}
+// ========== Stub functions (not yet implemented) ==========
 
-void vulkan_flip()
+void stub_print_screen(const char* /*filename*/) {}
+SCP_string stub_blob_screen() { return ""; }
+int stub_save_screen() { return 1; }
+void stub_restore_screen(int /*id*/) {}
+void stub_free_screen(int /*id*/) {}
+void stub_get_region(int /*front*/, int /*w*/, int /*h*/, ubyte* /*data*/) {}
+void stub_bm_page_in_start() {}
+void stub_update_transform_buffer(void* /*data*/, size_t /*size*/) {}
+void stub_post_process_set_effect(const char* /*name*/, int /*x*/, const vec3d* /*rgb*/) {}
+void stub_post_process_set_defaults() {}
+void stub_post_process_save_zbuffer() {}
+void stub_post_process_begin() {}
+void stub_post_process_end() {}
+void stub_post_process_restore_zbuffer() {}
+void stub_copy_effect_texture() {}
+void stub_deferred_lighting_begin(bool /*clearNonColorBufs*/) {}
+void stub_deferred_lighting_msaa() {}
+void stub_deferred_lighting_end() {}
+void stub_deferred_lighting_finish() {}
+void stub_calculate_irrmap() {}
+void stub_dump_envmap(const char* /*filename*/) {}
+void stub_override_fog(bool /*set_override*/) {}
+void stub_shadow_map_start(matrix4* /*shadow_view_matrix*/, const matrix* /*light_matrix*/, vec3d* /*eye_pos*/) {}
+void stub_shadow_map_end() {}
+void stub_start_decal_pass() {}
+void stub_stop_decal_pass() {}
+void stub_render_decals(decal_material* /*material_info*/,
+                       primitive_type /*prim_type*/,
+                       vertex_layout* /*layout*/,
+                       int /*num_elements*/,
+                       const indexed_vertex_source& /*buffers*/,
+                       const gr_buffer_handle& /*instance_buffer*/,
+                       int /*num_instances*/) {}
+int stub_create_query_object() { return -1; }
+void stub_query_value(int /*obj*/, QueryType /*type*/) {}
+bool stub_query_value_available(int /*obj*/) { return false; }
+std::uint64_t stub_get_query_value(int /*obj*/) { return 0; }
+void stub_delete_query_object(int /*obj*/) {}
+std::unique_ptr<os::Viewport> stub_create_viewport(const os::ViewPortProperties& /*props*/)
 {
-	renderer_instance->flip();
+	return std::unique_ptr<os::Viewport>();
 }
+void stub_use_viewport(os::Viewport* /*view*/) {}
+SCP_vector<const char*> stub_openxr_get_extensions() { return {}; }
+bool stub_openxr_test_capabilities() { return false; }
+bool stub_openxr_create_session() { return false; }
+int64_t stub_openxr_get_swapchain_format(const SCP_vector<int64_t>& /*allowed*/) { return 0; }
+bool stub_openxr_acquire_swapchain_buffers() { return false; }
+bool stub_openxr_flip() { return false; }
 
-void vulkan_imgui_new_frame()
-{
-	ImGui_ImplVulkan_NewFrame();
-}
-
-void vulkan_imgui_render_draw_data()
-{
-	auto* renderer = getRendererInstance();
-	if (renderer) {
-		ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), renderer->getVkCurrentCommandBuffer());
-	}
-}
+// ========== Function pointer table ==========
+// Implementations are defined in their respective files:
+// VulkanDraw.cpp, VulkanBuffer.cpp, VulkanTexture.cpp, VulkanShader.cpp, VulkanState.cpp
 
 void init_function_pointers()
 {

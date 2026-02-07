@@ -4,13 +4,18 @@
 #include "VulkanPipeline.h"
 #include "VulkanShader.h"
 #include "VulkanTexture.h"
+#include "VulkanRenderer.h"
 #include "VulkanDescriptorManager.h"
 #include "VulkanVertexFormat.h"
 #include "bmpman/bmpman.h"
 #include "ddsutils/ddsutils.h"
 #include "graphics/grinternal.h"
 #include "graphics/material.h"
+#include "graphics/matrix.h"
 #include "graphics/util/primitives.h"
+#include "graphics/util/uniform_structs.h"
+#include "graphics/util/UniformBuffer.h"
+#include "graphics/shaders/compiled/default-material_structs.vert.h"
 
 namespace graphics {
 namespace vulkan {
@@ -1380,6 +1385,428 @@ void VulkanDrawManager::drawSphere(material* material_def)
 	stateTracker->bindIndexBuffer(ibo, 0, vk::IndexType::eUint16);
 
 	drawIndexed(PRIM_TYPE_TRIS, static_cast<int>(m_sphereIndexCount), 0, 0);
+}
+
+} // namespace vulkan
+} // namespace graphics
+
+// GL_alpha_threshold is defined in gropengl.cpp
+extern float GL_alpha_threshold;
+
+// PostProcessing_override is defined in globalincs/systemvars.cpp
+extern bool PostProcessing_override;
+
+namespace graphics {
+namespace vulkan {
+
+// ========== gr_screen function pointer implementations ==========
+// These free functions are assigned to gr_screen.gf_* in gr_vulkan.cpp.
+
+namespace {
+
+// Helper to set up GenericData uniform for default material shader
+// Similar to opengl_shader_set_default_material() in gropenglshader.cpp
+void vulkan_set_default_material_uniforms(material* material_info)
+{
+	if (!material_info) {
+		return;
+	}
+
+	// Get uniform buffer for GenericData
+	auto buffer = gr_get_uniform_buffer(uniform_block_type::GenericData, 1, sizeof(genericData_default_material_vert));
+	auto* data = buffer.aligner().addTypedElement<genericData_default_material_vert>();
+
+	// Get base map from material
+	int base_map = material_info->get_texture_map(TM_BASE_TYPE);
+	bool textured = (base_map >= 0);
+	bool alpha = (material_info->get_texture_type() == TCACHE_TYPE_AABITMAP);
+
+	// Texturing flags
+	if (textured) {
+		data->noTexturing = 0;
+		data->baseMapIndex = 0;  // Array index in texture array
+	} else {
+		data->noTexturing = 1;
+		data->baseMapIndex = 0;
+	}
+
+	// Alpha texture flag
+	data->alphaTexture = alpha ? 1 : 0;
+
+	// HDR / intensity settings
+	if (High_dynamic_range) {
+		data->srgb = 1;
+		data->intensity = material_info->get_color_scale();
+	} else {
+		data->srgb = 0;
+		data->intensity = 1.0f;
+	}
+
+	// Alpha threshold
+	data->alphaThreshold = GL_alpha_threshold;
+
+	// Color from material
+	vec4 clr = material_info->get_color();
+	data->color.a1d[0] = clr.xyzw.x;
+	data->color.a1d[1] = clr.xyzw.y;
+	data->color.a1d[2] = clr.xyzw.z;
+	data->color.a1d[3] = clr.xyzw.w;
+
+	static int debugCount = 0;
+	if (debugCount < 5) {
+		mprintf(("Vulkan GenericData: noTex=%d, alphaTex=%d, srgb=%d, intensity=%.2f, color=(%.2f,%.2f,%.2f,%.2f), alphaThresh=%.2f\n",
+			data->noTexturing, data->alphaTexture, data->srgb, data->intensity,
+			clr.xyzw.x, clr.xyzw.y, clr.xyzw.z, clr.xyzw.w, data->alphaThreshold));
+		debugCount++;
+	}
+
+	// Clip plane
+	const auto& clip_plane = material_info->get_clip_plane();
+	if (clip_plane.enabled) {
+		data->clipEnabled = 1;
+
+		data->clipEquation.a1d[0] = clip_plane.normal.xyz.x;
+		data->clipEquation.a1d[1] = clip_plane.normal.xyz.y;
+		data->clipEquation.a1d[2] = clip_plane.normal.xyz.z;
+		// Calculate 'd' value: d = -dot(normal, position)
+		data->clipEquation.a1d[3] = -(clip_plane.normal.xyz.x * clip_plane.position.xyz.x +
+		                              clip_plane.normal.xyz.y * clip_plane.position.xyz.y +
+		                              clip_plane.normal.xyz.z * clip_plane.position.xyz.z);
+
+		// Model matrix (identity for now, material doesn't provide one)
+		vm_matrix4_set_identity(&data->modelMatrix);
+	} else {
+		data->clipEnabled = 0;
+		vm_matrix4_set_identity(&data->modelMatrix);
+		data->clipEquation.a1d[0] = 0.0f;
+		data->clipEquation.a1d[1] = 0.0f;
+		data->clipEquation.a1d[2] = 0.0f;
+		data->clipEquation.a1d[3] = 0.0f;
+	}
+
+	buffer.submitData();
+	gr_bind_uniform_buffer(uniform_block_type::GenericData, buffer.getBufferOffset(0),
+	                       sizeof(genericData_default_material_vert), buffer.bufferHandle());
+}
+
+} // anonymous namespace
+
+int vulkan_zbuffer_get()
+{
+	auto* drawManager = getDrawManager();
+	return drawManager->zbufferGet();
+}
+
+int vulkan_zbuffer_set(int mode)
+{
+	auto* drawManager = getDrawManager();
+	return drawManager->zbufferSet(mode);
+}
+
+void vulkan_zbuffer_clear(int mode)
+{
+	auto* drawManager = getDrawManager();
+	drawManager->zbufferClear(mode);
+}
+
+int vulkan_stencil_set(int mode)
+{
+	auto* drawManager = getDrawManager();
+	return drawManager->stencilSet(mode);
+}
+
+void vulkan_stencil_clear()
+{
+	auto* drawManager = getDrawManager();
+	drawManager->stencilClear();
+}
+
+void vulkan_set_fill_mode(int mode)
+{
+	auto* drawManager = getDrawManager();
+	// GR_FILL_MODE_WIRE = 1, GR_FILL_MODE_SOLID = 2
+	drawManager->setFillMode(mode);
+}
+
+void vulkan_clear()
+{
+	auto* drawManager = getDrawManager();
+	drawManager->clear();
+}
+
+void vulkan_reset_clip()
+{
+	auto* drawManager = getDrawManager();
+	drawManager->resetClip();
+}
+
+void vulkan_set_clear_color(int r, int g, int b)
+{
+	auto* drawManager = getDrawManager();
+	drawManager->setClearColor(r, g, b);
+}
+
+void vulkan_set_clip(int x, int y, int w, int h, int resize_mode)
+{
+	auto* drawManager = getDrawManager();
+	drawManager->setClip(x, y, w, h, resize_mode);
+}
+
+int vulkan_set_cull(int cull)
+{
+	auto* drawManager = getDrawManager();
+	return drawManager->setCull(cull);
+}
+
+int vulkan_set_color_buffer(int mode)
+{
+	auto* drawManager = getDrawManager();
+	return drawManager->setColorBuffer(mode);
+}
+
+void vulkan_set_texture_addressing(int mode)
+{
+	auto* drawManager = getDrawManager();
+	drawManager->setTextureAddressing(mode);
+}
+
+void vulkan_set_line_width(float width)
+{
+	auto* stateTracker = getStateTracker();
+	if (width <= 1.0f) {
+		stateTracker->setLineWidth(width);
+	}
+	gr_screen.line_width = width;
+}
+
+void vulkan_clear_states()
+{
+	auto* drawManager = getDrawManager();
+	drawManager->clearStates();
+}
+
+void vulkan_scene_texture_begin()
+{
+	// Minimal implementation matching OpenGL's gr_opengl_scene_texture_begin():
+	// 1. Clear color + depth for the 3D scene
+	// 2. Set High_dynamic_range flag if post-processing is enabled
+	//
+	// Full implementation would switch to an offscreen FBO, but for now
+	// we render directly to the swap chain.
+
+	auto* stateTracker = getStateTracker();
+
+	if (stateTracker->hasCommandBuffer()) {
+		// Clear color buffer to black (matching OpenGL behavior)
+		auto cmdBuffer = stateTracker->getCommandBuffer();
+
+		vk::ClearAttachment clearAttachments[2];
+		clearAttachments[0].aspectMask = vk::ImageAspectFlagBits::eColor;
+		clearAttachments[0].colorAttachment = 0;
+		clearAttachments[0].clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+
+		clearAttachments[1].aspectMask = vk::ImageAspectFlagBits::eDepth;
+		clearAttachments[1].clearValue.depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+
+		vk::ClearRect clearRect;
+		clearRect.rect.offset = vk::Offset2D(0, 0);
+		clearRect.rect.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.max_w),
+		                                      static_cast<uint32_t>(gr_screen.max_h));
+		clearRect.baseArrayLayer = 0;
+		clearRect.layerCount = 1;
+
+		cmdBuffer.clearAttachments(2, clearAttachments, 1, &clearRect);
+	}
+
+	// Enable HDR for 3D scene rendering (affects intensity/srgb in shaders)
+	if (Gr_post_processing_enabled && !PostProcessing_override) {
+		High_dynamic_range = true;
+	}
+}
+
+void vulkan_scene_texture_end()
+{
+	// Minimal implementation matching OpenGL's gr_opengl_scene_texture_end():
+	// Reset HDR flag after 3D scene rendering
+	//
+	// Full implementation would composite the scene texture to screen with
+	// post-processing (bloom, FXAA, tonemapping). For now we just reset the flag.
+
+	High_dynamic_range = false;
+}
+
+void vulkan_draw_sphere(material* material_def, float /*rad*/)
+{
+	auto* drawManager = getDrawManager();
+	drawManager->drawSphere(material_def);
+}
+
+void vulkan_render_shield_impact(shield_material* material_info,
+	primitive_type prim_type,
+	vertex_layout* layout,
+	gr_buffer_handle buffer_handle,
+	int n_verts)
+{
+	auto* drawManager = getDrawManager();
+
+	// Compute impact projection matrices
+	float radius = material_info->get_impact_radius();
+	vec3d min_v, max_v;
+	min_v.xyz.x = min_v.xyz.y = min_v.xyz.z = -radius;
+	max_v.xyz.x = max_v.xyz.y = max_v.xyz.z = radius;
+
+	matrix4 impact_projection;
+	vm_matrix4_set_orthographic(&impact_projection, &max_v, &min_v);
+
+	matrix impact_orient = material_info->get_impact_orient();
+	vec3d impact_pos = material_info->get_impact_pos();
+
+	matrix4 impact_transform;
+	vm_matrix4_set_inverse_transform(&impact_transform, &impact_orient, &impact_pos);
+
+	// Set shield impact uniform data (GenericData UBO)
+	auto buffer = gr_get_uniform_buffer(uniform_block_type::GenericData, 1,
+	                                     sizeof(graphics::generic_data::shield_impact_data));
+	auto* data = buffer.aligner().addTypedElement<graphics::generic_data::shield_impact_data>();
+	data->hitNormal             = impact_orient.vec.fvec;
+	data->shieldProjMatrix      = impact_projection;
+	data->shieldModelViewMatrix = impact_transform;
+	data->shieldMapIndex        = 0; // Vulkan binds textures individually, always layer 0
+	data->srgb                  = High_dynamic_range ? 1 : 0;
+	data->color                 = material_info->get_color();
+	buffer.submitData();
+	gr_bind_uniform_buffer(uniform_block_type::GenericData, buffer.getBufferOffset(0),
+	                       sizeof(graphics::generic_data::shield_impact_data), buffer.bufferHandle());
+
+	// Set matrix uniforms
+	gr_matrix_set_uniforms();
+
+	// Draw the shield mesh
+	drawManager->renderPrimitives(material_info, prim_type, layout, 0, n_verts, buffer_handle, 0);
+}
+
+void vulkan_render_model(model_material* material_info,
+	indexed_vertex_source* vert_source,
+	vertex_buffer* bufferp,
+	size_t texi)
+{
+	// ModelData UBO (matrices, lights, material params) is already bound by the model
+	// rendering pipeline (model_draw_list::render_buffer) before this function is called.
+	// Do NOT call vulkan_set_default_material_uniforms here - that would set GenericData
+	// uniforms for SDR_TYPE_DEFAULT_MATERIAL, but models use SDR_TYPE_MODEL with ModelData.
+
+	auto* drawManager = getDrawManager();
+	drawManager->renderModel(material_info, vert_source, bufferp, texi);
+}
+
+void vulkan_render_primitives(material* material_info,
+	primitive_type prim_type,
+	vertex_layout* layout,
+	int offset,
+	int n_verts,
+	gr_buffer_handle buffer_handle,
+	size_t buffer_offset)
+{
+	// Set up uniform buffers before rendering (like OpenGL does)
+	gr_matrix_set_uniforms();
+	vulkan_set_default_material_uniforms(material_info);
+
+	auto* drawManager = getDrawManager();
+	drawManager->renderPrimitives(material_info, prim_type, layout, offset, n_verts, buffer_handle, buffer_offset);
+}
+
+void vulkan_render_primitives_particle(particle_material* material_info,
+	primitive_type prim_type,
+	vertex_layout* layout,
+	int offset,
+	int n_verts,
+	gr_buffer_handle buffer_handle)
+{
+	gr_matrix_set_uniforms();
+	vulkan_set_default_material_uniforms(material_info);
+
+	auto* drawManager = getDrawManager();
+	drawManager->renderPrimitivesParticle(material_info, prim_type, layout, offset, n_verts, buffer_handle);
+}
+
+void vulkan_render_primitives_distortion(distortion_material* material_info,
+	primitive_type prim_type,
+	vertex_layout* layout,
+	int offset,
+	int n_verts,
+	gr_buffer_handle buffer_handle)
+{
+	gr_matrix_set_uniforms();
+	vulkan_set_default_material_uniforms(material_info);
+
+	auto* drawManager = getDrawManager();
+	drawManager->renderPrimitivesDistortion(material_info, prim_type, layout, n_verts, buffer_handle);
+}
+
+void vulkan_render_movie(movie_material* material_info,
+	primitive_type prim_type,
+	vertex_layout* layout,
+	int n_verts,
+	gr_buffer_handle buffer,
+	size_t buffer_offset)
+{
+	gr_matrix_set_uniforms();
+	vulkan_set_default_material_uniforms(material_info);
+
+	auto* drawManager = getDrawManager();
+	drawManager->renderMovie(material_info, prim_type, layout, n_verts, buffer);
+}
+
+void vulkan_render_nanovg(nanovg_material* material_info,
+	primitive_type prim_type,
+	vertex_layout* layout,
+	int offset,
+	int n_verts,
+	gr_buffer_handle buffer_handle)
+{
+	// NanoVG shader reads from NanoVGData UBO (set 2 binding 2), not GenericData.
+	// The NanoVGRenderer binds NanoVGData before calling gr_render_nanovg().
+
+	// NanoVG uses its own software scissor (scissorMat/scissorExt in the fragment shader).
+	// Disable hardware scissor to match nanovg_gl.h which calls glDisable(GL_SCISSOR_TEST).
+	// Without this, NanoVG draws get clipped by gr_set_clip's hardware scissor.
+	auto* stateTracker = getStateTracker();
+	bool savedScissorEnabled = stateTracker->isScissorEnabled();
+	stateTracker->setScissorEnabled(false);
+
+	auto* drawManager = getDrawManager();
+	drawManager->renderNanoVG(material_info, prim_type, layout, offset, n_verts, buffer_handle);
+
+	// Restore scissor state
+	stateTracker->setScissorEnabled(savedScissorEnabled);
+}
+
+void vulkan_render_primitives_batched(batched_bitmap_material* material_info,
+	primitive_type prim_type,
+	vertex_layout* layout,
+	int offset,
+	int n_verts,
+	gr_buffer_handle buffer_handle)
+{
+	gr_matrix_set_uniforms();
+	vulkan_set_default_material_uniforms(material_info);
+
+	auto* drawManager = getDrawManager();
+	drawManager->renderPrimitivesBatched(material_info, prim_type, layout, offset, n_verts, buffer_handle);
+}
+
+void vulkan_render_rocket_primitives(interface_material* material_info,
+	primitive_type prim_type,
+	vertex_layout* layout,
+	int n_indices,
+	gr_buffer_handle vertex_buffer,
+	gr_buffer_handle index_buffer)
+{
+	gr_matrix_set_uniforms();
+	vulkan_set_default_material_uniforms(material_info);
+
+	auto* drawManager = getDrawManager();
+	drawManager->renderRocketPrimitives(material_info, prim_type, layout, n_indices, vertex_buffer, index_buffer);
 }
 
 } // namespace vulkan

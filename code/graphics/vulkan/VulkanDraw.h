@@ -338,5 +338,60 @@ private:
 VulkanDrawManager* getDrawManager();
 void setDrawManager(VulkanDrawManager* manager);
 
+// ========== gr_screen function pointer implementations ==========
+// These free functions implement gr_screen.gf_* function pointers.
+// They are assigned in gr_vulkan.cpp::init_function_pointers().
+
+// Clear operations
+void vulkan_clear();
+void vulkan_set_clear_color(int r, int g, int b);
+
+// Clipping
+void vulkan_set_clip(int x, int y, int w, int h, int resize_mode);
+void vulkan_reset_clip();
+
+// Z-buffer
+int vulkan_zbuffer_get();
+int vulkan_zbuffer_set(int mode);
+void vulkan_zbuffer_clear(int mode);
+
+// Stencil
+int vulkan_stencil_set(int mode);
+void vulkan_stencil_clear();
+
+// Render state
+int vulkan_set_cull(int cull);
+int vulkan_set_color_buffer(int mode);
+void vulkan_set_fill_mode(int mode);
+void vulkan_set_texture_addressing(int mode);
+void vulkan_set_line_width(float width);
+void vulkan_clear_states();
+
+// Scene texture
+void vulkan_scene_texture_begin();
+void vulkan_scene_texture_end();
+
+// 3D primitives
+void vulkan_draw_sphere(material* material_def, float rad);
+void vulkan_render_shield_impact(shield_material* material_info, primitive_type prim_type,
+	vertex_layout* layout, gr_buffer_handle buffer_handle, int n_verts);
+void vulkan_render_model(model_material* material_info, indexed_vertex_source* vert_source,
+	vertex_buffer* bufferp, size_t texi);
+void vulkan_render_primitives(material* material_info, primitive_type prim_type,
+	vertex_layout* layout, int offset, int n_verts, gr_buffer_handle buffer_handle, size_t buffer_offset);
+void vulkan_render_primitives_particle(particle_material* material_info,
+	primitive_type prim_type, vertex_layout* layout, int offset, int n_verts, gr_buffer_handle buffer_handle);
+void vulkan_render_primitives_distortion(distortion_material* material_info,
+	primitive_type prim_type, vertex_layout* layout, int offset, int n_verts, gr_buffer_handle buffer_handle);
+void vulkan_render_primitives_batched(batched_bitmap_material* material_info,
+	primitive_type prim_type, vertex_layout* layout, int offset, int n_verts, gr_buffer_handle buffer_handle);
+void vulkan_render_movie(movie_material* material_info, primitive_type prim_type,
+	vertex_layout* layout, int n_verts, gr_buffer_handle buffer, size_t buffer_offset);
+void vulkan_render_nanovg(nanovg_material* material_info, primitive_type prim_type,
+	vertex_layout* layout, int offset, int n_verts, gr_buffer_handle buffer_handle);
+void vulkan_render_rocket_primitives(interface_material* material_info,
+	primitive_type prim_type, vertex_layout* layout, int n_indices,
+	gr_buffer_handle vertex_buffer, gr_buffer_handle index_buffer);
+
 } // namespace vulkan
 } // namespace graphics

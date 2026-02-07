@@ -670,5 +670,49 @@ void VulkanBufferManager::queueDeferredDestruction(vk::Buffer buffer, VulkanAllo
 	deletionQueue->queueBuffer(buffer, allocation);
 }
 
+// ========== gr_screen function pointer implementations ==========
+
+gr_buffer_handle vulkan_create_buffer(BufferType type, BufferUsageHint usage)
+{
+	auto* bufferManager = getBufferManager();
+	return bufferManager->createBuffer(type, usage);
+}
+
+void vulkan_delete_buffer(gr_buffer_handle handle)
+{
+	auto* bufferManager = getBufferManager();
+	bufferManager->deleteBuffer(handle);
+}
+
+void vulkan_update_buffer_data(gr_buffer_handle handle, size_t size, const void* data)
+{
+	auto* bufferManager = getBufferManager();
+	bufferManager->updateBufferData(handle, size, data);
+}
+
+void vulkan_update_buffer_data_offset(gr_buffer_handle handle, size_t offset, size_t size, const void* data)
+{
+	auto* bufferManager = getBufferManager();
+	bufferManager->updateBufferDataOffset(handle, offset, size, data);
+}
+
+void* vulkan_map_buffer(gr_buffer_handle handle)
+{
+	auto* bufferManager = getBufferManager();
+	return bufferManager->mapBuffer(handle);
+}
+
+void vulkan_flush_mapped_buffer(gr_buffer_handle handle, size_t offset, size_t size)
+{
+	auto* bufferManager = getBufferManager();
+	bufferManager->flushMappedBuffer(handle, offset, size);
+}
+
+void vulkan_bind_uniform_buffer(uniform_block_type blockType, size_t offset, size_t size, gr_buffer_handle buffer)
+{
+	auto* bufferManager = getBufferManager();
+	bufferManager->bindUniformBuffer(blockType, offset, size, buffer);
+}
+
 } // namespace vulkan
 } // namespace graphics

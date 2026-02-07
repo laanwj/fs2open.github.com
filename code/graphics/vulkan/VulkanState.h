@@ -239,5 +239,11 @@ private:
 VulkanStateTracker* getStateTracker();
 void setStateTracker(VulkanStateTracker* tracker);
 
+// ========== gr_screen function pointer implementations ==========
+
+void vulkan_zbias(int bias);
+int vulkan_alpha_mask_set(int mode, float alpha);
+void vulkan_set_viewport(int x, int y, int width, int height);
+
 } // namespace vulkan
 } // namespace graphics

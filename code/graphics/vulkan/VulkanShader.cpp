@@ -17,6 +17,20 @@ void setShaderManager(VulkanShaderManager* manager)
 	g_shaderManager = manager;
 }
 
+// ========== gr_screen function pointer implementations ==========
+
+int vulkan_maybe_create_shader(shader_type shader_t, unsigned int flags)
+{
+	auto* shaderManager = getShaderManager();
+	return shaderManager->maybeCreateShader(shader_t, flags);
+}
+
+void vulkan_recompile_all_shaders(const std::function<void(size_t, size_t)>& progressCallback)
+{
+	auto* shaderManager = getShaderManager();
+	shaderManager->recompileAllShaders(progressCallback);
+}
+
 // Shader type definitions - maps shader_type to SPIR-V filenames
 // Based on GL_shader_types in gropenglshader.cpp
 // Filenames match the compiled SPIR-V files: {basename}.{stage}.spv

@@ -274,5 +274,17 @@ private:
 VulkanTextureManager* getTextureManager();
 void setTextureManager(VulkanTextureManager* manager);
 
+// ========== gr_screen function pointer implementations ==========
+
+int vulkan_preload(int bitmap_num, int is_aabitmap);
+void vulkan_bm_create(bitmap_slot* slot);
+void vulkan_bm_free_data(bitmap_slot* slot, bool release);
+void vulkan_bm_init(bitmap_slot* slot);
+bool vulkan_bm_data(int handle, bitmap* bm);
+int vulkan_bm_make_render_target(int handle, int* width, int* height, int* bpp, int* mm_lvl, int flags);
+int vulkan_bm_set_render_target(int handle, int face);
+void vulkan_update_texture(int bitmap_handle, int bpp, const ubyte* data, int width, int height);
+void vulkan_get_bitmap_from_texture(void* data_out, int bitmap_num);
+
 } // namespace vulkan
 } // namespace graphics

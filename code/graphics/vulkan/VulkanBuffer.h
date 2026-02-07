@@ -276,5 +276,15 @@ private:
 VulkanBufferManager* getBufferManager();
 void setBufferManager(VulkanBufferManager* manager);
 
+// ========== gr_screen function pointer implementations ==========
+
+gr_buffer_handle vulkan_create_buffer(BufferType type, BufferUsageHint usage);
+void vulkan_delete_buffer(gr_buffer_handle handle);
+void vulkan_update_buffer_data(gr_buffer_handle handle, size_t size, const void* data);
+void vulkan_update_buffer_data_offset(gr_buffer_handle handle, size_t offset, size_t size, const void* data);
+void* vulkan_map_buffer(gr_buffer_handle handle);
+void vulkan_flush_mapped_buffer(gr_buffer_handle handle, size_t offset, size_t size);
+void vulkan_bind_uniform_buffer(uniform_block_type blockType, size_t offset, size_t size, gr_buffer_handle buffer);
+
 } // namespace vulkan
 } // namespace graphics
