@@ -10,6 +10,7 @@
 #include "ddsutils/ddsutils.h"
 #include "graphics/grinternal.h"
 #include "graphics/material.h"
+#include "graphics/util/primitives.h"
 
 namespace graphics {
 namespace vulkan {
@@ -60,6 +61,8 @@ bool VulkanDrawManager::init(vk::Device device)
 
 	m_device = device;
 
+	initSphereBuffers();
+
 	m_initialized = true;
 	mprintf(("VulkanDrawManager: Initialized\n"));
 	return true;
@@ -70,6 +73,8 @@ void VulkanDrawManager::shutdown()
 	if (!m_initialized) {
 		return;
 	}
+
+	shutdownSphereBuffers();
 
 	m_initialized = false;
 	mprintf(("VulkanDrawManager: Shutdown complete\n"));
@@ -1305,6 +1310,74 @@ void VulkanDrawManager::drawIndexed(primitive_type prim_type, int index_count, i
 	                      static_cast<uint32_t>(first_index),
 	                      vertex_offset,
 	                      0);
+}
+
+void VulkanDrawManager::initSphereBuffers()
+{
+	auto* bufferManager = getBufferManager();
+
+	auto mesh = graphics::util::generate_sphere_mesh(16, 16);
+
+	m_sphereIndexCount = mesh.index_count;
+
+	m_sphereVBO = bufferManager->createBuffer(BufferType::Vertex, BufferUsageHint::Static);
+	bufferManager->updateBufferData(m_sphereVBO, mesh.vertices.size() * sizeof(float), mesh.vertices.data());
+
+	m_sphereIBO = bufferManager->createBuffer(BufferType::Index, BufferUsageHint::Static);
+	bufferManager->updateBufferData(m_sphereIBO, mesh.indices.size() * sizeof(ushort), mesh.indices.data());
+
+	m_sphereVertexLayout.add_vertex_component(vertex_format_data::POSITION3, sizeof(float) * 3, 0);
+
+	mprintf(("VulkanDrawManager: Sphere mesh created (%u vertices, %u indices)\n",
+		mesh.vertex_count, mesh.index_count));
+}
+
+void VulkanDrawManager::shutdownSphereBuffers()
+{
+	auto* bufferManager = getBufferManager();
+
+	if (m_sphereVBO.isValid()) {
+		bufferManager->deleteBuffer(m_sphereVBO);
+		m_sphereVBO = gr_buffer_handle::invalid();
+	}
+	if (m_sphereIBO.isValid()) {
+		bufferManager->deleteBuffer(m_sphereIBO);
+		m_sphereIBO = gr_buffer_handle::invalid();
+	}
+}
+
+void VulkanDrawManager::drawSphere(material* material_def)
+{
+	if (!material_def || m_sphereIndexCount == 0) {
+		return;
+	}
+
+	auto* stateTracker = getStateTracker();
+	if (!stateTracker->hasCommandBuffer()) {
+		return;
+	}
+
+	auto* bufferManager = getBufferManager();
+
+	if (!applyMaterial(material_def, PRIM_TYPE_TRIS, &m_sphereVertexLayout)) {
+		return;
+	}
+
+	// Bind sphere vertex buffer
+	vk::Buffer vbo = bufferManager->getVkBuffer(m_sphereVBO);
+	if (!vbo) {
+		return;
+	}
+	stateTracker->bindVertexBuffer(0, vbo, 0);
+
+	// Bind sphere index buffer with uint16 indices (matching the ushort mesh data)
+	vk::Buffer ibo = bufferManager->getVkBuffer(m_sphereIBO);
+	if (!ibo) {
+		return;
+	}
+	stateTracker->bindIndexBuffer(ibo, 0, vk::IndexType::eUint16);
+
+	drawIndexed(PRIM_TYPE_TRIS, static_cast<int>(m_sphereIndexCount), 0, 0);
 }
 
 } // namespace vulkan

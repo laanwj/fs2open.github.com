@@ -171,6 +171,12 @@ public:
 	void renderModel(model_material* material_info, indexed_vertex_source* vert_source,
 	                 vertex_buffer* bufferp, size_t texi);
 
+	/**
+	 * @brief Draw a unit sphere with the given material
+	 * Used for debug visualization and deferred light volumes
+	 */
+	void drawSphere(material* material_def);
+
 	// ========== Render State ==========
 
 	/**
@@ -268,6 +274,16 @@ private:
 	 */
 	void drawIndexed(primitive_type prim_type, int index_count, int first_index, int vertex_offset);
 
+	/**
+	 * @brief Create sphere VBO/IBO from shared mesh generator
+	 */
+	void initSphereBuffers();
+
+	/**
+	 * @brief Destroy sphere VBO/IBO
+	 */
+	void shutdownSphereBuffers();
+
 	vk::Device m_device;
 
 	// Current render state
@@ -306,6 +322,12 @@ private:
 	};
 	FrameStats m_frameStats;
 	int m_frameStatsFrameNum = 0;
+
+	// Pre-built sphere mesh for draw_sphere / deferred light volumes
+	gr_buffer_handle m_sphereVBO;
+	gr_buffer_handle m_sphereIBO;
+	unsigned int m_sphereIndexCount = 0;
+	vertex_layout m_sphereVertexLayout;
 
 	bool m_initialized = false;
 };

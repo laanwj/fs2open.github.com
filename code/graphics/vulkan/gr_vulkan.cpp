@@ -396,7 +396,11 @@ void vulkan_set_line_width(float width)
 	gr_screen.line_width = width;
 }
 
-void stub_draw_sphere(material* /*material_def*/, float /*rad*/) {}
+void vulkan_draw_sphere(material* material_def, float /*rad*/)
+{
+	auto* drawManager = getDrawManager();
+	drawManager->drawSphere(material_def);
+}
 
 void vulkan_clear_states()
 {
@@ -921,7 +925,7 @@ void init_function_pointers()
 
 	gr_screen.gf_set_line_width = vulkan_set_line_width;
 
-	gr_screen.gf_sphere = stub_draw_sphere;
+	gr_screen.gf_sphere = vulkan_draw_sphere;
 
 	gr_screen.gf_shadow_map_start = stub_shadow_map_start;
 	gr_screen.gf_shadow_map_end = stub_shadow_map_end;
