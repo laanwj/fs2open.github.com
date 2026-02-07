@@ -492,6 +492,10 @@ bool VulkanRenderer::initializeInstance()
 				extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
 				m_debugReportEnabled = true;
 			}
+			if (!stricmp(ext.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
+				extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+				m_debugUtilsEnabled = true;
+			}
 		}
 	}
 

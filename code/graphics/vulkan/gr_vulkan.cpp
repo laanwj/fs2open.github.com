@@ -622,9 +622,38 @@ bool stub_get_property(gr_property p, void* dest)
 	return false;
 };
 
-void stub_push_debug_group(const char*) {}
+void vulkan_push_debug_group(const char* name)
+{
+	auto* renderer = getRendererInstance();
+	if (!renderer->isDebugUtilsEnabled()) {
+		return;
+	}
 
-void stub_pop_debug_group() {}
+	auto* stateTracker = getStateTracker();
+	if (!stateTracker->hasCommandBuffer()) {
+		return;
+	}
+
+	vk::DebugUtilsLabelEXT label;
+	label.pLabelName = name;
+	label.color = {{ 1.0f, 1.0f, 1.0f, 1.0f }};
+	stateTracker->getCommandBuffer().beginDebugUtilsLabelEXT(label);
+}
+
+void vulkan_pop_debug_group()
+{
+	auto* renderer = getRendererInstance();
+	if (!renderer->isDebugUtilsEnabled()) {
+		return;
+	}
+
+	auto* stateTracker = getStateTracker();
+	if (!stateTracker->hasCommandBuffer()) {
+		return;
+	}
+
+	stateTracker->getCommandBuffer().endDebugUtilsLabelEXT();
+}
 
 int stub_create_query_object() { return -1; }
 
@@ -860,8 +889,8 @@ void init_function_pointers()
 	gr_screen.gf_is_capable = stub_is_capable;
 	gr_screen.gf_get_property = stub_get_property;
 
-	gr_screen.gf_push_debug_group = stub_push_debug_group;
-	gr_screen.gf_pop_debug_group = stub_pop_debug_group;
+	gr_screen.gf_push_debug_group = vulkan_push_debug_group;
+	gr_screen.gf_pop_debug_group = vulkan_pop_debug_group;
 
 	gr_screen.gf_create_query_object = stub_create_query_object;
 	gr_screen.gf_query_value = stub_query_value;

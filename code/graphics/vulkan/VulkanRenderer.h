@@ -96,6 +96,11 @@ class VulkanRenderer {
 	 */
 	VkCommandBuffer getVkCurrentCommandBuffer() const;
 
+	/**
+	 * @brief Check if VK_EXT_debug_utils is enabled
+	 */
+	bool isDebugUtilsEnabled() const { return m_debugUtilsEnabled; }
+
   private:
 	bool initDisplayDevice() const;
 
@@ -197,6 +202,7 @@ class VulkanRenderer {
 
 #if SDL_SUPPORTS_VULKAN
 	bool m_debugReportEnabled = false;
+	bool m_debugUtilsEnabled = false;
 #endif
 };
 
