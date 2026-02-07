@@ -33,6 +33,14 @@ struct VulkanBufferObject {
 	BufferUsageHint usage = BufferUsageHint::Static;
 	bool valid = false;
 
+	// Stream sub-allocation state (for orphaning semantics within a frame)
+	// When a streaming buffer is updated multiple times per frame, each upload
+	// writes at an advancing cursor instead of overwriting offset 0.
+	// This replicates OpenGL's glBufferData(GL_STREAM_DRAW) orphaning behavior.
+	size_t streamCursor = 0;           // Next write position within the frame span (bytes)
+	size_t lastWriteStreamOffset = 0;  // Byte offset of the most recent upload
+	uint32_t lastResetFrame = UINT32_MAX; // Frame index when cursor was last reset
+
 	// Helper to check if this buffer uses ring buffer spans
 	bool isStreaming() const {
 		return usage == BufferUsageHint::Streaming || usage == BufferUsageHint::Dynamic;

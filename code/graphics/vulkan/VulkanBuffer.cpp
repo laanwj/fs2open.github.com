@@ -422,21 +422,53 @@ void VulkanBufferManager::updateBufferData(gr_buffer_handle handle, size_t size,
 		return;
 	}
 
-	// Create or resize buffer if needed (size is per-frame span size)
+	// For streaming buffers with data, sub-allocate within the frame span.
+	// This replicates OpenGL's glBufferData(GL_STREAM_DRAW) orphaning: each upload
+	// gets its own region so recorded draw commands still reference valid data.
+	if (bufferObj.isStreaming() && data) {
+		// Reset cursor at the start of each frame
+		if (m_currentFrame != bufferObj.lastResetFrame) {
+			bufferObj.streamCursor = 0;
+			bufferObj.lastWriteStreamOffset = 0;
+			bufferObj.lastResetFrame = m_currentFrame;
+		}
+
+		// Ensure span is large enough for all sub-allocations this frame
+		size_t neededSpan = bufferObj.streamCursor + size;
+		if (!createOrResizeBuffer(bufferObj, neededSpan)) {
+			mprintf(("Failed to create/resize buffer for streaming update!\n"));
+			return;
+		}
+
+		// Write at the cursor position within this frame's span
+		size_t frameOffset = bufferObj.getFrameOffset(m_currentFrame);
+		size_t writeOffset = frameOffset + bufferObj.streamCursor;
+
+		void* mapped = m_memoryManager->mapMemory(bufferObj.allocation);
+		if (mapped) {
+			memcpy(static_cast<uint8_t*>(mapped) + writeOffset, data, size);
+			m_memoryManager->flushMemory(bufferObj.allocation, writeOffset, size);
+			m_memoryManager->unmapMemory(bufferObj.allocation);
+		} else {
+			mprintf(("Failed to map buffer memory for streaming update!\n"));
+		}
+
+		bufferObj.lastWriteStreamOffset = bufferObj.streamCursor;
+		bufferObj.streamCursor += size;
+		return;
+	}
+
+	// Non-streaming path (static buffers, or null data for pre-allocation)
 	if (!createOrResizeBuffer(bufferObj, size)) {
 		mprintf(("Failed to create/resize buffer for update!\n"));
 		return;
 	}
 
-	// Calculate offset for current frame's span
-	size_t frameOffset = bufferObj.getFrameOffset(m_currentFrame);
-
-	// For host-visible memory, map and copy to the frame's span
-	// A null data pointer just allocates/resizes the buffer without initializing
+	// A null data pointer just allocates/resizes the buffer without writing
 	if (data) {
+		size_t frameOffset = bufferObj.getFrameOffset(m_currentFrame);
 		void* mapped = m_memoryManager->mapMemory(bufferObj.allocation);
 		if (mapped) {
-			// Write to this frame's span within the ring buffer
 			memcpy(static_cast<uint8_t*>(mapped) + frameOffset, data, size);
 			m_memoryManager->flushMemory(bufferObj.allocation, frameOffset, size);
 			m_memoryManager->unmapMemory(bufferObj.allocation);
@@ -579,8 +611,10 @@ size_t VulkanBufferManager::getFrameBaseOffset(gr_buffer_handle handle) const
 		return 0;
 	}
 
-	// Return the offset for the current frame's span
-	return bufferObj.getFrameOffset(m_currentFrame);
+	// Return the offset for the current frame's span, plus the stream sub-allocation
+	// offset for the most recent upload. This ensures vertex buffer bindings point to
+	// the correct data region when a streaming buffer is updated multiple times per frame.
+	return bufferObj.getFrameOffset(m_currentFrame) + bufferObj.lastWriteStreamOffset;
 }
 
 bool VulkanBufferManager::isValidHandle(gr_buffer_handle handle) const
