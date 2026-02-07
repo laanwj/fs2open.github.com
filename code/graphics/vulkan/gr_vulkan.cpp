@@ -484,12 +484,48 @@ void stub_render_decals(decal_material* /*material_info*/,
                        const gr_buffer_handle& /*instance_buffer*/,
                        int /*num_instances*/) {}
 
-void stub_render_shield_impact(shield_material* /*material_info*/,
-	primitive_type /*prim_type*/,
-	vertex_layout* /*layout*/,
-	gr_buffer_handle /*buffer_handle*/,
-	int /*n_verts*/)
+void vulkan_render_shield_impact(shield_material* material_info,
+	primitive_type prim_type,
+	vertex_layout* layout,
+	gr_buffer_handle buffer_handle,
+	int n_verts)
 {
+	auto* drawManager = getDrawManager();
+
+	// Compute impact projection matrices
+	float radius = material_info->get_impact_radius();
+	vec3d min_v, max_v;
+	min_v.xyz.x = min_v.xyz.y = min_v.xyz.z = -radius;
+	max_v.xyz.x = max_v.xyz.y = max_v.xyz.z = radius;
+
+	matrix4 impact_projection;
+	vm_matrix4_set_orthographic(&impact_projection, &max_v, &min_v);
+
+	matrix impact_orient = material_info->get_impact_orient();
+	vec3d impact_pos = material_info->get_impact_pos();
+
+	matrix4 impact_transform;
+	vm_matrix4_set_inverse_transform(&impact_transform, &impact_orient, &impact_pos);
+
+	// Set shield impact uniform data (GenericData UBO)
+	auto buffer = gr_get_uniform_buffer(uniform_block_type::GenericData, 1,
+	                                     sizeof(graphics::generic_data::shield_impact_data));
+	auto* data = buffer.aligner().addTypedElement<graphics::generic_data::shield_impact_data>();
+	data->hitNormal             = impact_orient.vec.fvec;
+	data->shieldProjMatrix      = impact_projection;
+	data->shieldModelViewMatrix = impact_transform;
+	data->shieldMapIndex        = 0; // Vulkan binds textures individually, always layer 0
+	data->srgb                  = High_dynamic_range ? 1 : 0;
+	data->color                 = material_info->get_color();
+	buffer.submitData();
+	gr_bind_uniform_buffer(uniform_block_type::GenericData, buffer.getBufferOffset(0),
+	                       sizeof(graphics::generic_data::shield_impact_data), buffer.bufferHandle());
+
+	// Set matrix uniforms
+	gr_matrix_set_uniforms();
+
+	// Draw the shield mesh
+	drawManager->renderPrimitives(material_info, prim_type, layout, 0, n_verts, buffer_handle, 0);
 }
 
 void vulkan_render_model(model_material* material_info,
@@ -934,7 +970,7 @@ void init_function_pointers()
 	gr_screen.gf_stop_decal_pass = stub_stop_decal_pass;
 	gr_screen.gf_render_decals = stub_render_decals;
 
-	gr_screen.gf_render_shield_impact = stub_render_shield_impact;
+	gr_screen.gf_render_shield_impact = vulkan_render_shield_impact;
 
 	gr_screen.gf_maybe_create_shader = vulkan_maybe_create_shader;
 	gr_screen.gf_recompile_all_shaders = vulkan_recompile_all_shaders;
