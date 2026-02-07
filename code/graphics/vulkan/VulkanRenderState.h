@@ -65,7 +65,8 @@ bool isBlendingEnabled(gr_alpha_blend mode);
  * @param mode FSO blend mode
  * @return Vulkan color blend attachment state
  */
-vk::PipelineColorBlendAttachmentState createColorBlendAttachment(gr_alpha_blend mode);
+vk::PipelineColorBlendAttachmentState createColorBlendAttachment(gr_alpha_blend mode,
+	const bvec4& colorWriteMask = {true, true, true, true});
 
 /**
  * @brief Create depth stencil state create info

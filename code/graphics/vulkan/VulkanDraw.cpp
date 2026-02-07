@@ -778,6 +778,9 @@ PipelineConfig VulkanDrawManager::buildPipelineConfig(material* mat, primitive_t
 		config.backStencilOp = mat->get_back_stencil_op();
 	}
 
+	// Color write mask
+	config.colorWriteMask = mat->get_color_mask();
+
 	// Get current render pass from state tracker
 	auto* stateTracker = getStateTracker();
 	if (stateTracker) {

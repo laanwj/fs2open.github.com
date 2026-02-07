@@ -71,6 +71,15 @@ class NanoVGRenderer {
 	gr_buffer_handle _vertexBuffer;
 	vertex_layout _vertexLayout;
 
+	// Sub-allocation cursor for vertex buffer within a GPU frame.
+	// In Vulkan, draw commands are recorded but not executed immediately.
+	// Each renderFlush must write to a unique offset to prevent later flushes
+	// from overwriting data that recorded draw commands haven't read yet.
+	// (OpenGL uses glBufferData/GL_STREAM_DRAW which orphans the old buffer.)
+	size_t _frameVertexCursor = 0;    // accumulated vertex count this GPU frame
+	size_t _vertexBufferCapacity = 0; // current buffer capacity in vertices
+	int _lastFramecount = -1;         // to detect GPU frame changes
+
 	util::UniformBuffer _uniformBuffer;
 
 	nanovg_material _trianglesMaterial;

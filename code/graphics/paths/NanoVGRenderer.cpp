@@ -20,6 +20,7 @@
 
 #include "NanoVGRenderer.h"
 #include "tracing/tracing.h"
+#include "globalincs/systemvars.h"
 
 
 // That is a wrapper function for log prints to be availiable for nanovg components. For now it is stb_truetype.h
@@ -434,7 +435,44 @@ void NanoVGRenderer::renderFlush() {
 	}
 
 	_uniformBuffer.submitData();
-	gr_update_buffer_data(_vertexBuffer, sizeof(NVGvertex) * _vertices.size(), _vertices.data());
+
+	// Sub-allocate within the vertex buffer to prevent overwriting data that
+	// recorded (but not yet executed) Vulkan draw commands still reference.
+	// In OpenGL, glBufferData(GL_STREAM_DRAW) orphans the buffer automatically.
+	// In Vulkan, we must write each flush's vertices at a unique offset.
+	if (_lastFramecount != Framecount) {
+		_frameVertexCursor = 0;
+		_lastFramecount = Framecount;
+	}
+
+	size_t neededCapacity = _frameVertexCursor + _vertices.size();
+	if (neededCapacity > _vertexBufferCapacity) {
+		// Grow buffer (allocate 2x to reduce reallocations)
+		size_t newCapacity = std::max(neededCapacity, _vertexBufferCapacity * 2);
+		newCapacity = std::max(newCapacity, size_t(1024)); // minimum 1024 vertices
+		gr_update_buffer_data(_vertexBuffer, sizeof(NVGvertex) * newCapacity, nullptr);
+		_vertexBufferCapacity = newCapacity;
+	}
+
+	// Write this flush's vertices at the current cursor offset
+	gr_update_buffer_data_offset(_vertexBuffer,
+		_frameVertexCursor * sizeof(NVGvertex),
+		sizeof(NVGvertex) * _vertices.size(),
+		_vertices.data());
+
+	// Shift all vertex offsets by the base so draw commands reference the correct
+	// sub-region of the buffer. Safe to modify in-place since renderCancel() follows.
+	size_t vertexBaseOffset = _frameVertexCursor;
+	if (vertexBaseOffset > 0) {
+		for (auto& p : _paths) {
+			p.fillOffset += static_cast<uint32_t>(vertexBaseOffset);
+			p.strokeOffset += static_cast<uint32_t>(vertexBaseOffset);
+		}
+		for (auto& dc : _drawCalls) {
+			dc.triangleOffset += static_cast<uint32_t>(vertexBaseOffset);
+		}
+	}
+	_frameVertexCursor += _vertices.size();
 
 	for (auto& drawCall : _drawCalls) {
 		switch (drawCall.type) {

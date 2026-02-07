@@ -587,9 +587,24 @@ void vulkan_render_nanovg(nanovg_material* material_info,
 	// NanoVG shader reads from NanoVGData UBO (set 2 binding 2), not GenericData.
 	// The NanoVGRenderer binds NanoVGData before calling gr_render_nanovg().
 
+	// NanoVG uses its own software scissor (scissorMat/scissorExt in the fragment shader).
+	// Disable hardware scissor to match nanovg_gl.h which calls glDisable(GL_SCISSOR_TEST).
+	// Without this, NanoVG draws get clipped by gr_set_clip's hardware scissor.
+	auto* stateTracker = getStateTracker();
+	bool savedScissorEnabled = false;
+	if (stateTracker) {
+		savedScissorEnabled = stateTracker->isScissorEnabled();
+		stateTracker->setScissorEnabled(false);
+	}
+
 	auto* drawManager = getDrawManager();
 	if (drawManager) {
 		drawManager->renderNanoVG(material_info, prim_type, layout, offset, n_verts, buffer_handle);
+	}
+
+	// Restore scissor state
+	if (stateTracker) {
+		stateTracker->setScissorEnabled(savedScissorEnabled);
 	}
 }
 

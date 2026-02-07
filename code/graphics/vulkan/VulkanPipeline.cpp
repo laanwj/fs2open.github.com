@@ -38,6 +38,10 @@ bool PipelineConfig::operator==(const PipelineConfig& other) const
 	       backStencilOp.stencilFailOperation == other.backStencilOp.stencilFailOperation &&
 	       backStencilOp.depthFailOperation == other.backStencilOp.depthFailOperation &&
 	       backStencilOp.successOperation == other.backStencilOp.successOperation &&
+	       colorWriteMask.x == other.colorWriteMask.x &&
+	       colorWriteMask.y == other.colorWriteMask.y &&
+	       colorWriteMask.z == other.colorWriteMask.z &&
+	       colorWriteMask.w == other.colorWriteMask.w &&
 	       renderPass == other.renderPass &&
 	       subpass == other.subpass &&
 	       colorAttachmentCount == other.colorAttachmentCount;
@@ -65,6 +69,8 @@ size_t PipelineConfig::hash() const
 	h ^= std::hash<int>()(static_cast<int>(backStencilOp.stencilFailOperation)) << 39;
 	h ^= std::hash<int>()(static_cast<int>(backStencilOp.depthFailOperation)) << 41;
 	h ^= std::hash<int>()(static_cast<int>(backStencilOp.successOperation)) << 43;
+	h ^= std::hash<int>()((colorWriteMask.x ? 1 : 0) | (colorWriteMask.y ? 2 : 0) |
+	                      (colorWriteMask.z ? 4 : 0) | (colorWriteMask.w ? 8 : 0)) << 44;
 	h ^= std::hash<uint64_t>()(reinterpret_cast<uint64_t>(static_cast<VkRenderPass>(renderPass))) << 45;
 	h ^= std::hash<uint32_t>()(subpass) << 49;
 	h ^= std::hash<uint32_t>()(colorAttachmentCount) << 53;
@@ -345,7 +351,7 @@ vk::UniquePipeline VulkanPipelineManager::createPipeline(const PipelineConfig& c
 	// Color blend state
 	SCP_vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments;
 	for (uint32_t i = 0; i < config.colorAttachmentCount; ++i) {
-		colorBlendAttachments.push_back(createColorBlendAttachment(config.blendMode));
+		colorBlendAttachments.push_back(createColorBlendAttachment(config.blendMode, config.colorWriteMask));
 	}
 
 	vk::PipelineColorBlendStateCreateInfo colorBlending;

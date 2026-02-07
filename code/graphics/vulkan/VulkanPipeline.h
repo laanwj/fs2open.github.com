@@ -41,6 +41,9 @@ struct PipelineConfig {
 	material::StencilOp frontStencilOp;
 	material::StencilOp backStencilOp;
 
+	// Color write mask
+	bvec4 colorWriteMask = {true, true, true, true};
+
 	// Render pass compatibility
 	vk::RenderPass renderPass;
 	uint32_t subpass = 0;
