@@ -1180,6 +1180,18 @@ void VulkanRenderer::waitIdle()
 	}
 }
 
+void VulkanRenderer::waitForFrame(uint64_t frameNumber)
+{
+	// Fast path: if enough frames have elapsed, the work is definitely done
+	if (m_frameNumber >= frameNumber + MAX_FRAMES_IN_FLIGHT) {
+		return;
+	}
+
+	// Wait on the specific frame's fence
+	uint32_t frameIndex = static_cast<uint32_t>(frameNumber % MAX_FRAMES_IN_FLIGHT);
+	m_frames[frameIndex]->waitForFinish();
+}
+
 void VulkanRenderer::shutdown()
 {
 	// Wait for all frames to complete to ensure no drawing is in progress when we destroy the device

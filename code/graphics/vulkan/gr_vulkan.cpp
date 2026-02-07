@@ -754,14 +754,8 @@ void init_function_pointers()
 		auto* renderer = getRendererInstance();
 		auto* syncObj = static_cast<VulkanSyncObject*>(sync);
 
-		// With MAX_FRAMES_IN_FLIGHT=2, if current frame >= syncFrame + 2, it's done
-		uint64_t currentFrame = renderer->getCurrentFrameNumber();
-		if (currentFrame >= syncObj->frameNumber + 2) {
-			return true;
-		}
-
-		// Need to wait - wait for device idle
-		renderer->waitIdle();
+		// Wait on the specific frame's fence (no-op if already complete)
+		renderer->waitForFrame(syncObj->frameNumber);
 		return true;
 	};
 

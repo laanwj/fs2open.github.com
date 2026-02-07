@@ -79,6 +79,14 @@ class VulkanRenderer {
 	uint64_t getCurrentFrameNumber() const { return m_frameNumber; }
 
 	/**
+	 * @brief Wait for a specific frame's GPU work to complete
+	 *
+	 * Waits on that frame's fence rather than stalling the entire device.
+	 * No-op if the frame has already completed.
+	 */
+	void waitForFrame(uint64_t frameNumber);
+
+	/**
 	 * @brief Wait for all GPU work to complete
 	 */
 	void waitIdle();
