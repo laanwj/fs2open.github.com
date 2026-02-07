@@ -604,6 +604,92 @@ bool stub_openxr_acquire_swapchain_buffers() { return false; }
 
 bool stub_openxr_flip() { return false; }
 
+void* vulkan_map_buffer(gr_buffer_handle handle)
+{
+	auto* bufferManager = getBufferManager();
+	return bufferManager->mapBuffer(handle);
+}
+
+void vulkan_flush_mapped_buffer(gr_buffer_handle handle, size_t offset, size_t size)
+{
+	auto* bufferManager = getBufferManager();
+	bufferManager->flushMappedBuffer(handle, offset, size);
+}
+
+void stub_post_process_restore_zbuffer() {}
+
+void stub_calculate_irrmap() {}
+
+void stub_dump_envmap(const char* /*filename*/) {}
+
+void stub_override_fog(bool /*set_override*/) {}
+
+std::unique_ptr<os::Viewport> stub_create_viewport(const os::ViewPortProperties& /*props*/)
+{
+	return std::unique_ptr<os::Viewport>();
+}
+
+void stub_use_viewport(os::Viewport* /*view*/) {}
+
+void vulkan_bind_uniform_buffer(uniform_block_type blockType, size_t offset, size_t size, gr_buffer_handle buffer)
+{
+	auto* bufferManager = getBufferManager();
+	bufferManager->bindUniformBuffer(blockType, offset, size, buffer);
+}
+
+gr_sync vulkan_sync_fence()
+{
+	auto* renderer = getRendererInstance();
+	auto* sync = new VulkanSyncObject();
+	sync->frameNumber = renderer->getCurrentFrameNumber();
+	return static_cast<gr_sync>(sync);
+}
+
+bool vulkan_sync_wait(gr_sync sync, uint64_t /*timeoutns*/)
+{
+	if (!sync) {
+		return true;
+	}
+
+	auto* renderer = getRendererInstance();
+	auto* syncObj = static_cast<VulkanSyncObject*>(sync);
+
+	// Wait on the specific frame's fence (no-op if already complete)
+	renderer->waitForFrame(syncObj->frameNumber);
+	return true;
+}
+
+void vulkan_sync_delete(gr_sync sync)
+{
+	if (sync) {
+		delete static_cast<VulkanSyncObject*>(sync);
+	}
+}
+
+void vulkan_set_viewport(int x, int y, int width, int height)
+{
+	auto* stateTracker = graphics::vulkan::getStateTracker();
+	if (gr_screen.rendering_to_texture == -1) {
+		// Screen rendering: use negative viewport height for OpenGL-compatible Y-up NDC
+		// (VK_KHR_maintenance1, core since Vulkan 1.1)
+		stateTracker->setViewport(
+			static_cast<float>(x),
+			static_cast<float>(gr_screen.max_h - y),
+			static_cast<float>(width),
+			static_cast<float>(-height));
+	} else {
+		// RTT: standard positive viewport (RTT projection matrix handles Y-flip)
+		stateTracker->setViewport(
+			static_cast<float>(x), static_cast<float>(y),
+			static_cast<float>(width), static_cast<float>(height));
+	}
+}
+
+void vulkan_flip()
+{
+	renderer_instance->flip();
+}
+
 void init_function_pointers()
 {
 	// function pointers...
@@ -657,14 +743,8 @@ void init_function_pointers()
 	gr_screen.gf_update_transform_buffer = stub_update_transform_buffer;
 	gr_screen.gf_update_buffer_data = vulkan_update_buffer_data;
 	gr_screen.gf_update_buffer_data_offset = vulkan_update_buffer_data_offset;
-	gr_screen.gf_map_buffer = [](gr_buffer_handle handle) -> void* {
-		auto* bufferManager = getBufferManager();
-		return bufferManager->mapBuffer(handle);
-	};
-	gr_screen.gf_flush_mapped_buffer = [](gr_buffer_handle handle, size_t offset, size_t size) {
-		auto* bufferManager = getBufferManager();
-		bufferManager->flushMappedBuffer(handle, offset, size);
-	};
+	gr_screen.gf_map_buffer = vulkan_map_buffer;
+	gr_screen.gf_flush_mapped_buffer = vulkan_flush_mapped_buffer;
 
 	gr_screen.gf_post_process_set_effect = stub_post_process_set_effect;
 	gr_screen.gf_post_process_set_defaults = stub_post_process_set_defaults;
@@ -672,7 +752,7 @@ void init_function_pointers()
 	gr_screen.gf_post_process_begin = stub_post_process_begin;
 	gr_screen.gf_post_process_end = stub_post_process_end;
 	gr_screen.gf_post_process_save_zbuffer = stub_post_process_save_zbuffer;
-	gr_screen.gf_post_process_restore_zbuffer = []() {};
+	gr_screen.gf_post_process_restore_zbuffer = stub_post_process_restore_zbuffer;
 
 	gr_screen.gf_scene_texture_begin = vulkan_scene_texture_begin;
 	gr_screen.gf_scene_texture_end = vulkan_scene_texture_end;
@@ -683,9 +763,9 @@ void init_function_pointers()
 	gr_screen.gf_deferred_lighting_end = stub_deferred_lighting_end;
 	gr_screen.gf_deferred_lighting_finish = stub_deferred_lighting_finish;
 
-	gr_screen.gf_calculate_irrmap = []() {}; // Stub - irradiance map not yet implemented
-	gr_screen.gf_dump_envmap = [](const char*) {}; // Stub - envmap dump not yet implemented
-	gr_screen.gf_override_fog = [](bool) {}; // Stub - fog override not yet implemented
+	gr_screen.gf_calculate_irrmap = stub_calculate_irrmap;
+	gr_screen.gf_dump_envmap = stub_dump_envmap;
+	gr_screen.gf_override_fog = stub_override_fog;
 
 	gr_screen.gf_set_line_width = stub_set_line_width;
 
@@ -729,59 +809,16 @@ void init_function_pointers()
 	gr_screen.gf_get_query_value = stub_get_query_value;
 	gr_screen.gf_delete_query_object = stub_delete_query_object;
 
-	gr_screen.gf_create_viewport = [](const os::ViewPortProperties&) { return std::unique_ptr<os::Viewport>(); };
-	gr_screen.gf_use_viewport = [](os::Viewport*) {};
+	gr_screen.gf_create_viewport = stub_create_viewport;
+	gr_screen.gf_use_viewport = stub_use_viewport;
 
-	gr_screen.gf_bind_uniform_buffer = [](uniform_block_type blockType, size_t offset, size_t size, gr_buffer_handle buffer) {
-		auto* bufferManager = getBufferManager();
-		bufferManager->bindUniformBuffer(blockType, offset, size, buffer);
-	};
+	gr_screen.gf_bind_uniform_buffer = vulkan_bind_uniform_buffer;
 
-	// Sync fence implementation for uniform buffer synchronization
-	// Tracks frame numbers to know when GPU work has completed
-	gr_screen.gf_sync_fence = []() -> gr_sync {
-		auto* renderer = getRendererInstance();
-		auto* sync = new VulkanSyncObject();
-		sync->frameNumber = renderer->getCurrentFrameNumber();
-		return static_cast<gr_sync>(sync);
-	};
+	gr_screen.gf_sync_fence = vulkan_sync_fence;
+	gr_screen.gf_sync_wait = vulkan_sync_wait;
+	gr_screen.gf_sync_delete = vulkan_sync_delete;
 
-	gr_screen.gf_sync_wait = [](gr_sync sync, uint64_t /*timeoutns*/) -> bool {
-		if (!sync) {
-			return true;
-		}
-
-		auto* renderer = getRendererInstance();
-		auto* syncObj = static_cast<VulkanSyncObject*>(sync);
-
-		// Wait on the specific frame's fence (no-op if already complete)
-		renderer->waitForFrame(syncObj->frameNumber);
-		return true;
-	};
-
-	gr_screen.gf_sync_delete = [](gr_sync sync) {
-		if (sync) {
-			delete static_cast<VulkanSyncObject*>(sync);
-		}
-	};
-
-	gr_screen.gf_set_viewport = [](int x, int y, int width, int height) {
-		auto* stateTracker = graphics::vulkan::getStateTracker();
-		if (gr_screen.rendering_to_texture == -1) {
-			// Screen rendering: use negative viewport height for OpenGL-compatible Y-up NDC
-			// (VK_KHR_maintenance1, core since Vulkan 1.1)
-			stateTracker->setViewport(
-				static_cast<float>(x),
-				static_cast<float>(gr_screen.max_h - y),
-				static_cast<float>(width),
-				static_cast<float>(-height));
-		} else {
-			// RTT: standard positive viewport (RTT projection matrix handles Y-flip)
-			stateTracker->setViewport(
-				static_cast<float>(x), static_cast<float>(y),
-				static_cast<float>(width), static_cast<float>(height));
-		}
-	};
+	gr_screen.gf_set_viewport = vulkan_set_viewport;
 
 	gr_screen.gf_openxr_get_extensions = stub_openxr_get_extensions;
 	gr_screen.gf_openxr_test_capabilities = stub_openxr_test_capabilities;
@@ -813,9 +850,7 @@ bool initialize(std::unique_ptr<os::GraphicsOperations>&& graphicsOps)
 		ImGui_ImplSDL2_InitForVulkan(window);
 	}
 
-	gr_screen.gf_flip = []() {
-		renderer_instance->flip();
-	};
+	gr_screen.gf_flip = vulkan_flip;
 
 	// Initialize matrices and viewport (matching OpenGL backend initialization)
 	gr_reset_matrices();
