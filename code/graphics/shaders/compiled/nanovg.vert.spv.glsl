@@ -1,28 +1,33 @@
 #version 150
 
-layout(std140) uniform genericData
+layout(std140) uniform NanoVGUniformData
 {
-    mat4 modelMatrix;
-    vec4 color;
-    vec4 clipEquation;
-    int baseMapIndex;
-    int alphaTexture;
-    int noTexturing;
-    int srgb;
-    float intensity;
-    float alphaThreshold;
-    uint clipEnabled;
-} _20;
+    mat3 scissorMat;
+    mat3 paintMat;
+    vec4 innerCol;
+    vec4 outerCol;
+    vec2 scissorExt;
+    vec2 scissorScale;
+    vec2 extent;
+    float radius;
+    float feather;
+    float strokeMult;
+    float strokeThr;
+    int texType;
+    int type;
+    vec2 viewSize;
+    int texArrayIndex;
+} _38;
 
-out vec4 fragTexCoord;
+out vec2 ftcoord;
 in vec4 vertTexCoord;
-out vec4 fragColor;
+out vec2 fpos;
 in vec4 vertPosition;
 
 void main()
 {
-    fragTexCoord = vertTexCoord;
-    fragColor = _20.color;
-    gl_Position = vec4((vertPosition.x * 0.001041666720993816852569580078125) - 1.0, 1.0 - (vertPosition.y * 0.00185185181908309459686279296875), 0.0, 1.0);
+    ftcoord = vertTexCoord.xy;
+    fpos = vertPosition.xy;
+    gl_Position = vec4(((2.0 * vertPosition.x) / _38.viewSize.x) - 1.0, 1.0 - ((2.0 * vertPosition.y) / _38.viewSize.y), 0.0, 1.0);
 }
 

@@ -1,36 +1,36 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
-// NanoVG vertex shader - simple passthrough for now
 layout (location = 0) in vec4 vertPosition;
 layout (location = 2) in vec4 vertTexCoord;
 
-layout (location = 0) out vec4 fragTexCoord;
-layout (location = 1) out vec4 fragColor;
+layout (location = 0) out vec2 ftcoord;
+layout (location = 1) out vec2 fpos;
 
-// Set 2 = PerDraw, Binding 0 = GenericData
-layout (set = 2, binding = 0, std140) uniform genericData {
-	mat4 modelMatrix;
-	vec4 color;
-	vec4 clipEquation;
-	int baseMapIndex;
-	int alphaTexture;
-	int noTexturing;
-	int srgb;
-	float intensity;
-	float alphaThreshold;
-	uint clipEnabled;
+// Set 2 = PerDraw, Binding 2 = NanoVGData
+layout (set = 2, binding = 2, std140) uniform NanoVGUniformData {
+	mat3 scissorMat;
+	mat3 paintMat;
+	vec4 innerCol;
+	vec4 outerCol;
+	vec2 scissorExt;
+	vec2 scissorScale;
+	vec2 extent;
+	float radius;
+	float feather;
+	float strokeMult;
+	float strokeThr;
+	int texType;
+	int type;
+	vec2 viewSize;
+	int texArrayIndex;
 };
 
 void main()
 {
-	fragTexCoord = vertTexCoord;
-	fragColor = color;
-
-	// Screen coordinate to NDC conversion (matches OpenGL nanovg convention)
-	// Screen coords are Y-down, NDC is Y-up (negative viewport makes Vulkan match OpenGL)
-	vec2 screenSize = vec2(1920.0, 1080.0);
-	gl_Position = vec4(2.0 * vertPosition.x / screenSize.x - 1.0,
-	                   1.0 - 2.0 * vertPosition.y / screenSize.y,
+	ftcoord = vertTexCoord.xy;
+	fpos = vertPosition.xy;
+	gl_Position = vec4(2.0 * vertPosition.x / viewSize.x - 1.0,
+	                   1.0 - 2.0 * vertPosition.y / viewSize.y,
 	                   0.0, 1.0);
 }

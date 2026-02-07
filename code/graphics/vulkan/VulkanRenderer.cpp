@@ -866,7 +866,7 @@ void VulkanRenderer::createRenderPass()
 	depthAttachment.samples = vk::SampleCountFlagBits::e1;
 	depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
 	depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
-	depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+	depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eClear;
 	depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
 	depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
 	depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;

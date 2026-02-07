@@ -584,8 +584,8 @@ void vulkan_render_nanovg(nanovg_material* material_info,
 	int n_verts,
 	gr_buffer_handle buffer_handle)
 {
-	gr_matrix_set_uniforms();
-	vulkan_set_default_material_uniforms(material_info);
+	// NanoVG shader reads from NanoVGData UBO (set 2 binding 2), not GenericData.
+	// The NanoVGRenderer binds NanoVGData before calling gr_render_nanovg().
 
 	auto* drawManager = getDrawManager();
 	if (drawManager) {
