@@ -1180,6 +1180,36 @@ uint32_t VulkanRenderer::getMinUniformBufferOffsetAlignment() const
 	return static_cast<uint32_t>(properties.limits.minUniformBufferOffsetAlignment);
 }
 
+uint32_t VulkanRenderer::getMaxUniformBufferSize() const
+{
+	if (!m_physicalDevice) {
+		return 65536;
+	}
+
+	auto properties = m_physicalDevice.getProperties();
+	return properties.limits.maxUniformBufferRange;
+}
+
+float VulkanRenderer::getMaxAnisotropy() const
+{
+	if (!m_physicalDevice) {
+		return 1.0f;
+	}
+
+	auto properties = m_physicalDevice.getProperties();
+	return properties.limits.maxSamplerAnisotropy;
+}
+
+bool VulkanRenderer::isTextureCompressionBCSupported() const
+{
+	if (!m_physicalDevice) {
+		return false;
+	}
+
+	auto features = m_physicalDevice.getFeatures();
+	return features.textureCompressionBC == VK_TRUE;
+}
+
 void VulkanRenderer::waitIdle()
 {
 	if (m_device) {

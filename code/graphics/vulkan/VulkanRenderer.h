@@ -101,6 +101,21 @@ class VulkanRenderer {
 	 */
 	bool isDebugUtilsEnabled() const { return m_debugUtilsEnabled; }
 
+	/**
+	 * @brief Get the maximum uniform buffer range
+	 */
+	uint32_t getMaxUniformBufferSize() const;
+
+	/**
+	 * @brief Get the maximum sampler anisotropy
+	 */
+	float getMaxAnisotropy() const;
+
+	/**
+	 * @brief Check if BC texture compression is supported
+	 */
+	bool isTextureCompressionBCSupported() const;
+
   private:
 	bool initDisplayDevice() const;
 

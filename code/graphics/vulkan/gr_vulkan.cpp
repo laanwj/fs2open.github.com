@@ -14,6 +14,7 @@
 #include "mod_table/mod_table.h"
 #include "osapi/osapi.h"
 
+#include "cmdline/cmdline.h"
 #include "graphics/2d.h"
 #include "graphics/matrix.h"
 #include "graphics/material.h"
@@ -610,17 +611,79 @@ void vulkan_render_rocket_primitives(interface_material* material_info,
 	drawManager->renderRocketPrimitives(material_info, prim_type, layout, n_indices, vertex_buffer, index_buffer);
 }
 
-bool stub_is_capable(gr_capability /*capability*/) { return false; }
-bool stub_get_property(gr_property p, void* dest)
+bool vulkan_is_capable(gr_capability capability)
 {
-	if (p == gr_property::UNIFORM_BUFFER_OFFSET_ALIGNMENT) {
-		// Query actual alignment from Vulkan physical device
-		auto* renderer = getRendererInstance();
-		*reinterpret_cast<int*>(dest) = static_cast<int>(renderer->getMinUniformBufferOffsetAlignment());
+	switch (capability) {
+	case gr_capability::CAPABILITY_ENVIRONMENT_MAP:
+		// Cubemap rendering is not fully implemented yet (faces aren't uploaded,
+		// env slot gets a fallback 2D texture), but we return true because:
+		// 1. It degrades gracefully (no reflections, not a crash)
+		// 2. Mods can declare this as a required capability — returning false
+		//    would block them from loading even though the game runs fine
 		return true;
+	case gr_capability::CAPABILITY_NORMAL_MAP:
+		return Cmdline_normal != 0;
+	case gr_capability::CAPABILITY_HEIGHT_MAP:
+		return Cmdline_height != 0;
+	case gr_capability::CAPABILITY_SOFT_PARTICLES:
+	case gr_capability::CAPABILITY_DISTORTION:
+		// Requires post-processing / scene texture pipeline (not yet implemented)
+		return false;
+	case gr_capability::CAPABILITY_POST_PROCESSING:
+		// Not yet implemented
+		return false;
+	case gr_capability::CAPABILITY_DEFERRED_LIGHTING:
+		// Not yet implemented
+		return false;
+	case gr_capability::CAPABILITY_SHADOWS:
+	case gr_capability::CAPABILITY_THICK_OUTLINE:
+		// Requires geometry shaders / shadow map pipeline (not yet implemented)
+		return false;
+	case gr_capability::CAPABILITY_BATCHED_SUBMODELS:
+		// Requires update_transform_buffer (not yet implemented)
+		return false;
+	case gr_capability::CAPABILITY_TIMESTAMP_QUERY:
+		// Query objects not yet implemented
+		return false;
+	case gr_capability::CAPABILITY_SEPARATE_BLEND_FUNCTIONS:
+		// Vulkan supports per-attachment blend by spec
+		return true;
+	case gr_capability::CAPABILITY_PERSISTENT_BUFFER_MAPPING:
+		// Vulkan has persistently mappable host-visible memory
+		return true;
+	case gr_capability::CAPABILITY_BPTC:
+		return getRendererInstance()->isTextureCompressionBCSupported();
+	case gr_capability::CAPABILITY_LARGE_SHADER:
+		// Always true for Vulkan: we use pre-compiled SPIR-V uber-shaders with
+		// runtime branching on modelData.flags. The variant approach would require
+		// compiling exponentially many SPIR-V permutations. Unbound texture slots
+		// are handled via fallback descriptors, so there's no driver issue.
+		return true;
+	case gr_capability::CAPABILITY_INSTANCED_RENDERING:
+		// Gates the decal system which requires render_decals (not yet implemented)
+		return false;
 	}
 	return false;
-};
+}
+
+bool vulkan_get_property(gr_property prop, void* dest)
+{
+	auto* renderer = getRendererInstance();
+
+	switch (prop) {
+	case gr_property::UNIFORM_BUFFER_OFFSET_ALIGNMENT:
+		*reinterpret_cast<int*>(dest) = static_cast<int>(renderer->getMinUniformBufferOffsetAlignment());
+		return true;
+	case gr_property::UNIFORM_BUFFER_MAX_SIZE:
+		*reinterpret_cast<int*>(dest) = static_cast<int>(renderer->getMaxUniformBufferSize());
+		return true;
+	case gr_property::MAX_ANISOTROPY:
+		*reinterpret_cast<float*>(dest) = renderer->getMaxAnisotropy();
+		return true;
+	default:
+		return false;
+	}
+}
 
 void vulkan_push_debug_group(const char* name)
 {
@@ -886,8 +949,8 @@ void init_function_pointers()
 	gr_screen.gf_render_primitives_batched = vulkan_render_primitives_batched;
 	gr_screen.gf_render_rocket_primitives = vulkan_render_rocket_primitives;
 
-	gr_screen.gf_is_capable = stub_is_capable;
-	gr_screen.gf_get_property = stub_get_property;
+	gr_screen.gf_is_capable = vulkan_is_capable;
+	gr_screen.gf_get_property = vulkan_get_property;
 
 	gr_screen.gf_push_debug_group = vulkan_push_debug_group;
 	gr_screen.gf_pop_debug_group = vulkan_pop_debug_group;
