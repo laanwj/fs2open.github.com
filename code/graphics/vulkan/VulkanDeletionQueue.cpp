@@ -10,6 +10,7 @@ VulkanDeletionQueue* g_deletionQueue = nullptr;
 
 VulkanDeletionQueue* getDeletionQueue()
 {
+	Assertion(g_deletionQueue != nullptr, "Vulkan DeletionQueue not initialized!");
 	return g_deletionQueue;
 }
 

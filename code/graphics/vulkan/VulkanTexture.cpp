@@ -15,6 +15,7 @@ VulkanTextureManager* g_textureManager = nullptr;
 
 VulkanTextureManager* getTextureManager()
 {
+	Assertion(g_textureManager != nullptr, "Vulkan TextureManager not initialized!");
 	return g_textureManager;
 }
 
@@ -244,62 +245,30 @@ void VulkanTextureManager::bm_free_data(bitmap_slot* slot, bool release)
 
 	// Queue resources for deferred destruction to avoid destroying
 	// resources that may still be referenced by in-flight command buffers
-	if (deletionQueue) {
-		if (ts->framebuffer) {
-			deletionQueue->queueFramebuffer(ts->framebuffer);
-			ts->framebuffer = nullptr;
-		}
+	if (ts->framebuffer) {
+		deletionQueue->queueFramebuffer(ts->framebuffer);
+		ts->framebuffer = nullptr;
+	}
 
-		if (ts->renderPass) {
-			deletionQueue->queueRenderPass(ts->renderPass);
-			ts->renderPass = nullptr;
-		}
+	if (ts->renderPass) {
+		deletionQueue->queueRenderPass(ts->renderPass);
+		ts->renderPass = nullptr;
+	}
 
-		if (ts->imageView) {
-			deletionQueue->queueImageView(ts->imageView);
-			ts->imageView = nullptr;
-		}
+	if (ts->imageView) {
+		deletionQueue->queueImageView(ts->imageView);
+		ts->imageView = nullptr;
+	}
 
-		if (ts->framebufferView) {
-			deletionQueue->queueImageView(ts->framebufferView);
-			ts->framebufferView = nullptr;
-		}
+	if (ts->framebufferView) {
+		deletionQueue->queueImageView(ts->framebufferView);
+		ts->framebufferView = nullptr;
+	}
 
-		if (ts->image) {
-			deletionQueue->queueImage(ts->image, ts->allocation);
-			ts->image = nullptr;
-			ts->allocation = VulkanAllocation{};  // Clear to prevent double-free
-		}
-	} else {
-		// Fallback to immediate destruction if no deletion queue
-		if (ts->framebuffer) {
-			m_device.destroyFramebuffer(ts->framebuffer);
-			ts->framebuffer = nullptr;
-		}
-
-		if (ts->renderPass) {
-			m_device.destroyRenderPass(ts->renderPass);
-			ts->renderPass = nullptr;
-		}
-
-		if (ts->imageView) {
-			m_device.destroyImageView(ts->imageView);
-			ts->imageView = nullptr;
-		}
-
-		if (ts->framebufferView) {
-			m_device.destroyImageView(ts->framebufferView);
-			ts->framebufferView = nullptr;
-		}
-
-		if (ts->image) {
-			m_device.destroyImage(ts->image);
-			ts->image = nullptr;
-		}
-
-		if (ts->allocation.memory != VK_NULL_HANDLE) {
-			m_memoryManager->freeAllocation(ts->allocation);
-		}
+	if (ts->image) {
+		deletionQueue->queueImage(ts->image, ts->allocation);
+		ts->image = nullptr;
+		ts->allocation = VulkanAllocation{};  // Clear to prevent double-free
 	}
 
 	ts->reset();

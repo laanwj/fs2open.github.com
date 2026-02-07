@@ -8,6 +8,7 @@ static VulkanDescriptorManager* g_descriptorManager = nullptr;
 
 VulkanDescriptorManager* getDescriptorManager()
 {
+	Assertion(g_descriptorManager != nullptr, "Vulkan DescriptorManager not initialized!");
 	return g_descriptorManager;
 }
 

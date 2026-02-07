@@ -29,6 +29,7 @@ static VulkanDrawManager* g_drawManager = nullptr;
 
 VulkanDrawManager* getDrawManager()
 {
+	Assertion(g_drawManager != nullptr, "Vulkan DrawManager not initialized!");
 	return g_drawManager;
 }
 
@@ -63,7 +64,7 @@ void VulkanDrawManager::shutdown()
 void VulkanDrawManager::clear()
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -97,9 +98,6 @@ void VulkanDrawManager::clear()
 void VulkanDrawManager::setClearColor(int r, int g, int b)
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker) {
-		return;
-	}
 
 	float fr = static_cast<float>(r) / 255.0f;
 	float fg = static_cast<float>(g) / 255.0f;
@@ -125,9 +123,6 @@ void VulkanDrawManager::setClearColor(int r, int g, int b)
 void VulkanDrawManager::setClip(int x, int y, int w, int h, int resize_mode)
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker) {
-		return;
-	}
 
 	// Clamp values
 	if (x < 0) x = 0;
@@ -198,9 +193,6 @@ void VulkanDrawManager::setClip(int x, int y, int w, int h, int resize_mode)
 void VulkanDrawManager::resetClip()
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker) {
-		return;
-	}
 
 	int max_w = gr_screen.max_w;
 	int max_h = gr_screen.max_h;
@@ -249,25 +241,23 @@ int VulkanDrawManager::zbufferSet(int mode)
 	}
 	gr_zbuffering_mode = mode;
 
-	if (stateTracker) {
-		gr_zbuffer_type zbufType;
-		switch (mode) {
-		case GR_ZBUFF_NONE:
-			zbufType = ZBUFFER_TYPE_NONE;
-			break;
-		case GR_ZBUFF_READ:
-			zbufType = ZBUFFER_TYPE_READ;
-			break;
-		case GR_ZBUFF_WRITE:
-			zbufType = ZBUFFER_TYPE_WRITE;
-			break;
-		case GR_ZBUFF_FULL:
-		default:
-			zbufType = ZBUFFER_TYPE_FULL;
-			break;
-		}
-		stateTracker->setZBufferMode(zbufType);
+	gr_zbuffer_type zbufType;
+	switch (mode) {
+	case GR_ZBUFF_NONE:
+		zbufType = ZBUFFER_TYPE_NONE;
+		break;
+	case GR_ZBUFF_READ:
+		zbufType = ZBUFFER_TYPE_READ;
+		break;
+	case GR_ZBUFF_WRITE:
+		zbufType = ZBUFFER_TYPE_WRITE;
+		break;
+	case GR_ZBUFF_FULL:
+	default:
+		zbufType = ZBUFFER_TYPE_FULL;
+		break;
 	}
+	stateTracker->setZBufferMode(zbufType);
 
 	return prev;
 }
@@ -275,7 +265,7 @@ int VulkanDrawManager::zbufferSet(int mode)
 void VulkanDrawManager::zbufferClear(int mode)
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -319,15 +309,13 @@ int VulkanDrawManager::stencilSet(int mode)
 	m_stencilMode = mode;
 	gr_stencil_mode = mode;
 
-	if (stateTracker) {
-		stateTracker->setStencilMode(mode);
+	stateTracker->setStencilMode(mode);
 
-		// Set stencil reference based on mode
-		if (mode == GR_STENCIL_READ || mode == GR_STENCIL_WRITE) {
-			stateTracker->setStencilReference(1);
-		} else {
-			stateTracker->setStencilReference(0);
-		}
+	// Set stencil reference based on mode
+	if (mode == GR_STENCIL_READ || mode == GR_STENCIL_WRITE) {
+		stateTracker->setStencilReference(1);
+	} else {
+		stateTracker->setStencilReference(0);
 	}
 
 	return prev;
@@ -336,7 +324,7 @@ int VulkanDrawManager::stencilSet(int mode)
 void VulkanDrawManager::stencilClear()
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -363,9 +351,7 @@ int VulkanDrawManager::setCull(int cull)
 	int prev = m_cullEnabled ? 1 : 0;
 	m_cullEnabled = (cull != 0);
 
-	if (stateTracker) {
-		stateTracker->setCullMode(m_cullEnabled);
-	}
+	stateTracker->setCullMode(m_cullEnabled);
 
 	return prev;
 }
@@ -379,7 +365,7 @@ void VulkanDrawManager::renderPrimitives(material* material_info, primitive_type
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		nprintf(("Vulkan", "VulkanDrawManager: No command buffer for renderPrimitives\n"));
 		return;
 	}
@@ -407,7 +393,7 @@ void VulkanDrawManager::renderPrimitivesBatched(batched_bitmap_material* materia
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -434,7 +420,7 @@ void VulkanDrawManager::renderPrimitivesParticle(particle_material* material_inf
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -456,7 +442,7 @@ void VulkanDrawManager::renderPrimitivesDistortion(distortion_material* material
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -475,7 +461,7 @@ void VulkanDrawManager::renderMovie(movie_material* material_info, primitive_typ
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -497,7 +483,7 @@ void VulkanDrawManager::renderNanoVG(nanovg_material* material_info, primitive_t
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -520,7 +506,7 @@ void VulkanDrawManager::renderRocketPrimitives(interface_material* material_info
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -555,7 +541,7 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -594,9 +580,6 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 
 	// Bind vertex buffer with the model's vertex offset
 	auto* bufferManager = getBufferManager();
-	if (!bufferManager) {
-		return;
-	}
 
 	vk::Buffer vbuffer = bufferManager->getVkBuffer(vert_source->Vbuffer_handle);
 	vk::Buffer ibuffer = bufferManager->getVkBuffer(vert_source->Ibuffer_handle);
@@ -662,14 +645,12 @@ void VulkanDrawManager::clearStates()
 	gr_global_zbuffering = 1;
 	gr_stencil_mode = GR_STENCIL_NONE;
 
-	if (stateTracker) {
-		stateTracker->setZBufferMode(ZBUFFER_TYPE_FULL);
-		stateTracker->setStencilMode(GR_STENCIL_NONE);
-		stateTracker->setCullMode(true);
-		stateTracker->setScissorEnabled(false);
-		stateTracker->setDepthBias(0.0f, 0.0f);
-		stateTracker->setLineWidth(1.0f);
-	}
+	stateTracker->setZBufferMode(ZBUFFER_TYPE_FULL);
+	stateTracker->setStencilMode(GR_STENCIL_NONE);
+	stateTracker->setCullMode(true);
+	stateTracker->setScissorEnabled(false);
+	stateTracker->setDepthBias(0.0f, 0.0f);
+	stateTracker->setLineWidth(1.0f);
 
 	// Clear pending uniform bindings
 	clearPendingUniformBindings();
@@ -745,7 +726,7 @@ PipelineConfig VulkanDrawManager::buildPipelineConfig(material* mat, primitive_t
 	// Get shader info from material
 	int shaderHandle = mat->get_shader_handle();
 	auto* shaderManager = getShaderManager();
-	if (shaderManager && shaderHandle >= 0) {
+	if (shaderHandle >= 0) {
 		const auto* shaderModule = shaderManager->getShaderByHandle(shaderHandle);
 		if (shaderModule) {
 			config.shaderType = shaderModule->type;
@@ -783,9 +764,7 @@ PipelineConfig VulkanDrawManager::buildPipelineConfig(material* mat, primitive_t
 
 	// Get current render pass from state tracker
 	auto* stateTracker = getStateTracker();
-	if (stateTracker) {
-		config.renderPass = stateTracker->getCurrentRenderPass();
-	}
+	config.renderPass = stateTracker->getCurrentRenderPass();
 
 	return config;
 }
@@ -795,7 +774,7 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 	auto* texManager = getTextureManager();
 	auto* descManager = getDescriptorManager();
 
-	if (!texManager || !descManager || !materialSet) {
+	if (!materialSet) {
 		return false;
 	}
 
@@ -989,7 +968,7 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 	auto* descManager = getDescriptorManager();
 	auto* bufferManager = getBufferManager();
 
-	if (!stateTracker || !pipelineManager || !mat || !layout || !bufferManager) {
+	if (!mat || !layout) {
 		return false;
 	}
 
@@ -1054,13 +1033,13 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 	// Vulkan requires all bindings in a descriptor set to be valid before use.
 	// After pool reset, descriptors contain undefined data. We MUST pre-initialize
 	// ALL bindings with fallback values, then overwrite with actual pending data.
-	if (descManager) {
+	{
 		// Get fallback resources for uninitialized bindings
 		vk::Buffer fallbackUBO = bufferManager->getFallbackUniformBuffer();
 		vk::DeviceSize fallbackUBOSize = static_cast<vk::DeviceSize>(bufferManager->getFallbackUniformBufferSize());
 		auto* texManager = getTextureManager();
-		vk::Sampler fallbackSampler = texManager ? texManager->getDefaultSampler() : vk::Sampler{};
-		vk::ImageView fallbackView = texManager ? texManager->getFallbackTextureView() : vk::ImageView{};
+		vk::Sampler fallbackSampler = texManager->getDefaultSampler();
+		vk::ImageView fallbackView = texManager->getFallbackTextureView();
 
 		// Set 0: Global - bindings: 0=Lights UBO, 1=DeferredGlobals UBO, 2=Shadow tex, 3=Env tex
 		vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
@@ -1187,13 +1166,7 @@ void VulkanDrawManager::bindVertexBuffer(gr_buffer_handle handle, size_t offset)
 	auto* bufferManager = getBufferManager();
 	auto* stateTracker = getStateTracker();
 
-	if (!bufferManager || !stateTracker || !handle.isValid()) {
-		static int warnCount = 0;
-		if (warnCount < 5) {
-			mprintf(("VulkanDrawManager::bindVertexBuffer - SKIP: bufMgr=%p tracker=%p handle.valid=%d\n",
-				bufferManager, stateTracker, handle.isValid() ? 1 : 0));
-			warnCount++;
-		}
+	if (!handle.isValid()) {
 		return;
 	}
 
@@ -1218,7 +1191,7 @@ void VulkanDrawManager::bindIndexBuffer(gr_buffer_handle handle)
 	auto* bufferManager = getBufferManager();
 	auto* stateTracker = getStateTracker();
 
-	if (!bufferManager || !stateTracker || !handle.isValid()) {
+	if (!handle.isValid()) {
 		return;
 	}
 
@@ -1231,7 +1204,7 @@ void VulkanDrawManager::bindIndexBuffer(gr_buffer_handle handle)
 void VulkanDrawManager::draw(primitive_type prim_type, int first_vertex, int vertex_count)
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		m_frameStats.noCommandBufferSkips++;
 		return;
 	}
@@ -1259,7 +1232,7 @@ void VulkanDrawManager::draw(primitive_type prim_type, int first_vertex, int ver
 void VulkanDrawManager::drawIndexed(primitive_type prim_type, int index_count, int first_index, int vertex_offset)
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker || !stateTracker->hasCommandBuffer()) {
+	if (!stateTracker->hasCommandBuffer()) {
 		m_frameStats.noCommandBufferSkips++;
 		return;
 	}

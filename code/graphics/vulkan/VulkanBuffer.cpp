@@ -13,6 +13,7 @@ VulkanBufferManager* g_bufferManager = nullptr;
 
 VulkanBufferManager* getBufferManager()
 {
+	Assertion(g_bufferManager != nullptr, "Vulkan BufferManager not initialized!");
 	return g_bufferManager;
 }
 
@@ -306,9 +307,7 @@ void VulkanBufferManager::deleteBuffer(gr_buffer_handle handle)
 	// Queue buffer for deferred destruction
 	auto* deletionQueue = getDeletionQueue();
 	if (bufferObj.buffer) {
-		if (deletionQueue) {
-			deletionQueue->queueBuffer(bufferObj.buffer, bufferObj.allocation);
-		}
+		deletionQueue->queueBuffer(bufferObj.buffer, bufferObj.allocation);
 		m_totalBufferMemory -= bufferObj.totalSize;
 	}
 	bufferObj.buffer = nullptr;
@@ -568,11 +567,9 @@ void VulkanBufferManager::bindUniformBuffer(uniform_block_type blockType, size_t
 	// Pass the handle, not the vk::Buffer - the buffer may be recreated before use
 	// The draw manager will add the frame base offset when actually binding
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->setPendingUniformBinding(blockType, buffer,
-		                                       static_cast<vk::DeviceSize>(offset),
-		                                       static_cast<vk::DeviceSize>(size));
-	}
+	drawManager->setPendingUniformBinding(blockType, buffer,
+	                                       static_cast<vk::DeviceSize>(offset),
+	                                       static_cast<vk::DeviceSize>(size));
 }
 
 vk::Buffer VulkanBufferManager::getVkBuffer(gr_buffer_handle handle) const
@@ -681,9 +678,7 @@ void VulkanBufferManager::queueDeferredDestruction(vk::Buffer buffer, VulkanAllo
 {
 	// Use the unified deletion queue for deferred destruction
 	auto* deletionQueue = getDeletionQueue();
-	if (deletionQueue) {
-		deletionQueue->queueBuffer(buffer, allocation);
-	}
+	deletionQueue->queueBuffer(buffer, allocation);
 }
 
 } // namespace vulkan

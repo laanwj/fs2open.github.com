@@ -130,34 +130,24 @@ void vulkan_set_default_material_uniforms(material* material_info)
 gr_buffer_handle vulkan_create_buffer(BufferType type, BufferUsageHint usage)
 {
 	auto* bufferManager = getBufferManager();
-	if (bufferManager) {
-		return bufferManager->createBuffer(type, usage);
-	}
-	return gr_buffer_handle::invalid();
+	return bufferManager->createBuffer(type, usage);
 }
 
 void vulkan_setup_frame()
 {
 	auto* renderer = getRendererInstance();
-	if (renderer) {
-		renderer->setupFrame();
-	}
+	renderer->setupFrame();
 }
 
 void vulkan_delete_buffer(gr_buffer_handle handle)
 {
 	auto* bufferManager = getBufferManager();
-	if (bufferManager) {
-		bufferManager->deleteBuffer(handle);
-	}
+	bufferManager->deleteBuffer(handle);
 }
 
 int vulkan_preload(int bitmap_num, int /*is_aabitmap*/)
 {
 	auto* texManager = getTextureManager();
-	if (!texManager) {
-		return 0;
-	}
 
 	// Check if texture is already loaded
 	auto* slot = texManager->getTextureSlot(bitmap_num);
@@ -198,13 +188,13 @@ int stub_save_screen() { return 1; }
 int vulkan_zbuffer_get()
 {
 	auto* drawManager = getDrawManager();
-	return drawManager ? drawManager->zbufferGet() : 0;
+	return drawManager->zbufferGet();
 }
 
 int vulkan_zbuffer_set(int mode)
 {
 	auto* drawManager = getDrawManager();
-	return drawManager ? drawManager->zbufferSet(mode) : 0;
+	return drawManager->zbufferSet(mode);
 }
 
 void gr_set_fill_mode_stub(int /*mode*/) {}
@@ -212,9 +202,7 @@ void gr_set_fill_mode_stub(int /*mode*/) {}
 void vulkan_clear()
 {
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->clear();
-	}
+	drawManager->clear();
 }
 
 void stub_free_screen(int /*id*/) {}
@@ -228,9 +216,7 @@ SCP_string stub_blob_screen() { return ""; }
 void vulkan_reset_clip()
 {
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->resetClip();
-	}
+	drawManager->resetClip();
 }
 
 void stub_restore_screen(int /*id*/) {}
@@ -238,17 +224,13 @@ void stub_restore_screen(int /*id*/) {}
 void vulkan_update_buffer_data(gr_buffer_handle handle, size_t size, const void* data)
 {
 	auto* bufferManager = getBufferManager();
-	if (bufferManager) {
-		bufferManager->updateBufferData(handle, size, data);
-	}
+	bufferManager->updateBufferData(handle, size, data);
 }
 
 void vulkan_update_buffer_data_offset(gr_buffer_handle handle, size_t offset, size_t size, const void* data)
 {
 	auto* bufferManager = getBufferManager();
-	if (bufferManager) {
-		bufferManager->updateBufferDataOffset(handle, offset, size, data);
-	}
+	bufferManager->updateBufferDataOffset(handle, offset, size, data);
 }
 
 void stub_update_transform_buffer(void* /*data*/, size_t /*size*/) {}
@@ -256,23 +238,19 @@ void stub_update_transform_buffer(void* /*data*/, size_t /*size*/) {}
 void vulkan_set_clear_color(int r, int g, int b)
 {
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->setClearColor(r, g, b);
-	}
+	drawManager->setClearColor(r, g, b);
 }
 
 void vulkan_set_clip(int x, int y, int w, int h, int resize_mode)
 {
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->setClip(x, y, w, h, resize_mode);
-	}
+	drawManager->setClip(x, y, w, h, resize_mode);
 }
 
 int vulkan_set_cull(int cull)
 {
 	auto* drawManager = getDrawManager();
-	return drawManager ? drawManager->setCull(cull) : 0;
+	return drawManager->setCull(cull);
 }
 
 int stub_set_color_buffer(int /*mode*/) { return 0; }
@@ -284,23 +262,19 @@ void stub_zbias_stub(int /*bias*/) {}
 void vulkan_zbuffer_clear(int mode)
 {
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->zbufferClear(mode);
-	}
+	drawManager->zbufferClear(mode);
 }
 
 int vulkan_stencil_set(int mode)
 {
 	auto* drawManager = getDrawManager();
-	return drawManager ? drawManager->stencilSet(mode) : 0;
+	return drawManager->stencilSet(mode);
 }
 
 void vulkan_stencil_clear()
 {
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->stencilClear();
-	}
+	drawManager->stencilClear();
 }
 
 int stub_alpha_mask_set(int /*mode*/, float /*alpha*/) { return 0; }
@@ -324,10 +298,9 @@ void vulkan_scene_texture_begin()
 	// Full implementation would switch to an offscreen FBO, but for now
 	// we render directly to the swap chain.
 
-	auto* drawManager = getDrawManager();
 	auto* stateTracker = getStateTracker();
 
-	if (drawManager && stateTracker && stateTracker->hasCommandBuffer()) {
+	if (stateTracker->hasCommandBuffer()) {
 		// Clear color buffer to black (matching OpenGL behavior)
 		auto cmdBuffer = stateTracker->getCommandBuffer();
 
@@ -383,67 +356,49 @@ void stub_draw_sphere(material* /*material_def*/, float /*rad*/) {}
 void vulkan_clear_states()
 {
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->clearStates();
-	}
+	drawManager->clearStates();
 }
 
 void vulkan_update_texture(int bitmap_handle, int bpp, const ubyte* data, int width, int height)
 {
 	auto* texManager = getTextureManager();
-	if (texManager) {
-		texManager->update_texture(bitmap_handle, bpp, data, width, height);
-	}
+	texManager->update_texture(bitmap_handle, bpp, data, width, height);
 }
 
 void vulkan_get_bitmap_from_texture(void* data_out, int bitmap_num)
 {
 	auto* texManager = getTextureManager();
-	if (texManager) {
-		texManager->get_bitmap_from_texture(data_out, bitmap_num);
-	}
+	texManager->get_bitmap_from_texture(data_out, bitmap_num);
 }
 
 int vulkan_bm_make_render_target(int handle, int* width, int* height, int* bpp, int* mm_lvl, int flags)
 {
 	auto* texManager = getTextureManager();
-	if (texManager) {
-		return texManager->bm_make_render_target(handle, width, height, bpp, mm_lvl, flags);
-	}
-	return 0;
+	return texManager->bm_make_render_target(handle, width, height, bpp, mm_lvl, flags);
 }
 
 int vulkan_bm_set_render_target(int handle, int face)
 {
 	auto* texManager = getTextureManager();
-	if (texManager) {
-		return texManager->bm_set_render_target(handle, face);
-	}
-	return 0;
+	return texManager->bm_set_render_target(handle, face);
 }
 
 void vulkan_bm_create(bitmap_slot* slot)
 {
 	auto* texManager = getTextureManager();
-	if (texManager) {
-		texManager->bm_create(slot);
-	}
+	texManager->bm_create(slot);
 }
 
 void vulkan_bm_free_data(bitmap_slot* slot, bool release)
 {
 	auto* texManager = getTextureManager();
-	if (texManager) {
-		texManager->bm_free_data(slot, release);
-	}
+	texManager->bm_free_data(slot, release);
 }
 
 void vulkan_bm_init(bitmap_slot* slot)
 {
 	auto* texManager = getTextureManager();
-	if (texManager) {
-		texManager->bm_init(slot);
-	}
+	texManager->bm_init(slot);
 }
 
 void stub_bm_page_in_start() {}
@@ -451,27 +406,19 @@ void stub_bm_page_in_start() {}
 bool vulkan_bm_data(int handle, bitmap* bm)
 {
 	auto* texManager = getTextureManager();
-	if (texManager) {
-		return texManager->bm_data(handle, bm);
-	}
-	return false;
+	return texManager->bm_data(handle, bm);
 }
 
 int vulkan_maybe_create_shader(shader_type shader_t, unsigned int flags)
 {
 	auto* shaderManager = getShaderManager();
-	if (shaderManager) {
-		return shaderManager->maybeCreateShader(shader_t, flags);
-	}
-	return -1;
+	return shaderManager->maybeCreateShader(shader_t, flags);
 }
 
 void vulkan_recompile_all_shaders(const std::function<void(size_t, size_t)>& progressCallback)
 {
 	auto* shaderManager = getShaderManager();
-	if (shaderManager) {
-		shaderManager->recompileAllShaders(progressCallback);
-	}
+	shaderManager->recompileAllShaders(progressCallback);
 }
 
 void stub_shadow_map_start(matrix4* /*shadow_view_matrix*/, const matrix* /*light_matrix*/, vec3d* /*eye_pos*/) {}
@@ -507,9 +454,7 @@ void vulkan_render_model(model_material* material_info,
 	// uniforms for SDR_TYPE_DEFAULT_MATERIAL, but models use SDR_TYPE_MODEL with ModelData.
 
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->renderModel(material_info, vert_source, bufferp, texi);
-	}
+	drawManager->renderModel(material_info, vert_source, bufferp, texi);
 }
 
 void vulkan_render_primitives(material* material_info,
@@ -525,9 +470,7 @@ void vulkan_render_primitives(material* material_info,
 	vulkan_set_default_material_uniforms(material_info);
 
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->renderPrimitives(material_info, prim_type, layout, offset, n_verts, buffer_handle, buffer_offset);
-	}
+	drawManager->renderPrimitives(material_info, prim_type, layout, offset, n_verts, buffer_handle, buffer_offset);
 }
 
 void vulkan_render_primitives_particle(particle_material* material_info,
@@ -541,9 +484,7 @@ void vulkan_render_primitives_particle(particle_material* material_info,
 	vulkan_set_default_material_uniforms(material_info);
 
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->renderPrimitivesParticle(material_info, prim_type, layout, offset, n_verts, buffer_handle);
-	}
+	drawManager->renderPrimitivesParticle(material_info, prim_type, layout, offset, n_verts, buffer_handle);
 }
 
 void vulkan_render_primitives_distortion(distortion_material* material_info,
@@ -557,9 +498,7 @@ void vulkan_render_primitives_distortion(distortion_material* material_info,
 	vulkan_set_default_material_uniforms(material_info);
 
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->renderPrimitivesDistortion(material_info, prim_type, layout, n_verts, buffer_handle);
-	}
+	drawManager->renderPrimitivesDistortion(material_info, prim_type, layout, n_verts, buffer_handle);
 }
 void vulkan_render_movie(movie_material* material_info,
 	primitive_type prim_type,
@@ -572,9 +511,7 @@ void vulkan_render_movie(movie_material* material_info,
 	vulkan_set_default_material_uniforms(material_info);
 
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->renderMovie(material_info, prim_type, layout, n_verts, buffer);
-	}
+	drawManager->renderMovie(material_info, prim_type, layout, n_verts, buffer);
 }
 
 void vulkan_render_nanovg(nanovg_material* material_info,
@@ -591,21 +528,14 @@ void vulkan_render_nanovg(nanovg_material* material_info,
 	// Disable hardware scissor to match nanovg_gl.h which calls glDisable(GL_SCISSOR_TEST).
 	// Without this, NanoVG draws get clipped by gr_set_clip's hardware scissor.
 	auto* stateTracker = getStateTracker();
-	bool savedScissorEnabled = false;
-	if (stateTracker) {
-		savedScissorEnabled = stateTracker->isScissorEnabled();
-		stateTracker->setScissorEnabled(false);
-	}
+	bool savedScissorEnabled = stateTracker->isScissorEnabled();
+	stateTracker->setScissorEnabled(false);
 
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->renderNanoVG(material_info, prim_type, layout, offset, n_verts, buffer_handle);
-	}
+	drawManager->renderNanoVG(material_info, prim_type, layout, offset, n_verts, buffer_handle);
 
 	// Restore scissor state
-	if (stateTracker) {
-		stateTracker->setScissorEnabled(savedScissorEnabled);
-	}
+	stateTracker->setScissorEnabled(savedScissorEnabled);
 }
 
 void vulkan_render_primitives_batched(batched_bitmap_material* material_info,
@@ -619,9 +549,7 @@ void vulkan_render_primitives_batched(batched_bitmap_material* material_info,
 	vulkan_set_default_material_uniforms(material_info);
 
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->renderPrimitivesBatched(material_info, prim_type, layout, offset, n_verts, buffer_handle);
-	}
+	drawManager->renderPrimitivesBatched(material_info, prim_type, layout, offset, n_verts, buffer_handle);
 }
 
 void vulkan_render_rocket_primitives(interface_material* material_info,
@@ -635,9 +563,7 @@ void vulkan_render_rocket_primitives(interface_material* material_info,
 	vulkan_set_default_material_uniforms(material_info);
 
 	auto* drawManager = getDrawManager();
-	if (drawManager) {
-		drawManager->renderRocketPrimitives(material_info, prim_type, layout, n_indices, vertex_buffer, index_buffer);
-	}
+	drawManager->renderRocketPrimitives(material_info, prim_type, layout, n_indices, vertex_buffer, index_buffer);
 }
 
 bool stub_is_capable(gr_capability /*capability*/) { return false; }
@@ -646,12 +572,7 @@ bool stub_get_property(gr_property p, void* dest)
 	if (p == gr_property::UNIFORM_BUFFER_OFFSET_ALIGNMENT) {
 		// Query actual alignment from Vulkan physical device
 		auto* renderer = getRendererInstance();
-		if (renderer) {
-			*reinterpret_cast<int*>(dest) = static_cast<int>(renderer->getMinUniformBufferOffsetAlignment());
-		} else {
-			// Fallback to safe default (256 is common max alignment requirement)
-			*reinterpret_cast<int*>(dest) = 256;
-		}
+		*reinterpret_cast<int*>(dest) = static_cast<int>(renderer->getMinUniformBufferOffsetAlignment());
 		return true;
 	}
 	return false;
@@ -738,16 +659,11 @@ void init_function_pointers()
 	gr_screen.gf_update_buffer_data_offset = vulkan_update_buffer_data_offset;
 	gr_screen.gf_map_buffer = [](gr_buffer_handle handle) -> void* {
 		auto* bufferManager = getBufferManager();
-		if (bufferManager) {
-			return bufferManager->mapBuffer(handle);
-		}
-		return nullptr;
+		return bufferManager->mapBuffer(handle);
 	};
 	gr_screen.gf_flush_mapped_buffer = [](gr_buffer_handle handle, size_t offset, size_t size) {
 		auto* bufferManager = getBufferManager();
-		if (bufferManager) {
-			bufferManager->flushMappedBuffer(handle, offset, size);
-		}
+		bufferManager->flushMappedBuffer(handle, offset, size);
 	};
 
 	gr_screen.gf_post_process_set_effect = stub_post_process_set_effect;
@@ -818,19 +734,13 @@ void init_function_pointers()
 
 	gr_screen.gf_bind_uniform_buffer = [](uniform_block_type blockType, size_t offset, size_t size, gr_buffer_handle buffer) {
 		auto* bufferManager = getBufferManager();
-		if (bufferManager) {
-			bufferManager->bindUniformBuffer(blockType, offset, size, buffer);
-		}
+		bufferManager->bindUniformBuffer(blockType, offset, size, buffer);
 	};
 
 	// Sync fence implementation for uniform buffer synchronization
 	// Tracks frame numbers to know when GPU work has completed
 	gr_screen.gf_sync_fence = []() -> gr_sync {
 		auto* renderer = getRendererInstance();
-		if (!renderer) {
-			return nullptr;
-		}
-
 		auto* sync = new VulkanSyncObject();
 		sync->frameNumber = renderer->getCurrentFrameNumber();
 		return static_cast<gr_sync>(sync);
@@ -842,10 +752,6 @@ void init_function_pointers()
 		}
 
 		auto* renderer = getRendererInstance();
-		if (!renderer) {
-			return true;
-		}
-
 		auto* syncObj = static_cast<VulkanSyncObject*>(sync);
 
 		// With MAX_FRAMES_IN_FLIGHT=2, if current frame >= syncFrame + 2, it's done
@@ -867,21 +773,19 @@ void init_function_pointers()
 
 	gr_screen.gf_set_viewport = [](int x, int y, int width, int height) {
 		auto* stateTracker = graphics::vulkan::getStateTracker();
-		if (stateTracker) {
-			if (gr_screen.rendering_to_texture == -1) {
-				// Screen rendering: use negative viewport height for OpenGL-compatible Y-up NDC
-				// (VK_KHR_maintenance1, core since Vulkan 1.1)
-				stateTracker->setViewport(
-					static_cast<float>(x),
-					static_cast<float>(gr_screen.max_h - y),
-					static_cast<float>(width),
-					static_cast<float>(-height));
-			} else {
-				// RTT: standard positive viewport (RTT projection matrix handles Y-flip)
-				stateTracker->setViewport(
-					static_cast<float>(x), static_cast<float>(y),
-					static_cast<float>(width), static_cast<float>(height));
-			}
+		if (gr_screen.rendering_to_texture == -1) {
+			// Screen rendering: use negative viewport height for OpenGL-compatible Y-up NDC
+			// (VK_KHR_maintenance1, core since Vulkan 1.1)
+			stateTracker->setViewport(
+				static_cast<float>(x),
+				static_cast<float>(gr_screen.max_h - y),
+				static_cast<float>(width),
+				static_cast<float>(-height));
+		} else {
+			// RTT: standard positive viewport (RTT projection matrix handles Y-flip)
+			stateTracker->setViewport(
+				static_cast<float>(x), static_cast<float>(y),
+				static_cast<float>(width), static_cast<float>(height));
 		}
 	};
 

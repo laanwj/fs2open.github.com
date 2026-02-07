@@ -8,6 +8,7 @@ static VulkanStateTracker* g_stateTracker = nullptr;
 
 VulkanStateTracker* getStateTracker()
 {
+	Assertion(g_stateTracker != nullptr, "Vulkan StateTracker not initialized!");
 	return g_stateTracker;
 }
 
