@@ -359,15 +359,17 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
 		// For now, recreate
 	}
 
-	// Free existing resources
+	// Defer destruction of existing resources — they may still be referenced
+	// by in-flight render or upload command buffers
 	if (ts->image) {
+		auto* deletionQueue = getDeletionQueue();
 		if (ts->imageView) {
-			m_device.destroyImageView(ts->imageView);
+			deletionQueue->queueImageView(ts->imageView);
 			ts->imageView = nullptr;
 		}
-		m_device.destroyImage(ts->image);
+		deletionQueue->queueImage(ts->image, ts->allocation);
 		ts->image = nullptr;
-		m_memoryManager->freeAllocation(ts->allocation);
+		ts->allocation = VulkanAllocation{};
 	}
 
 	// Create image
@@ -436,18 +438,11 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
 		m_memoryManager->unmapMemory(stagingAllocation);
 	}
 
-	// Transition image layout and copy
-	transitionImageLayout(ts->image, format, vk::ImageLayout::eUndefined,
-	                      vk::ImageLayout::eTransferDstOptimal, mipLevels);
-
-	copyBufferToImage(stagingBuffer, ts->image, width, height);
-
-	transitionImageLayout(ts->image, format, vk::ImageLayout::eTransferDstOptimal,
-	                      vk::ImageLayout::eShaderReadOnlyOptimal, mipLevels);
-
-	// Cleanup staging buffer
-	m_device.destroyBuffer(stagingBuffer);
-	m_memoryManager->freeAllocation(stagingAllocation);
+	// Record transitions + copy into a single command buffer and submit async
+	vk::CommandBuffer cmd = beginSingleTimeCommands();
+	recordUploadCommands(cmd, ts->image, stagingBuffer, format, width, height,
+	                     mipLevels, vk::ImageLayout::eUndefined);
+	submitUploadAsync(cmd, stagingBuffer, stagingAllocation);
 
 	// Update slot info
 	ts->width = width;
@@ -739,23 +734,14 @@ void VulkanTextureManager::update_texture(int bitmap_handle, int bpp, const ubyt
 		m_memoryManager->unmapMemory(stagingAllocation);
 	}
 
-	// Transition image layout to transfer destination
-	transitionImageLayout(ts->image, format, ts->currentLayout,
-	                      vk::ImageLayout::eTransferDstOptimal, ts->mipLevels);
-
-	// Copy data from staging buffer to image
-	copyBufferToImage(stagingBuffer, ts->image, w, h);
-
-	// Transition back to shader read-only
-	transitionImageLayout(ts->image, format, vk::ImageLayout::eTransferDstOptimal,
-	                      vk::ImageLayout::eShaderReadOnlyOptimal, ts->mipLevels);
+	// Record transitions + copy into a single command buffer and submit async
+	vk::CommandBuffer cmd = beginSingleTimeCommands();
+	recordUploadCommands(cmd, ts->image, stagingBuffer, format, w, h,
+	                     ts->mipLevels, ts->currentLayout);
+	submitUploadAsync(cmd, stagingBuffer, stagingAllocation);
 
 	// Update layout tracking
 	ts->currentLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-
-	// Cleanup staging buffer
-	m_device.destroyBuffer(stagingBuffer);
-	m_memoryManager->freeAllocation(stagingAllocation);
 }
 
 void VulkanTextureManager::get_bitmap_from_texture(void* data_out, int bitmap_num)
@@ -949,7 +935,7 @@ void VulkanTextureManager::flushCache()
 
 void VulkanTextureManager::frameStart()
 {
-	// Called at the start of each frame
+	processPendingCommandBuffers();
 }
 
 bool VulkanTextureManager::createImage(uint32_t width, uint32_t height, uint32_t mipLevels,
@@ -1062,6 +1048,113 @@ void VulkanTextureManager::endSingleTimeCommands(vk::CommandBuffer commandBuffer
 	m_graphicsQueue.waitIdle();
 
 	m_device.freeCommandBuffers(m_commandPool, commandBuffer);
+}
+
+void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image image,
+                                                 vk::Buffer stagingBuffer, vk::Format format,
+                                                 uint32_t width, uint32_t height,
+                                                 uint32_t mipLevels, vk::ImageLayout oldLayout)
+{
+	(void)format;  // May be needed for depth/stencil transitions in the future
+
+	// Barrier 1: oldLayout -> eTransferDstOptimal
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.oldLayout = oldLayout;
+		barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = mipLevels;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		if (oldLayout == vk::ImageLayout::eUndefined) {
+			barrier.srcAccessMask = {};
+			barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+			                    vk::PipelineStageFlagBits::eTransfer,
+			                    {}, nullptr, nullptr, barrier);
+		} else {
+			barrier.srcAccessMask = vk::AccessFlagBits::eMemoryWrite;
+			barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+			                    vk::PipelineStageFlagBits::eTransfer,
+			                    {}, nullptr, nullptr, barrier);
+		}
+	}
+
+	// Copy buffer to image
+	{
+		vk::BufferImageCopy region;
+		region.bufferOffset = 0;
+		region.bufferRowLength = 0;
+		region.bufferImageHeight = 0;
+		region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+		region.imageSubresource.mipLevel = 0;
+		region.imageSubresource.baseArrayLayer = 0;
+		region.imageSubresource.layerCount = 1;
+		region.imageOffset = vk::Offset3D(0, 0, 0);
+		region.imageExtent = vk::Extent3D(width, height, 1);
+
+		cmd.copyBufferToImage(stagingBuffer, image, vk::ImageLayout::eTransferDstOptimal, region);
+	}
+
+	// Barrier 2: eTransferDstOptimal -> eShaderReadOnlyOptimal
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = mipLevels;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+		barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+		cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+		                    vk::PipelineStageFlagBits::eFragmentShader,
+		                    {}, nullptr, nullptr, barrier);
+	}
+}
+
+void VulkanTextureManager::submitUploadAsync(vk::CommandBuffer cmd, vk::Buffer stagingBuffer,
+                                             VulkanAllocation stagingAllocation)
+{
+	cmd.end();
+
+	vk::SubmitInfo submitInfo;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &cmd;
+
+	m_graphicsQueue.submit(submitInfo, nullptr);
+
+	// Defer staging buffer destruction (2 frames matches MAX_FRAMES_IN_FLIGHT)
+	auto* deletionQueue = getDeletionQueue();
+	deletionQueue->queueBuffer(stagingBuffer, stagingAllocation);
+
+	// Defer command buffer free
+	m_pendingCommandBuffers.push_back({cmd, VulkanDeletionQueue::FRAMES_TO_WAIT});
+}
+
+void VulkanTextureManager::processPendingCommandBuffers()
+{
+	auto it = m_pendingCommandBuffers.begin();
+	while (it != m_pendingCommandBuffers.end()) {
+		if (it->framesRemaining == 0) {
+			m_device.freeCommandBuffers(m_commandPool, it->cb);
+			it = m_pendingCommandBuffers.erase(it);
+		} else {
+			it->framesRemaining--;
+			++it;
+		}
+	}
 }
 
 uint32_t VulkanTextureManager::calculateMipLevels(uint32_t width, uint32_t height)

@@ -208,14 +208,42 @@ private:
 	vk::CommandBuffer beginSingleTimeCommands();
 
 	/**
-	 * @brief End and submit single-time command buffer
+	 * @brief End and submit single-time command buffer (synchronous, blocks on waitIdle)
 	 */
 	void endSingleTimeCommands(vk::CommandBuffer commandBuffer);
+
+	/**
+	 * @brief Record layout transitions and buffer-to-image copy into a command buffer
+	 */
+	void recordUploadCommands(vk::CommandBuffer cmd, vk::Image image, vk::Buffer stagingBuffer,
+	                          vk::Format format, uint32_t width, uint32_t height,
+	                          uint32_t mipLevels, vk::ImageLayout oldLayout);
+
+	/**
+	 * @brief Submit an upload command buffer asynchronously and defer resource cleanup
+	 *
+	 * Submits without waitIdle. Queues staging buffer and command buffer for
+	 * deferred destruction/free after enough frames have elapsed.
+	 */
+	void submitUploadAsync(vk::CommandBuffer cmd, vk::Buffer stagingBuffer,
+	                       VulkanAllocation stagingAllocation);
+
+	/**
+	 * @brief Free command buffers whose GPU work has completed
+	 */
+	void processPendingCommandBuffers();
 
 	/**
 	 * @brief Calculate number of mipmap levels
 	 */
 	static uint32_t calculateMipLevels(uint32_t width, uint32_t height);
+
+	// Deferred command buffer free list
+	struct PendingCommandBuffer {
+		vk::CommandBuffer cb;
+		uint32_t framesRemaining;
+	};
+	SCP_vector<PendingCommandBuffer> m_pendingCommandBuffers;
 
 	vk::Device m_device;
 	vk::PhysicalDevice m_physicalDevice;

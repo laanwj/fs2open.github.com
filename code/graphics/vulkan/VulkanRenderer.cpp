@@ -951,6 +951,11 @@ void VulkanRenderer::setupFrame()
 		m_bufferManager->processDeferredDestructions();
 	}
 
+	// Free completed texture upload command buffers
+	if (m_textureManager) {
+		m_textureManager->frameStart();
+	}
+
 	// Allocate command buffer for this frame
 	vk::CommandBufferAllocateInfo cmdBufferAlloc;
 	cmdBufferAlloc.commandPool = m_graphicsCommandPool.get();
@@ -1144,14 +1149,16 @@ void VulkanRenderer::flip()
 		m_bufferManager->setCurrentFrame(m_currentFrame);
 	}
 
-	// Process deferred resource deletions
-	// Resources queued 2+ frames ago are now safe to delete
+	mprintf(("VulkanRenderer::flip - about to acquireNextSwapChainImage, m_currentFrame now %d\n", m_currentFrame));
+	acquireNextSwapChainImage();
+
+	// Process deferred resource deletions AFTER the fence wait in
+	// acquireNextSwapChainImage, so we know the previous frame's commands
+	// (including async upload CBs) have completed before destroying resources.
 	if (m_deletionQueue) {
 		m_deletionQueue->processDestructions();
 	}
 
-	mprintf(("VulkanRenderer::flip - about to acquireNextSwapChainImage, m_currentFrame now %d\n", m_currentFrame));
-	acquireNextSwapChainImage();
 	mprintf(("=== VulkanRenderer::flip END ===\n"));
 }
 
