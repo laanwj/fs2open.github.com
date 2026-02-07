@@ -977,18 +977,14 @@ void VulkanRenderer::setupFrame()
 	// from N frames ago (where N = number of swap chain images).
 	if (m_previousSwapChainImage != UINT32_MAX &&
 	    m_previousSwapChainImage != m_currentSwapChainImage) {
-		// Ensure the frame that last rendered to the source image has completed.
-		// Without this, the presentation engine could still be reading the image
-		// when we transition it to eTransferSrcOptimal for the blit.
-		if (m_swapChainImageRenderImage[m_previousSwapChainImage]) {
-			m_swapChainImageRenderImage[m_previousSwapChainImage]->waitForFinish();
-		}
-
 		auto srcImage = m_swapChainImages[m_previousSwapChainImage];
 		auto dstImage = m_swapChainImages[m_currentSwapChainImage];
 
 		// Transition src: ePresentSrcKHR -> eTransferSrcOptimal
 		// Transition dst: ePresentSrcKHR -> eTransferDstOptimal
+		// srcStageMask = eColorAttachmentOutput ensures the previous frame's
+		// rendering (submitted earlier on the same queue) is complete before
+		// the blit reads from it — no CPU fence wait needed.
 		std::array<vk::ImageMemoryBarrier, 2> preBlitBarriers;
 		preBlitBarriers[0].oldLayout = vk::ImageLayout::ePresentSrcKHR;
 		preBlitBarriers[0].newLayout = vk::ImageLayout::eTransferSrcOptimal;
@@ -996,7 +992,7 @@ void VulkanRenderer::setupFrame()
 		preBlitBarriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		preBlitBarriers[0].image = srcImage;
 		preBlitBarriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-		preBlitBarriers[0].srcAccessMask = vk::AccessFlagBits::eMemoryRead;
+		preBlitBarriers[0].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
 		preBlitBarriers[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
 
 		preBlitBarriers[1].oldLayout = vk::ImageLayout::ePresentSrcKHR;
@@ -1005,11 +1001,11 @@ void VulkanRenderer::setupFrame()
 		preBlitBarriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		preBlitBarriers[1].image = dstImage;
 		preBlitBarriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-		preBlitBarriers[1].srcAccessMask = vk::AccessFlagBits::eMemoryRead;
+		preBlitBarriers[1].srcAccessMask = {};
 		preBlitBarriers[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
 
 		m_currentCommandBuffer.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTopOfPipe,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
 			vk::PipelineStageFlagBits::eTransfer,
 			{}, nullptr, nullptr, preBlitBarriers);
 
@@ -1036,7 +1032,7 @@ void VulkanRenderer::setupFrame()
 		postBlitBarriers[0].image = srcImage;
 		postBlitBarriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
 		postBlitBarriers[0].srcAccessMask = vk::AccessFlagBits::eTransferRead;
-		postBlitBarriers[0].dstAccessMask = vk::AccessFlagBits::eMemoryRead;
+		postBlitBarriers[0].dstAccessMask = {};
 
 		postBlitBarriers[1].oldLayout = vk::ImageLayout::eTransferDstOptimal;
 		postBlitBarriers[1].newLayout = vk::ImageLayout::ePresentSrcKHR;
