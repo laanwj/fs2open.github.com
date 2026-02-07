@@ -24,6 +24,20 @@ static constexpr uint32_t TEXTURE_BINDING_HEIGHT_MAP = 4;
 static constexpr uint32_t TEXTURE_BINDING_AMBIENT_MAP = 5;
 static constexpr uint32_t TEXTURE_BINDING_MISC_MAP = 6;
 
+// Convert FSO texture addressing mode to Vulkan sampler address mode
+static vk::SamplerAddressMode convertTextureAddressing(int mode)
+{
+	switch (mode) {
+	case TMAP_ADDRESS_MIRROR:
+		return vk::SamplerAddressMode::eMirroredRepeat;
+	case TMAP_ADDRESS_CLAMP:
+		return vk::SamplerAddressMode::eClampToEdge;
+	case TMAP_ADDRESS_WRAP:
+	default:
+		return vk::SamplerAddressMode::eRepeat;
+	}
+}
+
 // Global draw manager pointer
 static VulkanDrawManager* g_drawManager = nullptr;
 
@@ -631,6 +645,28 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 	);
 }
 
+void VulkanDrawManager::setFillMode(int mode)
+{
+	m_fillMode = mode;
+}
+
+int VulkanDrawManager::setColorBuffer(int mode)
+{
+	int prev = m_colorBufferEnabled ? 1 : 0;
+	m_colorBufferEnabled = (mode != 0);
+	return prev;
+}
+
+void VulkanDrawManager::setTextureAddressing(int mode)
+{
+	m_textureAddressing = mode;
+}
+
+void VulkanDrawManager::setDepthBiasEnabled(bool enabled)
+{
+	m_depthBiasEnabled = enabled;
+}
+
 void VulkanDrawManager::clearStates()
 {
 	auto* stateTracker = getStateTracker();
@@ -639,6 +675,10 @@ void VulkanDrawManager::clearStates()
 	m_zbufferMode = GR_ZBUFF_FULL;
 	m_stencilMode = GR_STENCIL_NONE;
 	m_cullEnabled = true;
+	m_fillMode = GR_FILL_MODE_SOLID;
+	m_colorBufferEnabled = true;
+	m_textureAddressing = TMAP_ADDRESS_WRAP;
+	m_depthBiasEnabled = false;
 
 	gr_zbuffering = 1;
 	gr_zbuffering_mode = GR_ZBUFF_FULL;
@@ -762,6 +802,15 @@ PipelineConfig VulkanDrawManager::buildPipelineConfig(material* mat, primitive_t
 	// Color write mask
 	config.colorWriteMask = mat->get_color_mask();
 
+	// Override color write mask if color buffer writes are disabled
+	if (!m_colorBufferEnabled) {
+		config.colorWriteMask = {false, false, false, false};
+	}
+
+	// Fill mode and depth bias from draw manager state
+	config.fillMode = m_fillMode;
+	config.depthBiasEnabled = m_depthBiasEnabled;
+
 	// Get current render pass from state tracker
 	auto* stateTracker = getStateTracker();
 	config.renderPass = stateTracker->getCurrentRenderPass();
@@ -778,8 +827,10 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 		return false;
 	}
 
-	// Get default sampler and fallback texture for unbound slots
-	vk::Sampler defaultSampler = texManager->getDefaultSampler();
+	// Get sampler matching current texture addressing mode and fallback texture
+	vk::SamplerAddressMode addressMode = convertTextureAddressing(m_textureAddressing);
+	vk::Sampler sampler = texManager->getSampler(
+		vk::Filter::eLinear, vk::Filter::eLinear, addressMode, true, 0.0f, true);
 	vk::ImageView fallbackView = texManager->getFallbackTextureView();
 
 	// Check for movie material - needs special YUV texture handling
@@ -791,7 +842,7 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 
 		// Initialize all slots with fallback
 		for (auto& info : textureInfos) {
-			info.sampler = defaultSampler;
+			info.sampler = sampler;
 			info.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 			info.imageView = fallbackView;
 		}
@@ -827,7 +878,7 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 
 	// Initialize all slots with fallback texture (1x1 white)
 	for (auto& info : textureInfos) {
-		info.sampler = defaultSampler;
+		info.sampler = sampler;
 		info.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 		info.imageView = fallbackView;  // Fallback texture for unbound slots
 	}

@@ -41,6 +41,12 @@ struct PipelineConfig {
 	material::StencilOp frontStencilOp;
 	material::StencilOp backStencilOp;
 
+	// Fill mode (0 = solid, 1 = wireframe)
+	int fillMode = 0;
+
+	// Depth bias
+	bool depthBiasEnabled = false;
+
 	// Color write mask
 	bvec4 colorWriteMask = {true, true, true, true};
 

@@ -781,7 +781,7 @@ vk::Sampler VulkanTextureManager::getSampler(vk::Filter magFilter, vk::Filter mi
 	samplerInfo.addressModeV = addressMode;
 	samplerInfo.addressModeW = addressMode;
 	samplerInfo.anisotropyEnable = enableAnisotropy && (m_maxAnisotropy > 1.0f);
-	samplerInfo.maxAnisotropy = std::min(maxAnisotropy, m_maxAnisotropy);
+	samplerInfo.maxAnisotropy = std::max(1.0f, std::min(maxAnisotropy > 0.0f ? maxAnisotropy : m_maxAnisotropy, m_maxAnisotropy));
 	samplerInfo.borderColor = vk::BorderColor::eIntOpaqueBlack;
 	samplerInfo.unnormalizedCoordinates = false;
 	samplerInfo.compareEnable = false;

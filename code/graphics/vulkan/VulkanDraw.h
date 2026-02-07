@@ -171,7 +171,33 @@ public:
 	void renderModel(model_material* material_info, indexed_vertex_source* vert_source,
 	                 vertex_buffer* bufferp, size_t texi);
 
-	// ========== State ==========
+	// ========== Render State ==========
+
+	/**
+	 * @brief Set polygon fill mode (GR_FILL_MODE_SOLID / GR_FILL_MODE_WIRE)
+	 */
+	void setFillMode(int mode);
+
+	/**
+	 * @brief Set color buffer write enable
+	 * @return Previous state (1 = was enabled, 0 = was disabled)
+	 */
+	int setColorBuffer(int mode);
+
+	/**
+	 * @brief Set texture addressing mode (TMAP_ADDRESS_WRAP/MIRROR/CLAMP)
+	 */
+	void setTextureAddressing(int mode);
+
+	/**
+	 * @brief Enable or disable depth bias in pipeline
+	 */
+	void setDepthBiasEnabled(bool enabled);
+
+	/**
+	 * @brief Get current texture addressing mode
+	 */
+	int getTextureAddressing() const { return m_textureAddressing; }
 
 	/**
 	 * @brief Clear all graphics states to defaults
@@ -248,6 +274,10 @@ private:
 	int m_zbufferMode = GR_ZBUFF_FULL;
 	int m_stencilMode = GR_STENCIL_NONE;
 	bool m_cullEnabled = true;
+	int m_fillMode = GR_FILL_MODE_SOLID;
+	bool m_colorBufferEnabled = true;
+	int m_textureAddressing = TMAP_ADDRESS_WRAP;
+	bool m_depthBiasEnabled = false;
 
 	// Pending uniform buffer bindings (indexed by uniform_block_type)
 	static constexpr size_t NUM_UNIFORM_BLOCK_TYPES = static_cast<size_t>(uniform_block_type::NUM_BLOCK_TYPES);

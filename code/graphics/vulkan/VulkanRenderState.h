@@ -96,7 +96,8 @@ vk::PipelineDepthStencilStateCreateInfo createDepthStencilState(
 vk::PipelineRasterizationStateCreateInfo createRasterizationState(
 	bool cullEnabled = true,
 	int fillMode = 0,
-	bool frontFaceCW = true);
+	bool frontFaceCW = true,
+	bool depthBiasEnabled = false);
 
 } // namespace vulkan
 } // namespace graphics

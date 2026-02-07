@@ -236,7 +236,8 @@ vk::PipelineDepthStencilStateCreateInfo createDepthStencilState(
 vk::PipelineRasterizationStateCreateInfo createRasterizationState(
 	bool cullEnabled,
 	int fillMode,
-	bool frontFaceCW)
+	bool frontFaceCW,
+	bool depthBiasEnabled)
 {
 	vk::PipelineRasterizationStateCreateInfo info;
 
@@ -245,13 +246,10 @@ vk::PipelineRasterizationStateCreateInfo createRasterizationState(
 
 	// Fill mode
 	switch (fillMode) {
-	case 1: // Wireframe
+	case GR_FILL_MODE_WIRE:
 		info.polygonMode = vk::PolygonMode::eLine;
 		break;
-	case 2: // Point
-		info.polygonMode = vk::PolygonMode::ePoint;
-		break;
-	case 0: // Fill
+	case GR_FILL_MODE_SOLID:
 	default:
 		info.polygonMode = vk::PolygonMode::eFill;
 		break;
@@ -260,8 +258,8 @@ vk::PipelineRasterizationStateCreateInfo createRasterizationState(
 	info.cullMode = convertCullMode(cullEnabled);
 	info.frontFace = frontFaceCW ? vk::FrontFace::eClockwise : vk::FrontFace::eCounterClockwise;
 
-	// Depth bias - set dynamically
-	info.depthBiasEnable = VK_FALSE;
+	// Depth bias - actual values set dynamically via vkCmdSetDepthBias
+	info.depthBiasEnable = depthBiasEnabled ? VK_TRUE : VK_FALSE;
 	info.depthBiasConstantFactor = 0.0f;
 	info.depthBiasClamp = 0.0f;
 	info.depthBiasSlopeFactor = 0.0f;

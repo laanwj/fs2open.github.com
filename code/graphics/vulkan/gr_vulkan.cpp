@@ -197,7 +197,12 @@ int vulkan_zbuffer_set(int mode)
 	return drawManager->zbufferSet(mode);
 }
 
-void gr_set_fill_mode_stub(int /*mode*/) {}
+void vulkan_set_fill_mode(int mode)
+{
+	auto* drawManager = getDrawManager();
+	// GR_FILL_MODE_WIRE = 1, GR_FILL_MODE_SOLID = 2
+	drawManager->setFillMode(mode);
+}
 
 void vulkan_clear()
 {
@@ -253,11 +258,35 @@ int vulkan_set_cull(int cull)
 	return drawManager->setCull(cull);
 }
 
-int stub_set_color_buffer(int /*mode*/) { return 0; }
+int vulkan_set_color_buffer(int mode)
+{
+	auto* drawManager = getDrawManager();
+	return drawManager->setColorBuffer(mode);
+}
 
-void stub_set_texture_addressing(int /*mode*/) {}
+void vulkan_set_texture_addressing(int mode)
+{
+	auto* drawManager = getDrawManager();
+	drawManager->setTextureAddressing(mode);
+}
 
-void stub_zbias_stub(int /*bias*/) {}
+void vulkan_zbias(int bias)
+{
+	auto* stateTracker = getStateTracker();
+	auto* drawManager = getDrawManager();
+
+	if (bias) {
+		drawManager->setDepthBiasEnabled(true);
+		if (bias < 0) {
+			stateTracker->setDepthBias(1.0f, static_cast<float>(-bias));
+		} else {
+			stateTracker->setDepthBias(0.0f, static_cast<float>(-bias));
+		}
+	} else {
+		drawManager->setDepthBiasEnabled(false);
+		stateTracker->setDepthBias(0.0f, 0.0f);
+	}
+}
 
 void vulkan_zbuffer_clear(int mode)
 {
@@ -277,7 +306,15 @@ void vulkan_stencil_clear()
 	drawManager->stencilClear();
 }
 
-int stub_alpha_mask_set(int /*mode*/, float /*alpha*/) { return 0; }
+int vulkan_alpha_mask_set(int mode, float alpha)
+{
+	if (mode) {
+		GL_alpha_threshold = alpha;
+	} else {
+		GL_alpha_threshold = 0.0f;
+	}
+	return mode;
+}
 
 void stub_post_process_set_effect(const char* /*name*/, int /*x*/, const vec3d* /*rgb*/) {}
 
@@ -349,7 +386,14 @@ void stub_deferred_lighting_end() {}
 
 void stub_deferred_lighting_finish() {}
 
-void stub_set_line_width(float /*width*/) {}
+void vulkan_set_line_width(float width)
+{
+	auto* stateTracker = getStateTracker();
+	if (width <= 1.0f) {
+		stateTracker->setLineWidth(width);
+	}
+	gr_screen.line_width = width;
+}
 
 void stub_draw_sphere(material* /*material_def*/, float /*rad*/) {}
 
@@ -722,7 +766,7 @@ void init_function_pointers()
 	gr_screen.gf_stencil_set = vulkan_stencil_set;
 	gr_screen.gf_stencil_clear = vulkan_stencil_clear;
 
-	gr_screen.gf_alpha_mask_set = stub_alpha_mask_set;
+	gr_screen.gf_alpha_mask_set = vulkan_alpha_mask_set;
 
 	gr_screen.gf_save_screen = stub_save_screen;
 	gr_screen.gf_restore_screen = stub_restore_screen;
@@ -740,15 +784,15 @@ void init_function_pointers()
 	gr_screen.gf_bm_set_render_target = vulkan_bm_set_render_target;
 
 	gr_screen.gf_set_cull = vulkan_set_cull;
-	gr_screen.gf_set_color_buffer = stub_set_color_buffer;
+	gr_screen.gf_set_color_buffer = vulkan_set_color_buffer;
 
 	gr_screen.gf_set_clear_color = vulkan_set_clear_color;
 
 	gr_screen.gf_preload = vulkan_preload;
 
-	gr_screen.gf_set_texture_addressing = stub_set_texture_addressing;
-	gr_screen.gf_zbias = stub_zbias_stub;
-	gr_screen.gf_set_fill_mode = gr_set_fill_mode_stub;
+	gr_screen.gf_set_texture_addressing = vulkan_set_texture_addressing;
+	gr_screen.gf_zbias = vulkan_zbias;
+	gr_screen.gf_set_fill_mode = vulkan_set_fill_mode;
 
 	gr_screen.gf_create_buffer = vulkan_create_buffer;
 	gr_screen.gf_delete_buffer = vulkan_delete_buffer;
@@ -783,7 +827,7 @@ void init_function_pointers()
 	gr_screen.gf_imgui_new_frame = vulkan_imgui_new_frame;
 	gr_screen.gf_imgui_render_draw_data = vulkan_imgui_render_draw_data;
 
-	gr_screen.gf_set_line_width = stub_set_line_width;
+	gr_screen.gf_set_line_width = vulkan_set_line_width;
 
 	gr_screen.gf_sphere = stub_draw_sphere;
 

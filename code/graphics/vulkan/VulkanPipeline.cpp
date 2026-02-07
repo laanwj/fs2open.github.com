@@ -42,6 +42,8 @@ bool PipelineConfig::operator==(const PipelineConfig& other) const
 	       colorWriteMask.y == other.colorWriteMask.y &&
 	       colorWriteMask.z == other.colorWriteMask.z &&
 	       colorWriteMask.w == other.colorWriteMask.w &&
+	       fillMode == other.fillMode &&
+	       depthBiasEnabled == other.depthBiasEnabled &&
 	       renderPass == other.renderPass &&
 	       subpass == other.subpass &&
 	       colorAttachmentCount == other.colorAttachmentCount;
@@ -71,9 +73,11 @@ size_t PipelineConfig::hash() const
 	h ^= std::hash<int>()(static_cast<int>(backStencilOp.successOperation)) << 43;
 	h ^= std::hash<int>()((colorWriteMask.x ? 1 : 0) | (colorWriteMask.y ? 2 : 0) |
 	                      (colorWriteMask.z ? 4 : 0) | (colorWriteMask.w ? 8 : 0)) << 44;
-	h ^= std::hash<uint64_t>()(reinterpret_cast<uint64_t>(static_cast<VkRenderPass>(renderPass))) << 45;
-	h ^= std::hash<uint32_t>()(subpass) << 49;
-	h ^= std::hash<uint32_t>()(colorAttachmentCount) << 53;
+	h ^= std::hash<int>()(fillMode) << 45;
+	h ^= std::hash<bool>()(depthBiasEnabled) << 46;
+	h ^= std::hash<uint64_t>()(reinterpret_cast<uint64_t>(static_cast<VkRenderPass>(renderPass))) << 47;
+	h ^= std::hash<uint32_t>()(subpass) << 51;
+	h ^= std::hash<uint32_t>()(colorAttachmentCount) << 55;
 
 	return h;
 }
@@ -327,7 +331,8 @@ vk::UniquePipeline VulkanPipelineManager::createPipeline(const PipelineConfig& c
 	viewportState.pScissors = nullptr;   // Dynamic
 
 	// Rasterization state
-	vk::PipelineRasterizationStateCreateInfo rasterizer = createRasterizationState(config.cullEnabled);
+	vk::PipelineRasterizationStateCreateInfo rasterizer = createRasterizationState(
+		config.cullEnabled, config.fillMode, true, config.depthBiasEnabled);
 
 	// Multisample state
 	vk::PipelineMultisampleStateCreateInfo multisampling;
