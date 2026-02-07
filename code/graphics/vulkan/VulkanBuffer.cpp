@@ -376,16 +376,31 @@ bool VulkanBufferManager::createOrResizeBuffer(VulkanBufferObject& bufferObj, si
 		return false;
 	}
 
-	// Copy existing data from old buffer to new buffer (current frame's span)
+	// Copy existing data from old buffer to new buffer
 	if (oldBuffer && oldSpanSize > 0) {
 		void* oldMapped = m_memoryManager->mapMemory(oldAllocation);
 		void* newMapped = m_memoryManager->mapMemory(bufferObj.allocation);
 
 		if (oldMapped && newMapped) {
-			// Copy all frame spans that had data
-			size_t copySize = std::min(oldTotalSize, requiredTotal);
-			memcpy(newMapped, oldMapped, copySize);
-			m_memoryManager->flushMemory(bufferObj.allocation, 0, copySize);
+			if (bufferObj.isStreaming()) {
+				// Copy each frame's span individually to preserve frame layout.
+				// Old and new span sizes differ, so a bulk memcpy would misalign
+				// frame 1+ data across the new span boundaries.
+				for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+					size_t oldFrameOffset = frame * oldSpanSize;
+					size_t newFrameOffset = frame * spanSize;
+					size_t copySize = std::min(oldSpanSize, spanSize);
+					memcpy(static_cast<uint8_t*>(newMapped) + newFrameOffset,
+					       static_cast<uint8_t*>(oldMapped) + oldFrameOffset,
+					       copySize);
+				}
+				m_memoryManager->flushMemory(bufferObj.allocation, 0, requiredTotal);
+			} else {
+				// Static buffer: single span, simple copy
+				size_t copySize = std::min(oldTotalSize, requiredTotal);
+				memcpy(newMapped, oldMapped, copySize);
+				m_memoryManager->flushMemory(bufferObj.allocation, 0, copySize);
+			}
 		}
 
 		if (oldMapped) m_memoryManager->unmapMemory(oldAllocation);
@@ -563,12 +578,14 @@ void VulkanBufferManager::flushMappedBuffer(gr_buffer_handle handle, size_t offs
 
 void VulkanBufferManager::bindUniformBuffer(uniform_block_type blockType, size_t offset, size_t size, gr_buffer_handle buffer)
 {
-	// Tell the draw manager about this pending binding
-	// Pass the handle, not the vk::Buffer - the buffer may be recreated before use
-	// The draw manager will add the frame base offset when actually binding
+	// Resolve the full offset NOW (frame base + caller offset) to prevent stale
+	// lastWriteStreamOffset if the same streaming buffer is updated again before draw.
+	// The vk::Buffer is still looked up at draw time (via handle) to survive buffer recreation.
+	size_t resolvedOffset = getFrameBaseOffset(buffer) + offset;
+
 	auto* drawManager = getDrawManager();
 	drawManager->setPendingUniformBinding(blockType, buffer,
-	                                       static_cast<vk::DeviceSize>(offset),
+	                                       static_cast<vk::DeviceSize>(resolvedOffset),
 	                                       static_cast<vk::DeviceSize>(size));
 }
 
@@ -644,34 +661,6 @@ const VulkanBufferObject* VulkanBufferManager::getBufferObject(gr_buffer_handle 
 		return nullptr;
 	}
 	return &m_buffers[handle.value()];
-}
-
-void VulkanBufferManager::processDeferredDestructions()
-{
-	if (m_pendingDestructions.empty()) {
-		return;
-	}
-
-	// Process pending destructions - only destroy buffers that have waited enough frames
-	// This ensures all in-flight command buffers have completed using the buffer
-	auto it = m_pendingDestructions.begin();
-	while (it != m_pendingDestructions.end()) {
-		if (it->framesRemaining > 0) {
-			// Still waiting - decrement counter and keep in list
-			it->framesRemaining--;
-			++it;
-		} else {
-			// Ready to destroy
-			if (it->buffer) {
-				m_device.destroyBuffer(it->buffer);
-			}
-			if (it->allocation.memory != VK_NULL_HANDLE) {
-				m_memoryManager->freeAllocation(it->allocation);
-			}
-
-			it = m_pendingDestructions.erase(it);
-		}
-	}
 }
 
 void VulkanBufferManager::queueDeferredDestruction(vk::Buffer buffer, VulkanAllocation allocation, size_t size)

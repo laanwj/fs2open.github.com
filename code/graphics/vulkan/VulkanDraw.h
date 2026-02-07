@@ -13,11 +13,13 @@ namespace vulkan {
 
 /**
  * @brief Tracks a pending uniform buffer binding
- * Stores handle instead of raw vk::Buffer to survive buffer recreation
+ * Stores handle instead of raw vk::Buffer to survive buffer recreation.
+ * The offset is fully resolved at bind time (includes frame base offset)
+ * to prevent stale lastWriteStreamOffset if the buffer is updated between bind and draw.
  */
 struct PendingUniformBinding {
-	gr_buffer_handle bufferHandle;  // FSO buffer handle - lookup vk::Buffer at bind time
-	vk::DeviceSize offset = 0;
+	gr_buffer_handle bufferHandle;  // FSO buffer handle - lookup vk::Buffer at draw time
+	vk::DeviceSize offset = 0;     // Fully resolved offset (frame base + caller offset)
 	vk::DeviceSize size = 0;
 	bool valid = false;
 };

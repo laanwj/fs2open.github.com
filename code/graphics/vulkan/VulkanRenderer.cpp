@@ -953,11 +953,6 @@ void VulkanRenderer::setupFrame()
 		return;
 	}
 
-	// Process deferred buffer destructions
-	if (m_bufferManager) {
-		m_bufferManager->processDeferredDestructions();
-	}
-
 	// Free completed texture upload command buffers
 	if (m_textureManager) {
 		m_textureManager->frameStart();
@@ -982,6 +977,13 @@ void VulkanRenderer::setupFrame()
 	// from N frames ago (where N = number of swap chain images).
 	if (m_previousSwapChainImage != UINT32_MAX &&
 	    m_previousSwapChainImage != m_currentSwapChainImage) {
+		// Ensure the frame that last rendered to the source image has completed.
+		// Without this, the presentation engine could still be reading the image
+		// when we transition it to eTransferSrcOptimal for the blit.
+		if (m_swapChainImageRenderImage[m_previousSwapChainImage]) {
+			m_swapChainImageRenderImage[m_previousSwapChainImage]->waitForFinish();
+		}
+
 		auto srcImage = m_swapChainImages[m_previousSwapChainImage];
 		auto dstImage = m_swapChainImages[m_currentSwapChainImage];
 

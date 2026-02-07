@@ -1028,15 +1028,15 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 		return false;
 	}
 
-	// Helper to get vk::Buffer from handle at bind time (survives buffer recreation)
+	// Helper to get vk::Buffer from handle at draw time (survives buffer recreation)
 	auto getBuffer = [bufferManager](const PendingUniformBinding& binding) -> vk::Buffer {
 		return bufferManager->getVkBuffer(binding.bufferHandle);
 	};
 
-	// Helper to adjust offset for ring buffer - adds frame base offset
-	auto getAdjustedOffset = [bufferManager](const PendingUniformBinding& binding) -> vk::DeviceSize {
-		size_t frameOffset = bufferManager->getFrameBaseOffset(binding.bufferHandle);
-		return static_cast<vk::DeviceSize>(frameOffset + binding.offset);
+	// Offset is already fully resolved at bind time (includes frame base offset)
+	// to prevent stale lastWriteStreamOffset if the buffer is updated between bind and draw.
+	auto getResolvedOffset = [](const PendingUniformBinding& binding) -> vk::DeviceSize {
+		return binding.offset;
 	};
 
 	m_frameStats.applyMaterialCalls++;
@@ -1124,7 +1124,7 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 				    setIndex == DescriptorSetIndex::Global) {
 					descManager->updateUniformBuffer(globalSet, binding,
 					                                  getBuffer(m_pendingUniformBindings[i]),
-					                                  getAdjustedOffset(m_pendingUniformBindings[i]),
+					                                  getResolvedOffset(m_pendingUniformBindings[i]),
 					                                  m_pendingUniformBindings[i].size);
 				}
 			}
@@ -1157,7 +1157,7 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 				    setIndex == DescriptorSetIndex::Material) {
 					descManager->updateUniformBuffer(materialSet, binding,
 					                                  getBuffer(m_pendingUniformBindings[i]),
-					                                  getAdjustedOffset(m_pendingUniformBindings[i]),
+					                                  getResolvedOffset(m_pendingUniformBindings[i]),
 					                                  m_pendingUniformBindings[i].size);
 				}
 			}
@@ -1191,7 +1191,7 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 				    setIndex == DescriptorSetIndex::PerDraw) {
 					descManager->updateUniformBuffer(perDrawSet, binding,
 					                                  getBuffer(m_pendingUniformBindings[i]),
-					                                  getAdjustedOffset(m_pendingUniformBindings[i]),
+					                                  getResolvedOffset(m_pendingUniformBindings[i]),
 					                                  m_pendingUniformBindings[i].size);
 				}
 			}
@@ -1253,7 +1253,9 @@ void VulkanDrawManager::bindIndexBuffer(gr_buffer_handle handle)
 
 	vk::Buffer buffer = bufferManager->getVkBuffer(handle);
 	if (buffer) {
-		stateTracker->bindIndexBuffer(buffer, 0, vk::IndexType::eUint32);
+		// Add frame base offset for ring buffer support (mirrors bindVertexBuffer)
+		size_t frameOffset = bufferManager->getFrameBaseOffset(handle);
+		stateTracker->bindIndexBuffer(buffer, static_cast<vk::DeviceSize>(frameOffset), vk::IndexType::eUint32);
 	}
 }
 

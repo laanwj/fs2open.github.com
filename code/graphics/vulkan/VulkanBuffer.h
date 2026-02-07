@@ -52,18 +52,6 @@ struct VulkanBufferObject {
 };
 
 /**
- * @brief Pending buffer destruction entry
- * Buffers destroyed mid-frame are queued for deferred destruction
- * Must wait for all in-flight frames to complete before actual destruction
- */
-struct PendingBufferDestruction {
-	vk::Buffer buffer;
-	VulkanAllocation allocation;
-	size_t size;
-	uint32_t framesRemaining;  // Number of frames to wait before destruction
-};
-
-/**
  * @brief Manages GPU buffer creation, updates, and destruction
  *
  * This class handles all buffer operations for the Vulkan renderer including
@@ -224,12 +212,6 @@ public:
 	 */
 	size_t getFallbackUniformBufferSize() const { return FALLBACK_UNIFORM_BUFFER_SIZE; }
 
-	/**
-	 * @brief Process deferred buffer destructions from previous frame
-	 * Called at frame start to destroy buffers that were queued last frame
-	 */
-	void processDeferredDestructions();
-
 private:
 	/**
 	 * @brief Queue a buffer for deferred destruction
@@ -270,9 +252,6 @@ private:
 
 	SCP_vector<VulkanBufferObject> m_buffers;
 	SCP_vector<int> m_freeIndices;  // Recycled buffer indices
-
-	// Deferred destruction queue - buffers destroyed mid-frame are queued here
-	SCP_vector<PendingBufferDestruction> m_pendingDestructions;
 
 	// Fallback color buffer containing white (1,1,1,1) for vertex data without colors
 	vk::Buffer m_fallbackColorBuffer;
