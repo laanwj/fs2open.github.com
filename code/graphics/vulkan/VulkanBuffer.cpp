@@ -433,11 +433,16 @@ void VulkanBufferManager::updateBufferData(gr_buffer_handle handle, size_t size,
 			bufferObj.lastResetFrame = m_currentFrame;
 		}
 
-		// Ensure span is large enough for all sub-allocations this frame
+		// Ensure span is large enough for all sub-allocations this frame.
+		// Only grow, never shrink — shrinking spanSize would cause frame spans
+		// to overlap in the ring buffer (frame 1 data overlapping frame 0 data
+		// that the GPU may still be reading).
 		size_t neededSpan = bufferObj.streamCursor + size;
-		if (!createOrResizeBuffer(bufferObj, neededSpan)) {
-			mprintf(("Failed to create/resize buffer for streaming update!\n"));
-			return;
+		if (neededSpan > bufferObj.spanSize || !bufferObj.buffer) {
+			if (!createOrResizeBuffer(bufferObj, neededSpan)) {
+				mprintf(("Failed to create/resize buffer for streaming update!\n"));
+				return;
+			}
 		}
 
 		// Write at the cursor position within this frame's span
