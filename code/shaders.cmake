@@ -29,6 +29,8 @@ set(SHADERS_SKIP_STRUCT_GEN
 	${SHADER_DIR}/main.vert
 	${SHADER_DIR}/rocketui.frag
 	${SHADER_DIR}/rocketui.vert
+	${SHADER_DIR}/nanovg.frag
+	${SHADER_DIR}/nanovg.vert
 )
 
 target_sources(code PRIVATE ${SHADERS})
