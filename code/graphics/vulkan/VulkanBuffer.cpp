@@ -630,6 +630,16 @@ size_t VulkanBufferManager::getFrameBaseOffset(gr_buffer_handle handle) const
 		return 0;
 	}
 
+	// Catch stale streaming offsets: if a streaming buffer has a non-zero
+	// lastWriteStreamOffset from a previous frame, the offset would be wrong
+	// (pointing into the previous upload's region within the current frame's span).
+	// This indicates a buffer is being bound for rendering without being uploaded first.
+	Assertion(bufferObj.lastWriteStreamOffset == 0 || bufferObj.lastResetFrame == m_currentFrame,
+		"Stale lastWriteStreamOffset %zu on streaming buffer (handle %d): "
+		"lastResetFrame=%u but currentFrame=%u. Buffer bound without upload this frame!",
+		bufferObj.lastWriteStreamOffset, handle.value(),
+		bufferObj.lastResetFrame, m_currentFrame);
+
 	// Return the offset for the current frame's span, plus the stream sub-allocation
 	// offset for the most recent upload. This ensures vertex buffer bindings point to
 	// the correct data region when a streaming buffer is updated multiple times per frame.

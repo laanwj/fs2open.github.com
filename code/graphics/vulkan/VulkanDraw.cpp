@@ -1033,6 +1033,7 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 
 		// Set 0: Global - bindings: 0=Lights UBO, 1=DeferredGlobals UBO, 2=Shadow tex, 3=Env tex
 		vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
+		Assertion(globalSet, "Failed to allocate Global descriptor set — draw would use stale descriptors!");
 		if (globalSet) {
 			// Pre-initialize ALL bindings with fallback values
 			if (fallbackUBO) {
@@ -1067,6 +1068,7 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 
 		// Set 1: Material - bindings: 0=ModelData UBO, 1=Texture array, 2=DecalGlobals UBO
 		vk::DescriptorSet materialSet = descManager->allocateFrameSet(DescriptorSetIndex::Material);
+		Assertion(materialSet, "Failed to allocate Material descriptor set — draw would use stale descriptors!");
 		if (materialSet) {
 			// Pre-initialize UBO bindings with fallback
 			if (fallbackUBO) {
@@ -1101,6 +1103,7 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 
 		// Set 2: PerDraw - bindings: 0=GenericData, 1=Matrices, 2=NanoVGData, 3=DecalInfo, 4=MovieData
 		vk::DescriptorSet perDrawSet = descManager->allocateFrameSet(DescriptorSetIndex::PerDraw);
+		Assertion(perDrawSet, "Failed to allocate PerDraw descriptor set — draw would use stale descriptors!");
 		if (perDrawSet) {
 			// Pre-initialize ALL UBO bindings with fallback
 			if (fallbackUBO) {
@@ -1166,12 +1169,6 @@ void VulkanDrawManager::bindVertexBuffer(gr_buffer_handle handle, size_t offset)
 		// This maps the caller's offset into the current frame's span
 		size_t frameOffset = bufferManager->getFrameBaseOffset(handle);
 		size_t totalOffset = frameOffset + offset;
-
-		static int bindCount = 0;
-		if (bindCount < 10) {
-			mprintf(("VulkanDrawManager::bindVertexBuffer #%d - handle=%d offset=%zu frameOffset=%zu total=%zu\n",
-				bindCount++, handle.value(), offset, frameOffset, totalOffset));
-		}
 		stateTracker->bindVertexBuffer(0, buffer, static_cast<vk::DeviceSize>(totalOffset));
 	}
 }
@@ -1197,6 +1194,9 @@ void VulkanDrawManager::draw(primitive_type prim_type, int first_vertex, int ver
 {
 	auto* stateTracker = getStateTracker();
 
+	Assertion(stateTracker->getCurrentPipeline(),
+		"draw() called with no bound pipeline! prim_type=%d first_vertex=%d vertex_count=%d",
+		static_cast<int>(prim_type), first_vertex, vertex_count);
 	if (!stateTracker->getCurrentPipeline()) {
 		m_frameStats.noPipelineSkips++;
 		return;
@@ -1221,6 +1221,9 @@ void VulkanDrawManager::drawIndexed(primitive_type prim_type, int index_count, i
 {
 	auto* stateTracker = getStateTracker();
 
+	Assertion(stateTracker->getCurrentPipeline(),
+		"drawIndexed() called with no bound pipeline! prim_type=%d index_count=%d first_index=%d vertex_offset=%d",
+		static_cast<int>(prim_type), index_count, first_index, vertex_offset);
 	if (!stateTracker->getCurrentPipeline()) {
 		m_frameStats.noPipelineSkips++;
 		return;
@@ -1369,14 +1372,6 @@ void vulkan_set_default_material_uniforms(material* material_info)
 	data->color.a1d[1] = clr.xyzw.y;
 	data->color.a1d[2] = clr.xyzw.z;
 	data->color.a1d[3] = clr.xyzw.w;
-
-	static int debugCount = 0;
-	if (debugCount < 5) {
-		mprintf(("Vulkan GenericData: noTex=%d, alphaTex=%d, srgb=%d, intensity=%.2f, color=(%.2f,%.2f,%.2f,%.2f), alphaThresh=%.2f\n",
-			data->noTexturing, data->alphaTexture, data->srgb, data->intensity,
-			clr.xyzw.x, clr.xyzw.y, clr.xyzw.z, clr.xyzw.w, data->alphaThreshold));
-		debugCount++;
-	}
 
 	// Clip plane
 	const auto& clip_plane = material_info->get_clip_plane();
