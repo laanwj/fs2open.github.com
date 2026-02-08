@@ -540,10 +540,8 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 	vk::Buffer vbuffer = bufferManager->getVkBuffer(vert_source->Vbuffer_handle);
 	vk::Buffer ibuffer = bufferManager->getVkBuffer(vert_source->Ibuffer_handle);
 
-	if (!vbuffer || !ibuffer) {
-		nprintf(("Vulkan", "VulkanDrawManager: renderModel failed to get Vulkan buffers\n"));
-		return;
-	}
+	Assertion(vbuffer, "VulkanDrawManager::renderModel got null vertex buffer from valid handle!");
+	Assertion(ibuffer, "VulkanDrawManager::renderModel got null index buffer from valid handle!");
 
 	// Bind vertex buffer at offset 0 (start of heap buffer), matching OpenGL behavior.
 	// The Base_vertex_offset in drawIndexed handles the heap allocation offset.

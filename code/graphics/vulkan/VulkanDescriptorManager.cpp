@@ -144,8 +144,7 @@ void VulkanDescriptorManager::updateUniformBuffer(vk::DescriptorSet set, uint32_
                                                    vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range)
 {
 	if (!buffer) {
-		mprintf(("VulkanDescriptorManager: Skipping null buffer for binding %u\n", binding));
-		return;
+		return;  // No buffer for this binding — fallback UBO already pre-initialized
 	}
 
 	vk::DescriptorBufferInfo bufferInfo;

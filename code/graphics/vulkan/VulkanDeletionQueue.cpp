@@ -43,7 +43,8 @@ void VulkanDeletionQueue::shutdown()
 
 void VulkanDeletionQueue::queueBuffer(vk::Buffer buffer, VulkanAllocation allocation)
 {
-	if (!m_initialized || !buffer) {
+	Assertion(m_initialized, "VulkanDeletionQueue::queueBuffer called before initialization!");
+	if (!buffer) {
 		return;
 	}
 
@@ -55,7 +56,8 @@ void VulkanDeletionQueue::queueBuffer(vk::Buffer buffer, VulkanAllocation alloca
 
 void VulkanDeletionQueue::queueImage(vk::Image image, VulkanAllocation allocation)
 {
-	if (!m_initialized || !image) {
+	Assertion(m_initialized, "VulkanDeletionQueue::queueImage called before initialization!");
+	if (!image) {
 		return;
 	}
 
@@ -67,7 +69,8 @@ void VulkanDeletionQueue::queueImage(vk::Image image, VulkanAllocation allocatio
 
 void VulkanDeletionQueue::queueImageView(vk::ImageView imageView)
 {
-	if (!m_initialized || !imageView) {
+	Assertion(m_initialized, "VulkanDeletionQueue::queueImageView called before initialization!");
+	if (!imageView) {
 		return;
 	}
 
@@ -79,7 +82,8 @@ void VulkanDeletionQueue::queueImageView(vk::ImageView imageView)
 
 void VulkanDeletionQueue::queueFramebuffer(vk::Framebuffer framebuffer)
 {
-	if (!m_initialized || !framebuffer) {
+	Assertion(m_initialized, "VulkanDeletionQueue::queueFramebuffer called before initialization!");
+	if (!framebuffer) {
 		return;
 	}
 
@@ -91,7 +95,8 @@ void VulkanDeletionQueue::queueFramebuffer(vk::Framebuffer framebuffer)
 
 void VulkanDeletionQueue::queueRenderPass(vk::RenderPass renderPass)
 {
-	if (!m_initialized || !renderPass) {
+	Assertion(m_initialized, "VulkanDeletionQueue::queueRenderPass called before initialization!");
+	if (!renderPass) {
 		return;
 	}
 
@@ -103,7 +108,8 @@ void VulkanDeletionQueue::queueRenderPass(vk::RenderPass renderPass)
 
 void VulkanDeletionQueue::queueSampler(vk::Sampler sampler)
 {
-	if (!m_initialized || !sampler) {
+	Assertion(m_initialized, "VulkanDeletionQueue::queueSampler called before initialization!");
+	if (!sampler) {
 		return;
 	}
 
@@ -115,7 +121,8 @@ void VulkanDeletionQueue::queueSampler(vk::Sampler sampler)
 
 void VulkanDeletionQueue::processDestructions()
 {
-	if (!m_initialized || m_pendingDestructions.empty()) {
+	Assertion(m_initialized, "VulkanDeletionQueue::processDestructions called before initialization!");
+	if (m_pendingDestructions.empty()) {
 		return;
 	}
 

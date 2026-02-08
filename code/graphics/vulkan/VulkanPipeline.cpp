@@ -11,6 +11,7 @@ static VulkanPipelineManager* g_pipelineManager = nullptr;
 
 VulkanPipelineManager* getPipelineManager()
 {
+	Assertion(g_pipelineManager != nullptr, "Vulkan PipelineManager not initialized!");
 	return g_pipelineManager;
 }
 
@@ -126,9 +127,7 @@ void VulkanPipelineManager::shutdown()
 
 vk::Pipeline VulkanPipelineManager::getPipeline(const PipelineConfig& config, const vertex_layout& vertexLayout)
 {
-	if (!m_initialized) {
-		return {};
-	}
+	Assertion(m_initialized, "VulkanPipelineManager::getPipeline called before initialization!");
 
 	// Update vertex layout hash in config
 	PipelineConfig fullConfig = config;

@@ -184,9 +184,13 @@ void VulkanStateTracker::bindPipeline(vk::Pipeline pipeline, vk::PipelineLayout 
 void VulkanStateTracker::bindDescriptorSet(DescriptorSetIndex setIndex, vk::DescriptorSet set,
                                             const SCP_vector<uint32_t>& dynamicOffsets)
 {
+	Assertion(m_cmdBuffer, "bindDescriptorSet called without active command buffer!");
+	Assertion(m_currentPipelineLayout, "bindDescriptorSet called without bound pipeline layout!");
+	Assertion(set, "bindDescriptorSet called with null descriptor set!");
+
 	uint32_t index = static_cast<uint32_t>(setIndex);
 
-	if (m_boundDescriptorSets[index] != set && set && m_cmdBuffer && m_currentPipelineLayout) {
+	if (m_boundDescriptorSets[index] != set) {
 		m_cmdBuffer.bindDescriptorSets(
 			vk::PipelineBindPoint::eGraphics,
 			m_currentPipelineLayout,
@@ -201,16 +205,16 @@ void VulkanStateTracker::bindDescriptorSet(DescriptorSetIndex setIndex, vk::Desc
 
 void VulkanStateTracker::bindVertexBuffer(uint32_t binding, vk::Buffer buffer, vk::DeviceSize offset)
 {
-	if (m_cmdBuffer && buffer) {
-		m_cmdBuffer.bindVertexBuffers(binding, 1, &buffer, &offset);
-	}
+	Assertion(m_cmdBuffer, "bindVertexBuffer called without active command buffer!");
+	Assertion(buffer, "bindVertexBuffer called with null buffer!");
+	m_cmdBuffer.bindVertexBuffers(binding, 1, &buffer, &offset);
 }
 
 void VulkanStateTracker::bindIndexBuffer(vk::Buffer buffer, vk::DeviceSize offset, vk::IndexType indexType)
 {
-	if (m_cmdBuffer && buffer) {
-		m_cmdBuffer.bindIndexBuffer(buffer, offset, indexType);
-	}
+	Assertion(m_cmdBuffer, "bindIndexBuffer called without active command buffer!");
+	Assertion(buffer, "bindIndexBuffer called with null buffer!");
+	m_cmdBuffer.bindIndexBuffer(buffer, offset, indexType);
 }
 
 void VulkanStateTracker::setClearColor(float r, float g, float b, float a)
@@ -223,9 +227,7 @@ void VulkanStateTracker::setClearColor(float r, float g, float b, float a)
 
 void VulkanStateTracker::applyDynamicState()
 {
-	if (!m_cmdBuffer) {
-		return;
-	}
+	Assertion(m_cmdBuffer, "applyDynamicState called without active command buffer!");
 
 	if (m_viewportDirty) {
 		m_cmdBuffer.setViewport(0, 1, &m_viewport);

@@ -9,6 +9,7 @@ static VulkanShaderManager* g_shaderManager = nullptr;
 
 VulkanShaderManager* getShaderManager()
 {
+	Assertion(g_shaderManager != nullptr, "Vulkan ShaderManager not initialized!");
 	return g_shaderManager;
 }
 
