@@ -13,6 +13,7 @@
 #include "backends/imgui_impl_vulkan.h"
 #include "osapi/osapi.h"
 
+#include "bmpman/bmpman.h"
 #include "cmdline/cmdline.h"
 #include "graphics/2d.h"
 #include "graphics/matrix.h"
@@ -192,13 +193,70 @@ void vulkan_sync_delete(gr_sync sync)
 	}
 }
 
+// ========== Save/Restore screen (for popups) ==========
+
+static ubyte* Vulkan_saved_screen = nullptr;
+static int Vulkan_saved_screen_id = -1;
+
+int vulkan_save_screen()
+{
+	if (Vulkan_saved_screen) {
+		// Already have a saved screen
+		return -1;
+	}
+
+	ubyte* pixels = nullptr;
+	int bmpId = renderer_instance->saveScreen(&pixels);
+
+	if (bmpId < 0) {
+		return -1;
+	}
+
+	Vulkan_saved_screen = pixels;
+	Vulkan_saved_screen_id = bmpId;
+	return Vulkan_saved_screen_id;
+}
+
+void vulkan_restore_screen(int bmp_id)
+{
+	gr_reset_clip();
+
+	if (!Vulkan_saved_screen) {
+		gr_clear();
+		return;
+	}
+
+	Assert((bmp_id < 0) || (bmp_id == Vulkan_saved_screen_id));
+
+	if (Vulkan_saved_screen_id < 0) {
+		return;
+	}
+
+	gr_set_bitmap(Vulkan_saved_screen_id);
+	gr_bitmap(0, 0, GR_RESIZE_NONE);
+}
+
+void vulkan_free_screen(int bmp_id)
+{
+	if (!Vulkan_saved_screen) {
+		return;
+	}
+
+	vm_free(Vulkan_saved_screen);
+	Vulkan_saved_screen = nullptr;
+
+	Assert((bmp_id < 0) || (bmp_id == Vulkan_saved_screen_id));
+
+	if (Vulkan_saved_screen_id >= 0) {
+		bm_release(Vulkan_saved_screen_id);
+		Vulkan_saved_screen_id = -1;
+	}
+}
+
 // ========== Stub functions (not yet implemented) ==========
 
 void stub_print_screen(const char* /*filename*/) {}
 SCP_string stub_blob_screen() { return ""; }
-int stub_save_screen() { return 1; }
-void stub_restore_screen(int /*id*/) {}
-void stub_free_screen(int /*id*/) {}
 void stub_get_region(int /*front*/, int /*w*/, int /*h*/, ubyte* /*data*/) {}
 void stub_bm_page_in_start() {}
 void stub_update_transform_buffer(void* /*data*/, size_t /*size*/) {}
@@ -269,9 +327,9 @@ void init_function_pointers()
 
 	gr_screen.gf_alpha_mask_set = vulkan_alpha_mask_set;
 
-	gr_screen.gf_save_screen = stub_save_screen;
-	gr_screen.gf_restore_screen = stub_restore_screen;
-	gr_screen.gf_free_screen = stub_free_screen;
+	gr_screen.gf_save_screen = vulkan_save_screen;
+	gr_screen.gf_restore_screen = vulkan_restore_screen;
+	gr_screen.gf_free_screen = vulkan_free_screen;
 
 	gr_screen.gf_get_region = stub_get_region;
 

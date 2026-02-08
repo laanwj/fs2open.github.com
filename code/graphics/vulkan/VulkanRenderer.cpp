@@ -4,6 +4,7 @@
 #include "VulkanBuffer.h"
 #include "VulkanTexture.h"
 
+#include "bmpman/bmpman.h"
 #include "globalincs/version.h"
 
 #include "backends/imgui_impl_sdl.h"
@@ -855,12 +856,13 @@ void VulkanRenderer::createDepthResources()
 }
 void VulkanRenderer::createRenderPass()
 {
-	// Attachment 0: Color - use eLoad to preserve previous frame contents
-	// (matches OpenGL behavior where framebuffer persists between frames)
+	// Attachment 0: Color - clear each frame
+	// UI screens draw their own full-screen backgrounds; 3D clears via scene_texture_begin.
+	// Popups that need previous frame content use gr_save_screen/gr_restore_screen.
 	vk::AttachmentDescription colorAttachment;
 	colorAttachment.format = m_swapChainImageFormat;
 	colorAttachment.samples = vk::SampleCountFlagBits::e1;
-	colorAttachment.loadOp = vk::AttachmentLoadOp::eLoad;
+	colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
 	colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
 	colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
 	colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
@@ -972,84 +974,6 @@ void VulkanRenderer::setupFrame()
 	beginInfo.flags |= vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
 	m_currentCommandBuffer.begin(beginInfo);
 
-	// Blit previous frame's swap chain image to the current one so that
-	// loadOp=eLoad gives us the last presented frame, not stale content
-	// from N frames ago (where N = number of swap chain images).
-	if (m_previousSwapChainImage != UINT32_MAX &&
-	    m_previousSwapChainImage != m_currentSwapChainImage) {
-		auto srcImage = m_swapChainImages[m_previousSwapChainImage];
-		auto dstImage = m_swapChainImages[m_currentSwapChainImage];
-
-		// Transition src: ePresentSrcKHR -> eTransferSrcOptimal
-		// Transition dst: ePresentSrcKHR -> eTransferDstOptimal
-		// srcStageMask = eColorAttachmentOutput ensures the previous frame's
-		// rendering (submitted earlier on the same queue) is complete before
-		// the blit reads from it — no CPU fence wait needed.
-		std::array<vk::ImageMemoryBarrier, 2> preBlitBarriers;
-		preBlitBarriers[0].oldLayout = vk::ImageLayout::ePresentSrcKHR;
-		preBlitBarriers[0].newLayout = vk::ImageLayout::eTransferSrcOptimal;
-		preBlitBarriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		preBlitBarriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		preBlitBarriers[0].image = srcImage;
-		preBlitBarriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-		preBlitBarriers[0].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-		preBlitBarriers[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
-
-		preBlitBarriers[1].oldLayout = vk::ImageLayout::ePresentSrcKHR;
-		preBlitBarriers[1].newLayout = vk::ImageLayout::eTransferDstOptimal;
-		preBlitBarriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		preBlitBarriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		preBlitBarriers[1].image = dstImage;
-		preBlitBarriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-		preBlitBarriers[1].srcAccessMask = {};
-		preBlitBarriers[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-
-		m_currentCommandBuffer.pipelineBarrier(
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, nullptr, nullptr, preBlitBarriers);
-
-		// Copy the image (same size, no scaling needed)
-		vk::ImageCopy copyRegion;
-		copyRegion.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		copyRegion.srcOffset = vk::Offset3D(0, 0, 0);
-		copyRegion.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		copyRegion.dstOffset = vk::Offset3D(0, 0, 0);
-		copyRegion.extent = vk::Extent3D(m_swapChainExtent.width, m_swapChainExtent.height, 1);
-
-		m_currentCommandBuffer.copyImage(
-			srcImage, vk::ImageLayout::eTransferSrcOptimal,
-			dstImage, vk::ImageLayout::eTransferDstOptimal,
-			copyRegion);
-
-		// Transition src back: eTransferSrcOptimal -> ePresentSrcKHR
-		// Transition dst back: eTransferDstOptimal -> ePresentSrcKHR
-		std::array<vk::ImageMemoryBarrier, 2> postBlitBarriers;
-		postBlitBarriers[0].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
-		postBlitBarriers[0].newLayout = vk::ImageLayout::ePresentSrcKHR;
-		postBlitBarriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		postBlitBarriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		postBlitBarriers[0].image = srcImage;
-		postBlitBarriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-		postBlitBarriers[0].srcAccessMask = vk::AccessFlagBits::eTransferRead;
-		postBlitBarriers[0].dstAccessMask = {};
-
-		postBlitBarriers[1].oldLayout = vk::ImageLayout::eTransferDstOptimal;
-		postBlitBarriers[1].newLayout = vk::ImageLayout::ePresentSrcKHR;
-		postBlitBarriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		postBlitBarriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		postBlitBarriers[1].image = dstImage;
-		postBlitBarriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-		postBlitBarriers[1].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-		postBlitBarriers[1].dstAccessMask = vk::AccessFlagBits::eColorAttachmentRead
-		                                  | vk::AccessFlagBits::eColorAttachmentWrite;
-
-		m_currentCommandBuffer.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			{}, nullptr, nullptr, postBlitBarriers);
-	}
-
 	if (m_descriptorManager) {
 		m_descriptorManager->beginFrame();
 	}
@@ -1072,7 +996,7 @@ void VulkanRenderer::setupFrame()
 	renderPassBegin.renderArea.extent = m_swapChainExtent;
 
 	std::array<vk::ClearValue, 2> clearValues;
-	clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});  // Unused (loadOp=eLoad), but must be provided
+	clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});  // Clear to black each frame
 	clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);  // Clear depth to far plane
 
 	renderPassBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
@@ -1135,8 +1059,7 @@ void VulkanRenderer::flip()
 	// Submit and present
 	m_frames[m_currentFrame]->submitAndPresent(m_currentCommandBuffers);
 
-	// Track which swap chain image was just presented so we can blit
-	// its contents to the next frame's swap chain image in setupFrame()
+	// Track which swap chain image was just presented so saveScreen() can read it
 	m_previousSwapChainImage = m_currentSwapChainImage;
 
 	// Clear current command buffer reference
@@ -1165,6 +1088,194 @@ void VulkanRenderer::flip()
 	}
 
 	mprintf(("=== VulkanRenderer::flip END ===\n"));
+}
+
+int VulkanRenderer::saveScreen(ubyte** outPixels)
+{
+	*outPixels = nullptr;
+
+	if (m_previousSwapChainImage == UINT32_MAX) {
+		mprintf(("VulkanRenderer::saveScreen - no previous frame available\n"));
+		return -1;
+	}
+
+	if (!m_frameInProgress) {
+		mprintf(("VulkanRenderer::saveScreen - no frame in progress\n"));
+		return -1;
+	}
+
+	auto prevImage = m_swapChainImages[m_previousSwapChainImage];
+	uint32_t w = m_swapChainExtent.width;
+	uint32_t h = m_swapChainExtent.height;
+	vk::DeviceSize bufferSize = static_cast<vk::DeviceSize>(w) * h * 4;
+
+	// End the current render pass so we can record transfer commands
+	m_currentCommandBuffer.endRenderPass();
+
+	// --- One-shot command buffer to copy previous frame to staging buffer ---
+
+	vk::CommandBufferAllocateInfo cmdAlloc;
+	cmdAlloc.commandPool = m_graphicsCommandPool.get();
+	cmdAlloc.level = vk::CommandBufferLevel::ePrimary;
+	cmdAlloc.commandBufferCount = 1;
+
+	auto cmdBuffers = m_device->allocateCommandBuffers(cmdAlloc);
+	auto cmd = cmdBuffers.front();
+
+	vk::CommandBufferBeginInfo beginInfo;
+	beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+	cmd.begin(beginInfo);
+
+	// Transition previous swap chain image for transfer read
+	vk::ImageMemoryBarrier preBarrier;
+	preBarrier.oldLayout = vk::ImageLayout::ePresentSrcKHR;
+	preBarrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+	preBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	preBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	preBarrier.image = prevImage;
+	preBarrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+	preBarrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+	preBarrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+
+	cmd.pipelineBarrier(
+		vk::PipelineStageFlagBits::eColorAttachmentOutput,
+		vk::PipelineStageFlagBits::eTransfer,
+		{}, nullptr, nullptr, preBarrier);
+
+	// Create staging buffer for readback
+	vk::BufferCreateInfo bufferInfo;
+	bufferInfo.size = bufferSize;
+	bufferInfo.usage = vk::BufferUsageFlagBits::eTransferDst;
+	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+	auto stagingBuffer = m_device->createBuffer(bufferInfo);
+
+	VulkanAllocation stagingAlloc{};
+	if (!m_memoryManager->allocateBufferMemory(stagingBuffer, MemoryUsage::GpuToCpu, stagingAlloc)) {
+		mprintf(("VulkanRenderer::saveScreen - failed to allocate staging buffer\n"));
+		m_device->destroyBuffer(stagingBuffer);
+		cmd.end();
+		m_device->freeCommandBuffers(m_graphicsCommandPool.get(), cmdBuffers);
+
+		// Re-begin render pass so the frame can continue
+		vk::RenderPassBeginInfo renderPassBegin;
+		renderPassBegin.renderPass = m_renderPass.get();
+		renderPassBegin.framebuffer = m_swapChainFramebuffers[m_currentSwapChainImage].get();
+		renderPassBegin.renderArea.offset.x = 0;
+		renderPassBegin.renderArea.offset.y = 0;
+		renderPassBegin.renderArea.extent = m_swapChainExtent;
+		std::array<vk::ClearValue, 2> clearValues;
+		clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+		clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		renderPassBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		renderPassBegin.pClearValues = clearValues.data();
+		m_currentCommandBuffer.beginRenderPass(renderPassBegin, vk::SubpassContents::eInline);
+		if (m_stateTracker) {
+			m_stateTracker->setRenderPass(m_renderPass.get(), 0);
+			m_stateTracker->setViewport(0.0f,
+				static_cast<float>(m_swapChainExtent.height),
+				static_cast<float>(m_swapChainExtent.width),
+				-static_cast<float>(m_swapChainExtent.height));
+		}
+		return -1;
+	}
+
+	m_device->bindBufferMemory(stagingBuffer, stagingAlloc.memory, stagingAlloc.offset);
+
+	// Copy image to staging buffer
+	vk::BufferImageCopy region;
+	region.bufferOffset = 0;
+	region.bufferRowLength = 0;   // tightly packed
+	region.bufferImageHeight = 0; // tightly packed
+	region.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+	region.imageOffset = vk::Offset3D(0, 0, 0);
+	region.imageExtent = vk::Extent3D(w, h, 1);
+
+	cmd.copyImageToBuffer(prevImage, vk::ImageLayout::eTransferSrcOptimal, stagingBuffer, region);
+
+	// Transition previous swap chain image back
+	vk::ImageMemoryBarrier postBarrier;
+	postBarrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+	postBarrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
+	postBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	postBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	postBarrier.image = prevImage;
+	postBarrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+	postBarrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+	postBarrier.dstAccessMask = {};
+
+	cmd.pipelineBarrier(
+		vk::PipelineStageFlagBits::eTransfer,
+		vk::PipelineStageFlagBits::eBottomOfPipe,
+		{}, nullptr, nullptr, postBarrier);
+
+	cmd.end();
+
+	// Submit one-shot command buffer and wait
+	auto fence = m_device->createFence({});
+
+	vk::SubmitInfo submitInfo;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &cmd;
+	m_graphicsQueue.submit(submitInfo, fence);
+
+	auto waitResult = m_device->waitForFences(fence, VK_TRUE, UINT64_MAX);
+	if (waitResult != vk::Result::eSuccess) {
+		mprintf(("VulkanRenderer::saveScreen - fence wait failed\n"));
+	}
+
+	m_device->destroyFence(fence);
+	m_device->freeCommandBuffers(m_graphicsCommandPool.get(), cmdBuffers);
+
+	// Read back pixels from staging buffer
+	auto* mappedPtr = static_cast<ubyte*>(m_memoryManager->mapMemory(stagingAlloc));
+
+	int bmpId = -1;
+	if (mappedPtr) {
+		auto* pixels = static_cast<ubyte*>(vm_malloc(static_cast<int>(bufferSize)));
+		if (pixels) {
+			memcpy(pixels, mappedPtr, bufferSize);
+			bmpId = bm_create(32, static_cast<int>(w), static_cast<int>(h), pixels, 0);
+			if (bmpId >= 0) {
+				*outPixels = pixels;
+			} else {
+				vm_free(pixels);
+			}
+		}
+		m_memoryManager->unmapMemory(stagingAlloc);
+	}
+
+	// Free staging buffer
+	m_device->destroyBuffer(stagingBuffer);
+	m_memoryManager->freeAllocation(stagingAlloc);
+
+	// Re-begin render pass on main command buffer
+	vk::RenderPassBeginInfo renderPassBegin;
+	renderPassBegin.renderPass = m_renderPass.get();
+	renderPassBegin.framebuffer = m_swapChainFramebuffers[m_currentSwapChainImage].get();
+	renderPassBegin.renderArea.offset.x = 0;
+	renderPassBegin.renderArea.offset.y = 0;
+	renderPassBegin.renderArea.extent = m_swapChainExtent;
+
+	std::array<vk::ClearValue, 2> clearValues;
+	clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+	clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+
+	renderPassBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+	renderPassBegin.pClearValues = clearValues.data();
+
+	m_currentCommandBuffer.beginRenderPass(renderPassBegin, vk::SubpassContents::eInline);
+
+	if (m_stateTracker) {
+		m_stateTracker->setRenderPass(m_renderPass.get(), 0);
+		m_stateTracker->setViewport(0.0f,
+			static_cast<float>(m_swapChainExtent.height),
+			static_cast<float>(m_swapChainExtent.width),
+			-static_cast<float>(m_swapChainExtent.height));
+	}
+
+	mprintf(("VulkanRenderer::saveScreen - saved %dx%d screen, bmpId=%d\n", w, h, bmpId));
+	return bmpId;
 }
 
 uint32_t VulkanRenderer::getMinUniformBufferOffsetAlignment() const

@@ -68,6 +68,18 @@ class VulkanRenderer {
 	void shutdown();
 
 	/**
+	 * @brief Save the previous frame's screen contents for popup backgrounds
+	 *
+	 * Copies the previously presented swap chain image to CPU memory and creates
+	 * a bitmap from it. Used by gr_save_screen() for popups that need to preserve
+	 * the background while drawing overlay UI.
+	 *
+	 * @param[out] outPixels Receives the vm_malloc'd pixel buffer (caller must vm_free)
+	 * @return Bitmap ID from bm_create, or -1 on failure
+	 */
+	int saveScreen(ubyte** outPixels);
+
+	/**
 	 * @brief Get the minimum uniform buffer offset alignment requirement
 	 * @return The alignment in bytes (typically 64 or 256)
 	 */
@@ -173,7 +185,7 @@ class VulkanRenderer {
 	SCP_vector<RenderFrame*> m_swapChainImageRenderImage;
 
 	uint32_t m_currentSwapChainImage = 0;
-	uint32_t m_previousSwapChainImage = UINT32_MAX;  // For frame-to-frame content blit
+	uint32_t m_previousSwapChainImage = UINT32_MAX;  // For saveScreen() readback of previous frame
 
 	// Depth buffer
 	vk::UniqueImage m_depthImage;
