@@ -1036,16 +1036,8 @@ void VulkanRenderer::flip()
 
 	// End render pass
 	m_currentCommandBuffer.endRenderPass();
-
-	// TEST 3: Add back state tracker endFrame
-	if (m_stateTracker) {
-		m_stateTracker->endFrame();
-	}
-
-	// TEST 2: Add back descriptor manager endFrame
-	if (m_descriptorManager) {
-		m_descriptorManager->endFrame();
-	}
+	m_stateTracker->endFrame();
+	m_descriptorManager->endFrame();
 
 	// End command buffer
 	m_currentCommandBuffer.end();
@@ -1073,9 +1065,7 @@ void VulkanRenderer::flip()
 
 	// Set the frame index for the buffer manager immediately after incrementing
 	// This ensures any buffer operations that happen before setupFrame() use the correct frame
-	if (m_bufferManager) {
-		m_bufferManager->setCurrentFrame(m_currentFrame);
-	}
+	m_bufferManager->setCurrentFrame(m_currentFrame);
 
 	mprintf(("VulkanRenderer::flip - about to acquireNextSwapChainImage, m_currentFrame now %d\n", m_currentFrame));
 	acquireNextSwapChainImage();
@@ -1083,9 +1073,7 @@ void VulkanRenderer::flip()
 	// Process deferred resource deletions AFTER the fence wait in
 	// acquireNextSwapChainImage, so we know the previous frame's commands
 	// (including async upload CBs) have completed before destroying resources.
-	if (m_deletionQueue) {
-		m_deletionQueue->processDestructions();
-	}
+	m_deletionQueue->processDestructions();
 
 	mprintf(("=== VulkanRenderer::flip END ===\n"));
 }
