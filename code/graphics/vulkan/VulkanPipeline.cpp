@@ -133,10 +133,8 @@ vk::Pipeline VulkanPipelineManager::getPipeline(const PipelineConfig& config, co
 	PipelineConfig fullConfig = config;
 	fullConfig.vertexLayoutHash = vertexLayout.hash();
 
-	size_t configHash = fullConfig.hash();
-
 	// Check cache
-	auto it = m_pipelines.find(configHash);
+	auto it = m_pipelines.find(fullConfig);
 	if (it != m_pipelines.end()) {
 		return it->second.get();
 	}
@@ -148,10 +146,10 @@ vk::Pipeline VulkanPipelineManager::getPipeline(const PipelineConfig& config, co
 	}
 
 	vk::Pipeline result = pipeline.get();
-	m_pipelines[configHash] = std::move(pipeline);
+	m_pipelines[fullConfig] = std::move(pipeline);
 
 	nprintf(("Vulkan", "VulkanPipelineManager: Created pipeline for shader type %d (hash 0x%zx)\n",
-		static_cast<int>(config.shaderType), configHash));
+		static_cast<int>(config.shaderType), fullConfig.hash()));
 
 	return result;
 }

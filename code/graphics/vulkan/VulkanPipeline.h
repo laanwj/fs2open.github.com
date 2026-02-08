@@ -172,8 +172,8 @@ private:
 	// Driver-level pipeline cache
 	vk::UniquePipelineCache m_pipelineCache;
 
-	// Application-level pipeline cache: config hash -> pipeline
-	SCP_unordered_map<size_t, vk::UniquePipeline> m_pipelines;
+	// Application-level pipeline cache: config -> pipeline
+	SCP_unordered_map<PipelineConfig, vk::UniquePipeline, PipelineConfigHasher> m_pipelines;
 
 	// Vertex format cache
 	VulkanVertexFormatCache m_vertexFormatCache;
