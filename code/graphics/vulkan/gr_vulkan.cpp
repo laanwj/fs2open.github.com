@@ -126,9 +126,6 @@ void vulkan_push_debug_group(const char* name)
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		return;
-	}
 
 	vk::DebugUtilsLabelEXT label;
 	label.pLabelName = name;
@@ -144,10 +141,6 @@ void vulkan_pop_debug_group()
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		return;
-	}
-
 	stateTracker->getCommandBuffer().endDebugUtilsLabelEXT();
 }
 

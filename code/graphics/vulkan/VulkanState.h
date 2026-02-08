@@ -131,14 +131,13 @@ public:
 	// ========== State Queries ==========
 
 	/**
-	 * @brief Check if we have a valid command buffer
+	 * @brief Get current command buffer.
+	 * Asserts if no command buffer is active — rendering outside a frame is always a bug.
 	 */
-	bool hasCommandBuffer() const { return m_cmdBuffer; }
-
-	/**
-	 * @brief Get current command buffer
-	 */
-	vk::CommandBuffer getCommandBuffer() const { return m_cmdBuffer; }
+	vk::CommandBuffer getCommandBuffer() const {
+		Assertion(m_cmdBuffer, "No active command buffer — rendering outside a frame?");
+		return m_cmdBuffer;
+	}
 
 	/**
 	 * @brief TEST: Set command buffer without resetting state

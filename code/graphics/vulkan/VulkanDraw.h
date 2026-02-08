@@ -308,7 +308,6 @@ private:
 		int applyMaterialCalls = 0;
 		int applyMaterialFailures = 0;
 		int noPipelineSkips = 0;
-		int noCommandBufferSkips = 0;
 		int shaderHandleNeg1 = 0;
 		int totalVertices = 0;
 		int totalIndices = 0;

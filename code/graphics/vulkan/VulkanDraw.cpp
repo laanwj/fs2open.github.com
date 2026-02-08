@@ -88,9 +88,6 @@ void VulkanDrawManager::shutdown()
 void VulkanDrawManager::clear()
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		return;
-	}
 
 	// Use the current clip/scissor region for clearing, matching OpenGL behavior.
 	// In OpenGL, glClear() respects the scissor test - if a clip region is set,
@@ -289,9 +286,6 @@ int VulkanDrawManager::zbufferSet(int mode)
 void VulkanDrawManager::zbufferClear(int mode)
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		return;
-	}
 
 	if (mode) {
 		// Enable zbuffering and clear
@@ -348,9 +342,6 @@ int VulkanDrawManager::stencilSet(int mode)
 void VulkanDrawManager::stencilClear()
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		return;
-	}
 
 	// Clear stencil buffer
 	vk::ClearAttachment clearAttachment;
@@ -388,12 +379,6 @@ void VulkanDrawManager::renderPrimitives(material* material_info, primitive_type
 		return;
 	}
 
-	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		nprintf(("Vulkan", "VulkanDrawManager: No command buffer for renderPrimitives\n"));
-		return;
-	}
-
 	m_frameStats.renderPrimitiveCalls++;
 
 	// Apply material state and bind pipeline
@@ -413,11 +398,6 @@ void VulkanDrawManager::renderPrimitivesBatched(batched_bitmap_material* materia
                                                  int offset, int n_verts, gr_buffer_handle buffer_handle)
 {
 	if (!material_info || !layout || n_verts <= 0) {
-		return;
-	}
-
-	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -443,11 +423,6 @@ void VulkanDrawManager::renderPrimitivesParticle(particle_material* material_inf
 		return;
 	}
 
-	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		return;
-	}
-
 	m_frameStats.renderParticleCalls++;
 
 	if (!applyMaterial(material_info, prim_type, layout)) {
@@ -465,11 +440,6 @@ void VulkanDrawManager::renderPrimitivesDistortion(distortion_material* material
 		return;
 	}
 
-	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		return;
-	}
-
 	if (!applyMaterial(material_info, prim_type, layout)) {
 		return;
 	}
@@ -481,11 +451,6 @@ void VulkanDrawManager::renderMovie(movie_material* material_info, primitive_typ
                                      vertex_layout* layout, int n_verts, gr_buffer_handle buffer_handle)
 {
 	if (!material_info || !layout || n_verts <= 0) {
-		return;
-	}
-
-	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -506,11 +471,6 @@ void VulkanDrawManager::renderNanoVG(nanovg_material* material_info, primitive_t
 		return;
 	}
 
-	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		return;
-	}
-
 	m_frameStats.renderNanoVGCalls++;
 
 	if (!applyMaterial(material_info, prim_type, layout)) {
@@ -526,11 +486,6 @@ void VulkanDrawManager::renderRocketPrimitives(interface_material* material_info
                                                 gr_buffer_handle index_buffer)
 {
 	if (!material_info || !layout || n_indices <= 0) {
-		return;
-	}
-
-	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
 		return;
 	}
 
@@ -565,9 +520,6 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		return;
-	}
 
 	// Get buffer data for this texture/draw
 	buffer_data* datap = &bufferp->tex_buf[texi];
@@ -724,7 +676,7 @@ void VulkanDrawManager::printFrameStats()
 	bool shouldPrint = (m_frameStatsFrameNum < 200) || (m_frameStatsFrameNum % 60 == 0);
 
 	if (shouldPrint) {
-		mprintf(("FRAME %d STATS: draws=%d indexed=%d verts=%d idxs=%d | applyMat=%d/%d fails | noPipeline=%d noCmdBuf=%d sdrNeg1=%d\n",
+		mprintf(("FRAME %d STATS: draws=%d indexed=%d verts=%d idxs=%d | applyMat=%d/%d fails | noPipeline=%d sdrNeg1=%d\n",
 			m_frameStatsFrameNum,
 			m_frameStats.drawCalls,
 			m_frameStats.drawIndexedCalls,
@@ -733,7 +685,6 @@ void VulkanDrawManager::printFrameStats()
 			m_frameStats.applyMaterialFailures,
 			m_frameStats.applyMaterialCalls,
 			m_frameStats.noPipelineSkips,
-			m_frameStats.noCommandBufferSkips,
 			m_frameStats.shaderHandleNeg1));
 		mprintf(("  CALLS: prim=%d batch=%d model=%d particle=%d nanovg=%d rocket=%d movie=%d\n",
 			m_frameStats.renderPrimitiveCalls,
@@ -1247,10 +1198,6 @@ void VulkanDrawManager::bindIndexBuffer(gr_buffer_handle handle)
 void VulkanDrawManager::draw(primitive_type prim_type, int first_vertex, int vertex_count)
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		m_frameStats.noCommandBufferSkips++;
-		return;
-	}
 
 	if (!stateTracker->getCurrentPipeline()) {
 		m_frameStats.noPipelineSkips++;
@@ -1275,10 +1222,6 @@ void VulkanDrawManager::draw(primitive_type prim_type, int first_vertex, int ver
 void VulkanDrawManager::drawIndexed(primitive_type prim_type, int index_count, int first_index, int vertex_offset)
 {
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		m_frameStats.noCommandBufferSkips++;
-		return;
-	}
 
 	if (!stateTracker->getCurrentPipeline()) {
 		m_frameStats.noPipelineSkips++;
@@ -1340,9 +1283,6 @@ void VulkanDrawManager::drawSphere(material* material_def)
 	}
 
 	auto* stateTracker = getStateTracker();
-	if (!stateTracker->hasCommandBuffer()) {
-		return;
-	}
 
 	auto* bufferManager = getBufferManager();
 
@@ -1576,27 +1516,25 @@ void vulkan_scene_texture_begin()
 
 	auto* stateTracker = getStateTracker();
 
-	if (stateTracker->hasCommandBuffer()) {
-		// Clear color buffer to black (matching OpenGL behavior)
-		auto cmdBuffer = stateTracker->getCommandBuffer();
+	// Clear color buffer to black (matching OpenGL behavior)
+	auto cmdBuffer = stateTracker->getCommandBuffer();
 
-		vk::ClearAttachment clearAttachments[2];
-		clearAttachments[0].aspectMask = vk::ImageAspectFlagBits::eColor;
-		clearAttachments[0].colorAttachment = 0;
-		clearAttachments[0].clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+	vk::ClearAttachment clearAttachments[2];
+	clearAttachments[0].aspectMask = vk::ImageAspectFlagBits::eColor;
+	clearAttachments[0].colorAttachment = 0;
+	clearAttachments[0].clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
 
-		clearAttachments[1].aspectMask = vk::ImageAspectFlagBits::eDepth;
-		clearAttachments[1].clearValue.depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+	clearAttachments[1].aspectMask = vk::ImageAspectFlagBits::eDepth;
+	clearAttachments[1].clearValue.depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
 
-		vk::ClearRect clearRect;
-		clearRect.rect.offset = vk::Offset2D(0, 0);
-		clearRect.rect.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.max_w),
-		                                      static_cast<uint32_t>(gr_screen.max_h));
-		clearRect.baseArrayLayer = 0;
-		clearRect.layerCount = 1;
+	vk::ClearRect clearRect;
+	clearRect.rect.offset = vk::Offset2D(0, 0);
+	clearRect.rect.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.max_w),
+	                                      static_cast<uint32_t>(gr_screen.max_h));
+	clearRect.baseArrayLayer = 0;
+	clearRect.layerCount = 1;
 
-		cmdBuffer.clearAttachments(2, clearAttachments, 1, &clearRect);
-	}
+	cmdBuffer.clearAttachments(2, clearAttachments, 1, &clearRect);
 
 	// Enable HDR for 3D scene rendering (affects intensity/srgb in shaders)
 	if (Gr_post_processing_enabled && !PostProcessing_override) {
