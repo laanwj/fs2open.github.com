@@ -5,7 +5,9 @@
 #include "VulkanShader.h"
 #include "VulkanTexture.h"
 #include "VulkanRenderer.h"
+#include "VulkanPostProcessing.h"
 #include "VulkanDescriptorManager.h"
+#include "gr_vulkan.h"
 #include "VulkanVertexFormat.h"
 #include "bmpman/bmpman.h"
 #include "ddsutils/ddsutils.h"
@@ -1500,48 +1502,45 @@ void vulkan_clear_states()
 
 void vulkan_scene_texture_begin()
 {
-	// Minimal implementation matching OpenGL's gr_opengl_scene_texture_begin():
-	// 1. Clear color + depth for the 3D scene
-	// 2. Set High_dynamic_range flag if post-processing is enabled
-	//
-	// Full implementation would switch to an offscreen FBO, but for now
-	// we render directly to the swap chain.
+	auto* renderer = getRendererInstance();
 
-	auto* stateTracker = getStateTracker();
-
-	// Clear color buffer to black (matching OpenGL behavior)
-	auto cmdBuffer = stateTracker->getCommandBuffer();
-
-	vk::ClearAttachment clearAttachments[2];
-	clearAttachments[0].aspectMask = vk::ImageAspectFlagBits::eColor;
-	clearAttachments[0].colorAttachment = 0;
-	clearAttachments[0].clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
-
-	clearAttachments[1].aspectMask = vk::ImageAspectFlagBits::eDepth;
-	clearAttachments[1].clearValue.depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
-
-	vk::ClearRect clearRect;
-	clearRect.rect.offset = vk::Offset2D(0, 0);
-	clearRect.rect.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.max_w),
-	                                      static_cast<uint32_t>(gr_screen.max_h));
-	clearRect.baseArrayLayer = 0;
-	clearRect.layerCount = 1;
-
-	cmdBuffer.clearAttachments(2, clearAttachments, 1, &clearRect);
-
-	// Enable HDR for 3D scene rendering (affects intensity/srgb in shaders)
-	if (Gr_post_processing_enabled && !PostProcessing_override) {
+	// Switch to HDR scene render pass when post-processing is enabled
+	auto* pp = getPostProcessor();
+	if (pp && pp->isInitialized() && Gr_post_processing_enabled && !PostProcessing_override) {
+		renderer->beginSceneRendering();
 		High_dynamic_range = true;
+	} else {
+		// Fallback: just clear within the current swap chain pass
+		auto* stateTracker = getStateTracker();
+		auto cmdBuffer = stateTracker->getCommandBuffer();
+
+		vk::ClearAttachment clearAttachments[2];
+		clearAttachments[0].aspectMask = vk::ImageAspectFlagBits::eColor;
+		clearAttachments[0].colorAttachment = 0;
+		clearAttachments[0].clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+
+		clearAttachments[1].aspectMask = vk::ImageAspectFlagBits::eDepth;
+		clearAttachments[1].clearValue.depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+
+		vk::ClearRect clearRect;
+		clearRect.rect.offset = vk::Offset2D(0, 0);
+		clearRect.rect.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.max_w),
+		                                      static_cast<uint32_t>(gr_screen.max_h));
+		clearRect.baseArrayLayer = 0;
+		clearRect.layerCount = 1;
+
+		cmdBuffer.clearAttachments(2, clearAttachments, 1, &clearRect);
 	}
 }
 
 void vulkan_scene_texture_end()
 {
-	// Minimal implementation matching OpenGL's gr_opengl_scene_texture_end():
-	// Reset HDR flag after 3D scene rendering
-	//
-	// Full implementation would composite the scene texture to screen with
-	// post-processing (bloom, FXAA, tonemapping). For now we just reset the flag.
+	auto* renderer = getRendererInstance();
+
+	// If we were rendering to the HDR scene target, switch back to swap chain
+	if (renderer->isSceneRendering()) {
+		renderer->endSceneRendering();
+	}
 
 	High_dynamic_range = false;
 }

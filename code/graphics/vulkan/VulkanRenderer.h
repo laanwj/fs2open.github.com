@@ -12,6 +12,7 @@
 #include "VulkanState.h"
 #include "VulkanDraw.h"
 #include "VulkanDeletionQueue.h"
+#include "VulkanPostProcessing.h"
 
 #include <vulkan/vulkan.hpp>
 
@@ -128,6 +129,27 @@ class VulkanRenderer {
 	 */
 	bool isTextureCompressionBCSupported() const;
 
+	/**
+	 * @brief Switch from swap chain pass to HDR scene pass
+	 *
+	 * Called by vulkan_scene_texture_begin(). Ends the current swap chain
+	 * render pass and begins the HDR scene render pass.
+	 */
+	void beginSceneRendering();
+
+	/**
+	 * @brief Switch from HDR scene pass back to swap chain
+	 *
+	 * Called by vulkan_scene_texture_end(). Ends the HDR scene render pass,
+	 * runs post-processing, and begins the resumed swap chain render pass.
+	 */
+	void endSceneRendering();
+
+	/**
+	 * @brief Check if we're currently rendering to the HDR scene target
+	 */
+	bool isSceneRendering() const { return m_sceneRendering; }
+
   private:
 	bool initDisplayDevice() const;
 
@@ -193,7 +215,8 @@ class VulkanRenderer {
 	VulkanAllocation m_depthImageMemory;
 	vk::Format m_depthFormat = vk::Format::eUndefined;
 
-	vk::UniqueRenderPass m_renderPass;
+	vk::UniqueRenderPass m_renderPass;        // Swap chain pass with loadOp=eClear
+	vk::UniqueRenderPass m_renderPassLoad;    // Swap chain pass with loadOp=eLoad (resumed after post-processing)
 	vk::UniqueDescriptorPool m_imguiDescriptorPool;
 
 	uint32_t m_currentFrame = 0;
@@ -226,6 +249,10 @@ class VulkanRenderer {
 	// State tracking and draw management (Phase 4)
 	std::unique_ptr<VulkanStateTracker> m_stateTracker;
 	std::unique_ptr<VulkanDrawManager> m_drawManager;
+
+	// Post-processing (Phase 6)
+	std::unique_ptr<VulkanPostProcessor> m_postProcessor;
+	bool m_sceneRendering = false;
 
 #if SDL_SUPPORTS_VULKAN
 	bool m_debugReportEnabled = false;

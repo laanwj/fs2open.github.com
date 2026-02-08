@@ -389,6 +389,16 @@ bool VulkanRenderer::initialize()
 	}
 	setDrawManager(m_drawManager.get());
 
+	// Initialize post-processing (Phase 6)
+	m_postProcessor = std::unique_ptr<VulkanPostProcessor>(new VulkanPostProcessor());
+	if (!m_postProcessor->init(m_device.get(), m_physicalDevice, m_memoryManager.get(),
+	                           m_swapChainExtent, m_depthFormat)) {
+		mprintf(("Warning: Failed to initialize Vulkan post-processor, post-processing will be disabled\n"));
+		m_postProcessor.reset();
+	} else {
+		setPostProcessor(m_postProcessor.get());
+	}
+
 	// Prepare the rendering state by acquiring our first swap chain image
 	acquireNextSwapChainImage();
 
@@ -914,6 +924,18 @@ void VulkanRenderer::createRenderPass()
 	renderPassInfo.pDependencies = &dependency;
 
 	m_renderPass = m_device->createRenderPassUnique(renderPassInfo);
+
+	// Create a second render pass with loadOp=eLoad for resuming the swap chain
+	// after post-processing. Same formats/samples = render-pass-compatible with m_renderPass.
+	colorAttachment.loadOp = vk::AttachmentLoadOp::eLoad;
+	colorAttachment.initialLayout = vk::ImageLayout::eColorAttachmentOptimal;
+
+	depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+	depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
+
+	attachments = {colorAttachment, depthAttachment};
+
+	m_renderPassLoad = m_device->createRenderPassUnique(renderPassInfo);
 }
 void VulkanRenderer::createCommandPool(const PhysicalDeviceValues& values)
 {
@@ -1382,6 +1404,98 @@ void VulkanRenderer::shutdownImGui()
 	mprintf(("Vulkan: ImGui backend shut down\n"));
 }
 
+void VulkanRenderer::beginSceneRendering()
+{
+	if (!m_postProcessor || !m_postProcessor->isInitialized()) {
+		return;
+	}
+	if (m_sceneRendering) {
+		return;
+	}
+
+	// End the current swap chain render pass
+	m_currentCommandBuffer.endRenderPass();
+
+	// Begin the HDR scene render pass
+	vk::RenderPassBeginInfo rpBegin;
+	rpBegin.renderPass = m_postProcessor->getSceneRenderPass();
+	rpBegin.framebuffer = m_postProcessor->getSceneFramebuffer();
+	rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+	rpBegin.renderArea.extent = m_postProcessor->getSceneExtent();
+
+	std::array<vk::ClearValue, 2> clearValues;
+	clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+	clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+	rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+	rpBegin.pClearValues = clearValues.data();
+
+	m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+
+	// Update state tracker for the HDR scene pass
+	m_stateTracker->setRenderPass(m_postProcessor->getSceneRenderPass(), 0);
+	// Negative viewport height for Y-flip (same as swap chain pass)
+	auto extent = m_postProcessor->getSceneExtent();
+	m_stateTracker->setViewport(0.0f,
+		static_cast<float>(extent.height),
+		static_cast<float>(extent.width),
+		-static_cast<float>(extent.height));
+
+	m_sceneRendering = true;
+}
+
+void VulkanRenderer::endSceneRendering()
+{
+	if (!m_postProcessor || !m_postProcessor->isInitialized()) {
+		return;
+	}
+	if (!m_sceneRendering) {
+		return;
+	}
+
+	// End HDR scene render pass (transitions scene color to eShaderReadOnlyOptimal)
+	m_currentCommandBuffer.endRenderPass();
+
+	// Execute post-processing passes (all between HDR scene pass and swap chain pass)
+	m_postProcessor->executeBloom(m_currentCommandBuffer);
+	m_postProcessor->executeTonemap(m_currentCommandBuffer);
+	m_postProcessor->executeFXAA(m_currentCommandBuffer);
+	m_postProcessor->executeLightshafts(m_currentCommandBuffer);
+	m_postProcessor->executePostEffects(m_currentCommandBuffer);
+
+	// Begin the resumed swap chain render pass (loadOp=eLoad to preserve pre-scene content)
+	vk::RenderPassBeginInfo rpBegin;
+	rpBegin.renderPass = m_renderPassLoad.get();
+	rpBegin.framebuffer = m_swapChainFramebuffers[m_currentSwapChainImage].get();
+	rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+	rpBegin.renderArea.extent = m_swapChainExtent;
+
+	std::array<vk::ClearValue, 2> clearValues;
+	clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+	clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+	rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+	rpBegin.pClearValues = clearValues.data();
+
+	m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+
+	// Update state tracker for the resumed swap chain pass
+	m_stateTracker->setRenderPass(m_renderPassLoad.get(), 0);
+	// Non-flipped viewport for post-processing blit (HDR texture is already correct orientation)
+	m_stateTracker->setViewport(0.0f, 0.0f,
+		static_cast<float>(m_swapChainExtent.width),
+		static_cast<float>(m_swapChainExtent.height));
+
+	// Blit the HDR scene to swap chain through post-processing
+	m_postProcessor->blitToSwapChain(m_currentCommandBuffer);
+
+	// Restore Y-flipped viewport for HUD rendering
+	m_stateTracker->setViewport(0.0f,
+		static_cast<float>(m_swapChainExtent.height),
+		static_cast<float>(m_swapChainExtent.width),
+		-static_cast<float>(m_swapChainExtent.height));
+
+	m_sceneRendering = false;
+}
+
 void VulkanRenderer::shutdown()
 {
 	// Wait for all frames to complete to ensure no drawing is in progress when we destroy the device
@@ -1395,6 +1509,13 @@ void VulkanRenderer::shutdown()
 	shutdownImGui();
 
 	// Shutdown managers in reverse order of initialization
+	// Phase 6 post-processor
+	if (m_postProcessor) {
+		setPostProcessor(nullptr);
+		m_postProcessor->shutdown();
+		m_postProcessor.reset();
+	}
+
 	// Phase 4 managers first
 	if (m_drawManager) {
 		setDrawManager(nullptr);

@@ -589,6 +589,8 @@ if (FSO_BUILD_WITH_VULKAN)
 		graphics/vulkan/VulkanMemory.h
 		graphics/vulkan/VulkanPipeline.cpp
 		graphics/vulkan/VulkanPipeline.h
+		graphics/vulkan/VulkanPostProcessing.cpp
+		graphics/vulkan/VulkanPostProcessing.h
 		graphics/vulkan/VulkanRenderer.cpp
 		graphics/vulkan/VulkanRenderer.h
 		graphics/vulkan/VulkanRenderState.cpp

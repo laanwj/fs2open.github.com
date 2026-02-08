@@ -18,6 +18,8 @@
 #include "graphics/2d.h"
 #include "graphics/matrix.h"
 #include "graphics/material.h"
+#include "graphics/post_processing.h"
+#include "graphics/grinternal.h"
 
 namespace graphics {
 namespace vulkan {
@@ -60,11 +62,10 @@ bool vulkan_is_capable(gr_capability capability)
 		return Cmdline_height != 0;
 	case gr_capability::CAPABILITY_SOFT_PARTICLES:
 	case gr_capability::CAPABILITY_DISTORTION:
-		// Requires post-processing / scene texture pipeline (not yet implemented)
-		return false;
+		// Requires post-processing / scene texture pipeline
+		return Gr_post_processing_enabled;
 	case gr_capability::CAPABILITY_POST_PROCESSING:
-		// Not yet implemented
-		return false;
+		return Gr_post_processing_enabled;
 	case gr_capability::CAPABILITY_DEFERRED_LIGHTING:
 		// Not yet implemented
 		return false;
@@ -253,8 +254,45 @@ SCP_string stub_blob_screen() { return ""; }
 void stub_get_region(int /*front*/, int /*w*/, int /*h*/, ubyte* /*data*/) {}
 void stub_bm_page_in_start() {}
 void stub_update_transform_buffer(void* /*data*/, size_t /*size*/) {}
-void stub_post_process_set_effect(const char* /*name*/, int /*x*/, const vec3d* /*rgb*/) {}
-void stub_post_process_set_defaults() {}
+void vulkan_post_process_set_effect(const char* name, int value, const vec3d* rgb)
+{
+	if (!Gr_post_processing_enabled || !graphics::Post_processing_manager) {
+		return;
+	}
+	if (name == nullptr) {
+		return;
+	}
+
+	auto& ls_params = graphics::Post_processing_manager->getLightshaftParams();
+	if (!stricmp("lightshafts", name)) {
+		ls_params.intensity = value / 100.0f;
+		ls_params.on = !!value;
+		return;
+	}
+
+	auto& postEffects = graphics::Post_processing_manager->getPostEffects();
+	for (size_t idx = 0; idx < postEffects.size(); idx++) {
+		if (!stricmp(postEffects[idx].name.c_str(), name)) {
+			postEffects[idx].intensity = (value / postEffects[idx].div) + postEffects[idx].add;
+			if ((rgb != nullptr) && !(vmd_zero_vector == *rgb)) {
+				postEffects[idx].rgb = *rgb;
+			}
+			break;
+		}
+	}
+}
+
+void vulkan_post_process_set_defaults()
+{
+	if (!graphics::Post_processing_manager) {
+		return;
+	}
+
+	auto& postEffects = graphics::Post_processing_manager->getPostEffects();
+	for (auto& effect : postEffects) {
+		effect.intensity = effect.default_intensity;
+	}
+}
 void stub_post_process_save_zbuffer() {}
 void stub_post_process_begin() {}
 void stub_post_process_end() {}
@@ -355,8 +393,8 @@ void init_function_pointers()
 	gr_screen.gf_map_buffer = vulkan_map_buffer;
 	gr_screen.gf_flush_mapped_buffer = vulkan_flush_mapped_buffer;
 
-	gr_screen.gf_post_process_set_effect = stub_post_process_set_effect;
-	gr_screen.gf_post_process_set_defaults = stub_post_process_set_defaults;
+	gr_screen.gf_post_process_set_effect = vulkan_post_process_set_effect;
+	gr_screen.gf_post_process_set_defaults = vulkan_post_process_set_defaults;
 
 	gr_screen.gf_post_process_begin = stub_post_process_begin;
 	gr_screen.gf_post_process_end = stub_post_process_end;

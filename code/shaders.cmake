@@ -20,6 +20,15 @@ set(SHADERS
 	${SHADER_DIR}/nanovg.vert
 	${SHADER_DIR}/decal.frag
 	${SHADER_DIR}/decal.vert
+	${SHADER_DIR}/postprocess.vert
+	${SHADER_DIR}/tonemapping.frag
+	${SHADER_DIR}/brightpass.frag
+	${SHADER_DIR}/blur.frag
+	${SHADER_DIR}/bloom-comp.frag
+	${SHADER_DIR}/fxaapre.frag
+	${SHADER_DIR}/fxaa.frag
+	${SHADER_DIR}/post.frag
+	${SHADER_DIR}/lightshafts.frag
 )
 
 # Shaders that have complex uniform blocks with vec3 members that cause struct generation issues
@@ -31,6 +40,12 @@ set(SHADERS_SKIP_STRUCT_GEN
 	${SHADER_DIR}/rocketui.vert
 	${SHADER_DIR}/nanovg.frag
 	${SHADER_DIR}/nanovg.vert
+	${SHADER_DIR}/tonemapping.frag
+	${SHADER_DIR}/blur.frag
+	${SHADER_DIR}/bloom-comp.frag
+	${SHADER_DIR}/fxaa.frag
+	${SHADER_DIR}/post.frag
+	${SHADER_DIR}/lightshafts.frag
 )
 
 target_sources(code PRIVATE ${SHADERS})
