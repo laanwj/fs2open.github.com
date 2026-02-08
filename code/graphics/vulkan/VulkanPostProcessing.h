@@ -168,7 +168,7 @@ private:
 	                     uint32_t width, uint32_t height, uint32_t mipLevels);
 	void drawFullscreenTriangle(vk::CommandBuffer cmd, vk::RenderPass renderPass,
 	                            vk::Framebuffer framebuffer, vk::Extent2D extent,
-	                            int shaderType, unsigned int shaderFlags,
+	                            int shaderType,
 	                            vk::ImageView textureView, vk::Sampler sampler,
 	                            const void* uboData, size_t uboSize,
 	                            int blendMode);

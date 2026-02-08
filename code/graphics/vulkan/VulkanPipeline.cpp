@@ -23,7 +23,6 @@ void setPipelineManager(VulkanPipelineManager* manager)
 bool PipelineConfig::operator==(const PipelineConfig& other) const
 {
 	return shaderType == other.shaderType &&
-	       shaderFlags == other.shaderFlags &&
 	       vertexLayoutHash == other.vertexLayoutHash &&
 	       primitiveType == other.primitiveType &&
 	       depthMode == other.depthMode &&
@@ -56,7 +55,6 @@ size_t PipelineConfig::hash() const
 
 	// Combine all fields into hash
 	h ^= std::hash<int>()(static_cast<int>(shaderType)) << 0;
-	h ^= std::hash<uint32_t>()(shaderFlags) << 4;
 	h ^= std::hash<size_t>()(vertexLayoutHash) << 8;
 	h ^= std::hash<int>()(static_cast<int>(primitiveType)) << 12;
 	h ^= std::hash<int>()(static_cast<int>(depthMode)) << 16;
@@ -272,19 +270,19 @@ vk::UniquePipeline VulkanPipelineManager::createPipeline(const PipelineConfig& c
                                                           const vertex_layout& vertexLayout)
 {
 	// Ensure shader is loaded (lazy creation on first use)
-	m_shaderManager->maybeCreateShader(config.shaderType, config.shaderFlags);
+	m_shaderManager->maybeCreateShader(config.shaderType, 0);
 
 	// Get shader modules
-	const VulkanShaderModule* shader = m_shaderManager->getShaderByType(config.shaderType, config.shaderFlags);
+	const VulkanShaderModule* shader = m_shaderManager->getShaderByType(config.shaderType);
 	if (!shader || !shader->valid) {
-		mprintf(("VulkanPipelineManager: Shader not available for type %d flags 0x%x\n",
-			static_cast<int>(config.shaderType), config.shaderFlags));
+		mprintf(("VulkanPipelineManager: Shader not available for type %d\n",
+			static_cast<int>(config.shaderType)));
 		return {};
 	}
 
 	// Debug: Log which shader and vertex layout is being used
-	mprintf(("VulkanPipelineManager: Creating pipeline for shader type %d (%s) flags 0x%x\n",
-		static_cast<int>(config.shaderType), shader->description.c_str(), config.shaderFlags));
+	mprintf(("VulkanPipelineManager: Creating pipeline for shader type %d (%s)\n",
+		static_cast<int>(config.shaderType), shader->description.c_str()));
 	mprintf(("  Vertex layout has %zu components:\n", vertexLayout.get_num_vertex_components()));
 	for (size_t i = 0; i < vertexLayout.get_num_vertex_components(); ++i) {
 		const vertex_format_data* comp = vertexLayout.get_vertex_component(i);

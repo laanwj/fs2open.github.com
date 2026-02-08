@@ -13,6 +13,8 @@ namespace vulkan {
  * @brief Holds SPIR-V shader modules for a single shader program
  *
  * Corresponds to an OpenGL shader program (vertex + fragment + optional geometry).
+ * Vulkan uses pre-compiled SPIR-V with no runtime variants — all conditional
+ * behavior is handled via UBO runtime flags (not compile-time defines).
  */
 struct VulkanShaderModule {
 	vk::UniqueShaderModule vertexModule;
@@ -20,7 +22,6 @@ struct VulkanShaderModule {
 	vk::UniqueShaderModule geometryModule;  // May be null
 
 	shader_type type = SDR_TYPE_NONE;
-	unsigned int flags = 0;
 
 	SCP_string description;
 	bool valid = false;
@@ -43,42 +44,15 @@ struct VulkanShaderTypeInfo {
 };
 
 /**
- * @brief Shader variant definition - maps shader flags to defines
- *
- * Based on opengl_shader_variant_t from gropenglshader.h
- */
-struct VulkanShaderVariantInfo {
-	shader_type type;
-	unsigned int flag;
-	const char* flagDefine;    // SPIR-V specialization constant name
-	bool usesGeometryShader;
-	const char* description;
-};
-
-/**
- * @brief Key for shader lookup (type + flags combination)
- */
-struct ShaderKey {
-	shader_type type;
-	unsigned int flags;
-
-	bool operator==(const ShaderKey& other) const {
-		return type == other.type && flags == other.flags;
-	}
-};
-
-struct ShaderKeyHasher {
-	size_t operator()(const ShaderKey& key) const {
-		return std::hash<int>()(static_cast<int>(key.type)) ^
-		       (std::hash<unsigned int>()(key.flags) << 8);
-	}
-};
-
-/**
  * @brief Manages Vulkan shader modules (SPIR-V loading and caching)
  *
  * Provides the implementation for gr_screen.gf_maybe_create_shader and
  * gr_screen.gf_recompile_all_shaders function pointers.
+ *
+ * Unlike OpenGL, Vulkan shaders are pre-compiled to SPIR-V with no
+ * runtime variant support. The flags parameter in maybeCreateShader is
+ * accepted for API compatibility but ignored — all conditional behavior
+ * is handled via UBO runtime flags in the shader code.
  */
 class VulkanShaderManager {
 public:
@@ -104,10 +78,12 @@ public:
 	/**
 	 * @brief Get or create a shader program
 	 *
-	 * Implements gr_screen.gf_maybe_create_shader
+	 * Implements gr_screen.gf_maybe_create_shader.
+	 * The flags parameter is ignored — Vulkan uses pre-compiled SPIR-V
+	 * with runtime UBO flags instead of compile-time variants.
 	 *
 	 * @param type Shader type
-	 * @param flags Shader variant flags
+	 * @param flags Ignored (accepted for API compatibility)
 	 * @return Shader handle (index), or -1 on failure
 	 */
 	int maybeCreateShader(shader_type type, unsigned int flags);
@@ -134,12 +110,11 @@ public:
 	const VulkanShaderModule* getShaderByHandle(int handle) const { return getShader(handle); }
 
 	/**
-	 * @brief Get a shader by type and flags
+	 * @brief Get a shader by type
 	 * @param type Shader type
-	 * @param flags Shader variant flags
 	 * @return Pointer to shader module, or nullptr if not found
 	 */
-	const VulkanShaderModule* getShaderByType(shader_type type, unsigned int flags) const;
+	const VulkanShaderModule* getShaderByType(shader_type type) const;
 
 	/**
 	 * @brief Get total number of loaded shaders
@@ -162,12 +137,11 @@ private:
 	vk::UniqueShaderModule loadSpirvModule(const SCP_string& filename);
 
 	/**
-	 * @brief Compile a shader with given type and flags
+	 * @brief Load a shader for the given type
 	 * @param type Shader type
-	 * @param flags Variant flags
 	 * @return Index of new shader, or -1 on failure
 	 */
-	int compileShader(shader_type type, unsigned int flags);
+	int loadShader(shader_type type);
 
 	/**
 	 * @brief Get shader type info for a shader type
@@ -176,19 +150,10 @@ private:
 	 */
 	const VulkanShaderTypeInfo* getShaderTypeInfo(shader_type type) const;
 
-	/**
-	 * @brief Build SPIR-V filename with variant suffix
-	 * @param baseName Base shader name
-	 * @param flags Variant flags
-	 * @param stage Shader stage suffix (vert, frag, geom)
-	 * @return Full filename with .spv extension
-	 */
-	SCP_string buildShaderFilename(const char* baseName, unsigned int flags, const char* stage);
-
 	vk::Device m_device;
 
-	// Shader lookup: (type, flags) -> index in m_shaders
-	SCP_unordered_map<ShaderKey, size_t, ShaderKeyHasher> m_shaderMap;
+	// Shader lookup: type -> index in m_shaders
+	SCP_unordered_map<int, size_t> m_shaderMap;
 
 	// All loaded shaders
 	SCP_vector<VulkanShaderModule> m_shaders;
@@ -202,10 +167,6 @@ private:
 // Global shader type definitions
 extern const VulkanShaderTypeInfo VULKAN_SHADER_TYPES[];
 extern const size_t VULKAN_SHADER_TYPES_COUNT;
-
-// Global shader variant definitions
-extern const VulkanShaderVariantInfo VULKAN_SHADER_VARIANTS[];
-extern const size_t VULKAN_SHADER_VARIANTS_COUNT;
 
 // Global shader manager access
 VulkanShaderManager* getShaderManager();

@@ -22,7 +22,6 @@ namespace vulkan {
 struct PipelineConfig {
 	// Shader identification
 	shader_type shaderType = SDR_TYPE_NONE;
-	uint32_t shaderFlags = 0;
 
 	// Vertex format
 	size_t vertexLayoutHash = 0;

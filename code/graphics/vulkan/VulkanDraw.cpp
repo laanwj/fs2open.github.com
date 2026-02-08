@@ -711,7 +711,6 @@ PipelineConfig VulkanDrawManager::buildPipelineConfig(material* mat, primitive_t
 		const auto* shaderModule = shaderManager->getShaderByHandle(shaderHandle);
 		if (shaderModule) {
 			config.shaderType = shaderModule->type;
-			config.shaderFlags = shaderModule->flags;
 		}
 	}
 
@@ -997,8 +996,8 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 	vk::Pipeline pipeline = pipelineManager->getPipeline(config, *layout);
 	if (!pipeline) {
 		m_frameStats.applyMaterialFailures++;
-		mprintf(("VulkanDrawManager: applyMaterial FAIL - no pipeline (shaderType=%d flags=0x%x handle=%d)\n",
-			static_cast<int>(config.shaderType), config.shaderFlags, mat->get_shader_handle()));
+		mprintf(("VulkanDrawManager: applyMaterial FAIL - no pipeline (shaderType=%d handle=%d)\n",
+			static_cast<int>(config.shaderType), mat->get_shader_handle()));
 		return false;
 	}
 

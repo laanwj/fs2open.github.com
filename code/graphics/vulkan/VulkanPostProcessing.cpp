@@ -803,7 +803,7 @@ void VulkanPostProcessor::generateMipmaps(vk::CommandBuffer cmd, vk::Image image
 
 void VulkanPostProcessor::drawFullscreenTriangle(vk::CommandBuffer cmd, vk::RenderPass renderPass,
                                                   vk::Framebuffer framebuffer, vk::Extent2D extent,
-                                                  int shaderType, unsigned int shaderFlags,
+                                                  int shaderType,
                                                   vk::ImageView textureView, vk::Sampler sampler,
                                                   const void* uboData, size_t uboSize,
                                                   int blendMode)
@@ -820,7 +820,6 @@ void VulkanPostProcessor::drawFullscreenTriangle(vk::CommandBuffer cmd, vk::Rend
 	// Get/create pipeline for this shader + render pass combination
 	PipelineConfig config;
 	config.shaderType = static_cast<shader_type>(shaderType);
-	config.shaderFlags = shaderFlags;
 	config.vertexLayoutHash = 0;
 	config.primitiveType = PRIM_TYPE_TRIS;
 	config.depthMode = ZBUFFER_TYPE_NONE;
@@ -1014,7 +1013,7 @@ void VulkanPostProcessor::executeBloom(vk::CommandBuffer cmd)
 	drawFullscreenTriangle(cmd, m_bloomRenderPass,
 		m_bloomTex[0].mipFramebuffers[0],
 		vk::Extent2D(m_bloomWidth, m_bloomHeight),
-		SDR_TYPE_POST_PROCESS_BRIGHTPASS, 0,
+		SDR_TYPE_POST_PROCESS_BRIGHTPASS,
 		m_sceneColor.view, m_linearSampler,
 		nullptr, 0,  // Brightpass has no UBO
 		ALPHA_BLEND_NONE);
@@ -1044,7 +1043,7 @@ void VulkanPostProcessor::executeBloom(vk::CommandBuffer cmd)
 				drawFullscreenTriangle(cmd, m_bloomRenderPass,
 					m_bloomTex[dstIdx].mipFramebuffers[mip],
 					vk::Extent2D(mipW, mipH),
-					SDR_TYPE_POST_PROCESS_BLUR, 0,
+					SDR_TYPE_POST_PROCESS_BLUR,
 					m_bloomTex[srcIdx].fullView, m_mipmapSampler,
 					&blurData, sizeof(blurData),
 					ALPHA_BLEND_NONE);
@@ -1085,7 +1084,7 @@ void VulkanPostProcessor::executeBloom(vk::CommandBuffer cmd)
 	drawFullscreenTriangle(cmd, m_bloomCompositeRenderPass,
 		m_sceneColorBloomFB,
 		m_extent,
-		SDR_TYPE_POST_PROCESS_BLOOM_COMP, 0,
+		SDR_TYPE_POST_PROCESS_BLOOM_COMP,
 		m_bloomTex[0].fullView, m_mipmapSampler,
 		&compData, sizeof(compData),
 		ALPHA_BLEND_ADDITIVE);
@@ -1345,7 +1344,7 @@ void VulkanPostProcessor::executeTonemap(vk::CommandBuffer cmd)
 	// HDR scene → Scene_ldr via tonemapping shader
 	drawFullscreenTriangle(cmd, m_ldrRenderPass,
 		m_sceneLdrFB, m_extent,
-		SDR_TYPE_POST_PROCESS_TONEMAPPING, 0,
+		SDR_TYPE_POST_PROCESS_TONEMAPPING,
 		m_sceneColor.view, m_linearSampler,
 		&tmData, sizeof(tmData),
 		ALPHA_BLEND_NONE);
@@ -1368,7 +1367,7 @@ void VulkanPostProcessor::executeFXAA(vk::CommandBuffer cmd)
 	// FXAA prepass: Scene_ldr → Scene_luminance (compute luma in alpha)
 	drawFullscreenTriangle(cmd, m_ldrRenderPass,
 		m_sceneLuminanceFB, m_extent,
-		SDR_TYPE_POST_PROCESS_FXAA_PREPASS, 0,
+		SDR_TYPE_POST_PROCESS_FXAA_PREPASS,
 		m_sceneLdr.view, m_linearSampler,
 		nullptr, 0,
 		ALPHA_BLEND_NONE);
@@ -1382,7 +1381,7 @@ void VulkanPostProcessor::executeFXAA(vk::CommandBuffer cmd)
 
 	drawFullscreenTriangle(cmd, m_ldrRenderPass,
 		m_sceneLdrFB, m_extent,
-		SDR_TYPE_POST_PROCESS_FXAA, 0,
+		SDR_TYPE_POST_PROCESS_FXAA,
 		m_sceneLuminance.view, m_linearSampler,
 		&fxaaData, sizeof(fxaaData),
 		ALPHA_BLEND_NONE);
@@ -1487,7 +1486,7 @@ bool VulkanPostProcessor::executePostEffects(vk::CommandBuffer cmd)
 	// Post-effects: Scene_ldr → Scene_luminance (reusing luminance target as temp)
 	drawFullscreenTriangle(cmd, m_ldrRenderPass,
 		m_sceneLuminanceFB, m_extent,
-		SDR_TYPE_POST_PROCESS_MAIN, 0,
+		SDR_TYPE_POST_PROCESS_MAIN,
 		m_sceneLdr.view, m_linearSampler,
 		&uboData, sizeof(uboData),
 		ALPHA_BLEND_NONE);
@@ -1603,7 +1602,7 @@ void VulkanPostProcessor::executeLightshafts(vk::CommandBuffer cmd)
 	// Additive blend lightshafts onto Scene_ldr
 	drawFullscreenTriangle(cmd, m_ldrLoadRenderPass,
 		m_sceneLdrFB, m_extent,
-		SDR_TYPE_POST_PROCESS_LIGHTSHAFTS, 0,
+		SDR_TYPE_POST_PROCESS_LIGHTSHAFTS,
 		m_sceneDepth.view, m_linearSampler,
 		&lsData, sizeof(lsData),
 		ALPHA_BLEND_ADDITIVE);
@@ -1634,10 +1633,9 @@ void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 	}
 
 	// Build pipeline config for tonemapping (fullscreen, no depth, no blending)
-	// When blitting from LDR, use LINEAR_OUT to skip sRGB conversion (already applied)
+	// sRGB conversion is controlled by the linearOut UBO field, not shader variants
 	PipelineConfig config;
 	config.shaderType = SDR_TYPE_POST_PROCESS_TONEMAPPING;
-	config.shaderFlags = useLdr ? SDR_FLAG_TONEMAPPING_LINEAR_OUT : 0;
 	config.vertexLayoutHash = 0;  // Empty vertex layout
 	config.primitiveType = PRIM_TYPE_TRIS;
 	config.depthMode = ZBUFFER_TYPE_NONE;
