@@ -952,9 +952,8 @@ void VulkanRenderer::setupFrame()
 	}
 
 	// Free completed texture upload command buffers
-	if (m_textureManager) {
-		m_textureManager->frameStart();
-	}
+	Assertion(m_textureManager, "Vulkan TextureManager not initialized in setupFrame!");
+	m_textureManager->frameStart();
 
 	// Allocate command buffer for this frame
 	vk::CommandBufferAllocateInfo cmdBufferAlloc;
@@ -970,18 +969,15 @@ void VulkanRenderer::setupFrame()
 	beginInfo.flags |= vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
 	m_currentCommandBuffer.begin(beginInfo);
 
-	if (m_descriptorManager) {
-		m_descriptorManager->beginFrame();
-	}
+	Assertion(m_descriptorManager, "Vulkan DescriptorManager not initialized in setupFrame!");
+	m_descriptorManager->beginFrame();
 
-	if (m_stateTracker) {
-		m_stateTracker->beginFrame(m_currentCommandBuffer);
-	}
+	Assertion(m_stateTracker, "Vulkan StateTracker not initialized in setupFrame!");
+	m_stateTracker->beginFrame(m_currentCommandBuffer);
 
 	// Reset per-frame draw statistics
-	if (m_drawManager) {
-		m_drawManager->resetFrameStats();
-	}
+	Assertion(m_drawManager, "Vulkan DrawManager not initialized in setupFrame!");
+	m_drawManager->resetFrameStats();
 
 	// Begin render pass
 	vk::RenderPassBeginInfo renderPassBegin;
@@ -1001,14 +997,12 @@ void VulkanRenderer::setupFrame()
 	m_currentCommandBuffer.beginRenderPass(renderPassBegin, vk::SubpassContents::eInline);
 
 	// Set up state tracker for FSO draws
-	if (m_stateTracker) {
-		m_stateTracker->setRenderPass(m_renderPass.get(), 0);
-		// Negative viewport height for OpenGL-compatible Y-up NDC (VK_KHR_maintenance1)
-		m_stateTracker->setViewport(0.0f,
-			static_cast<float>(m_swapChainExtent.height),
-			static_cast<float>(m_swapChainExtent.width),
-			-static_cast<float>(m_swapChainExtent.height));
-	}
+	m_stateTracker->setRenderPass(m_renderPass.get(), 0);
+	// Negative viewport height for OpenGL-compatible Y-up NDC (VK_KHR_maintenance1)
+	m_stateTracker->setViewport(0.0f,
+		static_cast<float>(m_swapChainExtent.height),
+		static_cast<float>(m_swapChainExtent.width),
+		-static_cast<float>(m_swapChainExtent.height));
 
 	m_frameInProgress = true;
 }
@@ -1021,9 +1015,8 @@ void VulkanRenderer::flip()
 	}
 
 	// Print per-frame diagnostic summary before ending
-	if (m_drawManager) {
-		m_drawManager->printFrameStats();
-	}
+	Assertion(m_drawManager, "Vulkan DrawManager not initialized in flip!");
+	m_drawManager->printFrameStats();
 
 	// End render pass
 	m_currentCommandBuffer.endRenderPass();
@@ -1146,13 +1139,11 @@ int VulkanRenderer::saveScreen(ubyte** outPixels)
 		renderPassBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
 		renderPassBegin.pClearValues = clearValues.data();
 		m_currentCommandBuffer.beginRenderPass(renderPassBegin, vk::SubpassContents::eInline);
-		if (m_stateTracker) {
-			m_stateTracker->setRenderPass(m_renderPass.get(), 0);
-			m_stateTracker->setViewport(0.0f,
-				static_cast<float>(m_swapChainExtent.height),
-				static_cast<float>(m_swapChainExtent.width),
-				-static_cast<float>(m_swapChainExtent.height));
-		}
+		m_stateTracker->setRenderPass(m_renderPass.get(), 0);
+		m_stateTracker->setViewport(0.0f,
+			static_cast<float>(m_swapChainExtent.height),
+			static_cast<float>(m_swapChainExtent.width),
+			-static_cast<float>(m_swapChainExtent.height));
 		return -1;
 	}
 
@@ -1242,13 +1233,11 @@ int VulkanRenderer::saveScreen(ubyte** outPixels)
 
 	m_currentCommandBuffer.beginRenderPass(renderPassBegin, vk::SubpassContents::eInline);
 
-	if (m_stateTracker) {
-		m_stateTracker->setRenderPass(m_renderPass.get(), 0);
-		m_stateTracker->setViewport(0.0f,
-			static_cast<float>(m_swapChainExtent.height),
-			static_cast<float>(m_swapChainExtent.width),
-			-static_cast<float>(m_swapChainExtent.height));
-	}
+	m_stateTracker->setRenderPass(m_renderPass.get(), 0);
+	m_stateTracker->setViewport(0.0f,
+		static_cast<float>(m_swapChainExtent.height),
+		static_cast<float>(m_swapChainExtent.width),
+		-static_cast<float>(m_swapChainExtent.height));
 
 	mprintf(("VulkanRenderer::saveScreen - saved %dx%d screen, bmpId=%d\n", w, h, bmpId));
 	return bmpId;
