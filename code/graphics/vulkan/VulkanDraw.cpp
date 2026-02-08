@@ -1713,11 +1713,38 @@ void vulkan_render_rocket_primitives(interface_material* material_info,
 	gr_buffer_handle vertex_buffer,
 	gr_buffer_handle index_buffer)
 {
+	// Set up 2D orthographic projection (matches OpenGL's gr_opengl_render_rocket_primitives)
+	gr_set_2d_matrix();
+
+	// Fill GenericData UBO with rocketui_data layout (NOT default material layout).
+	// The rocketui shader reads projMatrix, offset, textured, baseMapIndex, and
+	// horizontalSwipeOffset from GenericData — a completely different layout than
+	// the default material shader's genericData.
+	{
+		auto buffer = gr_get_uniform_buffer(uniform_block_type::GenericData, 1,
+		                                     sizeof(graphics::generic_data::rocketui_data));
+		auto* data = buffer.aligner().addTypedElement<graphics::generic_data::rocketui_data>();
+
+		data->projMatrix = gr_projection_matrix;
+
+		const vec2d& offset = material_info->get_offset();
+		data->offset = offset;
+		data->textured = material_info->is_textured() ? 1 : 0;
+		data->baseMapIndex = 0;  // Vulkan texture array: always layer 0
+		data->horizontalSwipeOffset = material_info->get_horizontal_swipe();
+
+		buffer.submitData();
+		gr_bind_uniform_buffer(uniform_block_type::GenericData, buffer.getBufferOffset(0),
+		                       sizeof(graphics::generic_data::rocketui_data), buffer.bufferHandle());
+	}
+
+	// Matrices UBO is still needed for descriptor set completeness
 	gr_matrix_set_uniforms();
-	vulkan_set_default_material_uniforms(material_info);
 
 	auto* drawManager = getDrawManager();
 	drawManager->renderRocketPrimitives(material_info, prim_type, layout, n_indices, vertex_buffer, index_buffer);
+
+	gr_end_2d_matrix();
 }
 
 } // namespace vulkan
