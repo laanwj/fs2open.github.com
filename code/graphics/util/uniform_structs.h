@@ -232,7 +232,7 @@ struct tonemapping_data {
 	float sh_lnA;
 	float sh_offsetX;
 	float sh_offsetY;
-	float pad[1];
+	int linearOut; // 1 = skip sRGB conversion (Vulkan runtime flag, replaces compile-time LINEAR_OUT)
 };
 
 struct smaa_data {

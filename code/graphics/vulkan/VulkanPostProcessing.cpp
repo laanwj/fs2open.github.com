@@ -370,6 +370,7 @@ void VulkanPostProcessor::updateTonemappingUBO()
 		mapped->sh_lnA = ppc.sh_lnA;
 		mapped->sh_offsetX = ppc.sh_offsetX;
 		mapped->sh_offsetY = ppc.sh_offsetY;
+		mapped->linearOut = 0;  // Apply sRGB conversion (HDR → swap chain)
 		m_memoryManager->unmapMemory(m_tonemapUBOAlloc);
 	}
 }
@@ -1633,9 +1634,10 @@ void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 	}
 
 	// Build pipeline config for tonemapping (fullscreen, no depth, no blending)
+	// When blitting from LDR, use LINEAR_OUT to skip sRGB conversion (already applied)
 	PipelineConfig config;
 	config.shaderType = SDR_TYPE_POST_PROCESS_TONEMAPPING;
-	config.shaderFlags = 0;
+	config.shaderFlags = useLdr ? SDR_FLAG_TONEMAPPING_LINEAR_OUT : 0;
 	config.vertexLayoutHash = 0;  // Empty vertex layout
 	config.primitiveType = PRIM_TYPE_TRIS;
 	config.depthMode = ZBUFFER_TYPE_NONE;
@@ -1757,6 +1759,7 @@ void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 				memset(mapped, 0, sizeof(graphics::generic_data::tonemapping_data));
 				mapped->exposure = 1.0f;
 				mapped->tonemapper = 0;  // Linear passthrough
+				mapped->linearOut = 1;   // Skip sRGB — LDR input already has sRGB applied
 				m_memoryManager->unmapMemory(m_tonemapUBOAlloc);
 			}
 		}

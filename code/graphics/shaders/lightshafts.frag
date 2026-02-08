@@ -37,7 +37,7 @@ void main()
 	for (int i = 0; i < SAMPLE_NUM; i++) {
 		pos.st -= step;
 		vec4 tex_sample = texture(scene, pos);
-		if (tex_sample.r >= 0.999) // Depth ~= 1.0 means far plane (sky)
+		if (tex_sample.r == 1.0) // Depth == 1.0 means far plane (sky)
 			sum += decay * weight;
 		decay *= falloff;
 	}

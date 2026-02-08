@@ -20,29 +20,27 @@ layout(set = 2, binding = 0, std140) uniform genericData {
 	float sh_lnA;
 	float sh_offsetX;
 	float sh_offsetY;
+	int linearOut;
 };
 
-// Tonemapping operators
+// Tonemapping operators — matched to OpenGL tonemapping-f.sdr implementations
 
 vec3 linear_tonemap(vec3 color) {
 	return clamp(color, 0.0, 1.0);
 }
 
-vec3 uncharted2_tonemap(vec3 x) {
+vec3 uc2_tonemap(vec3 color) {
 	float A = 0.15;
 	float B = 0.50;
 	float C = 0.10;
 	float D = 0.20;
 	float E = 0.02;
 	float F = 0.30;
-	return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
-}
-
-vec3 uc2_tonemap(vec3 color) {
 	float W = 11.2;
-	vec3 curr = uncharted2_tonemap(color * 2.0);
-	vec3 whiteScale = 1.0 / uncharted2_tonemap(vec3(W));
-	return curr * whiteScale;
+	color = ((color * (A * color + C * B) + D * E) / (color * (A * color + B) + D * F)) - E / F;
+	float white = ((W * (A * W + C * B) + D * E) / (W * (A * W + B) + D * F)) - E / F;
+	color /= white;
+	return color;
 }
 
 vec3 aces_tonemap(vec3 color) {
@@ -73,36 +71,68 @@ vec3 aces_approx_tonemap(vec3 color) {
 }
 
 vec3 cineon_tonemap(vec3 color) {
+	// optimized filmic operator by Jim Hejl and Richard Burgess-Dawson
+	// linear to sRGB conversion embedded in shader
 	color = max(vec3(0.0), color - 0.004);
 	return (color * (6.2 * color + 0.5)) / (color * (6.2 * color + 1.7) + 0.06);
 }
 
 vec3 reinhard_jodie_tonemap(vec3 color) {
-	float l = dot(color, vec3(0.2126, 0.7152, 0.0722));
-	vec3 tv = color / (1.0 + color);
-	return mix(color / (1.0 + l), tv, tv);
+	float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+	float toneMappedLuma = luma / (1.0 + luma);
+	color *= toneMappedLuma / luma;
+	return color;
 }
 
 vec3 reinhard_extended_tonemap(vec3 color) {
-	return color / (1.0 + color);
+	float max_white = 1.0;
+	vec3 numerator = color * (1.0 + (color / vec3(max_white * max_white)));
+	return numerator / (1.0 + color);
 }
 
-// Piecewise Power Curve helpers
+// Piecewise Power Curve helpers — matched to OpenGL shoulder sign convention
+float ppc_toe(float x) {
+	return exp(toe_lnA + toe_B * log(x));
+}
+
+float ppc_linear(float x) {
+	return y0 + (x - x0);
+}
+
+float ppc_shoulder(float x) {
+	// Scale is -1 so reverse subtraction to save a mult
+	x = sh_offsetX - x;
+	x = exp(sh_lnA + sh_B * log(x));
+	x = sh_offsetY - x;
+	return x;
+}
+
 float ppc_eval(float x_in) {
-	if (x_in < x0) {
-		return exp(toe_lnA + toe_B * log(x_in));
-	} else if (x_in < x1) {
-		return y0 + (x_in - x0);  // linear segment, slope = 1
+	if (x_in <= x0) {
+		return ppc_toe(x_in);
+	} else if (x_in <= x1) {
+		return ppc_linear(x_in);
+	} else if (x_in < sh_offsetX) {
+		return ppc_shoulder(x_in);
 	} else {
-		return exp(sh_lnA + sh_B * log(x_in - sh_offsetX)) + sh_offsetY;
+		return sh_offsetY;
 	}
 }
 
 vec3 ppc_tonemap(vec3 color) {
-	float l = dot(color, vec3(0.2126, 0.7152, 0.0722));
-	if (l <= 0.0) return vec3(0.0);
-	float lOut = ppc_eval(l);
-	return color * (lOut / l);
+	float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+	if (luma <= 0.0) return vec3(0.0);
+	float luma_tone;
+	if (luma <= x0) {
+		luma_tone = ppc_toe(luma);
+	} else if (luma <= x1) {
+		luma_tone = ppc_linear(luma);
+	} else if (luma < sh_offsetX) {
+		luma_tone = ppc_shoulder(luma);
+	} else {
+		luma_tone = sh_offsetY;
+	}
+	return color * luma_tone / luma;
 }
 
 vec3 ppc_rgb_tonemap(vec3 color) {
@@ -135,9 +165,9 @@ void main()
 		color = ppc_rgb_tonemap(color);
 	}
 
-#ifndef LINEAR_OUT
-	color = linear_to_srgb(color);
-#endif
+	if (linearOut == 0) {
+		color = linear_to_srgb(color);
+	}
 
 	fragOut0 = vec4(color, 1.0);
 }
