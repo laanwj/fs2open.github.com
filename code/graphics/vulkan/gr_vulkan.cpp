@@ -690,6 +690,19 @@ void vulkan_flip()
 	renderer_instance->flip();
 }
 
+void vulkan_imgui_new_frame()
+{
+	ImGui_ImplVulkan_NewFrame();
+}
+
+void vulkan_imgui_render_draw_data()
+{
+	auto* renderer = getRendererInstance();
+	if (renderer) {
+		ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), renderer->getVkCurrentCommandBuffer());
+	}
+}
+
 void init_function_pointers()
 {
 	// function pointers...
@@ -767,6 +780,9 @@ void init_function_pointers()
 	gr_screen.gf_dump_envmap = stub_dump_envmap;
 	gr_screen.gf_override_fog = stub_override_fog;
 
+	gr_screen.gf_imgui_new_frame = vulkan_imgui_new_frame;
+	gr_screen.gf_imgui_render_draw_data = vulkan_imgui_render_draw_data;
+
 	gr_screen.gf_set_line_width = stub_set_line_width;
 
 	gr_screen.gf_sphere = stub_draw_sphere;
@@ -841,10 +857,9 @@ bool initialize(std::unique_ptr<os::GraphicsOperations>&& graphicsOps)
 		return false;
 	}
 
-	// Initialize ImGui SDL2 backend for Vulkan
-	// This must be done after the window is created but the actual Vulkan ImGui
-	// backend (ImGui_ImplVulkan) is not used yet - we just need the SDL2 backend
-	// for input handling
+	// Initialize ImGui SDL2 backend for input handling.
+	// The Vulkan rendering backend (ImGui_ImplVulkan) is initialized
+	// inside VulkanRenderer::initImGui() after all Vulkan objects are ready.
 	SDL_Window* window = os::getSDLMainWindow();
 	if (window) {
 		ImGui_ImplSDL2_InitForVulkan(window);

@@ -392,6 +392,9 @@ bool VulkanRenderer::initialize()
 	// Prepare the rendering state by acquiring our first swap chain image
 	acquireNextSwapChainImage();
 
+	// Initialize ImGui Vulkan rendering backend
+	initImGui();
+
 	return true;
 }
 
@@ -1192,6 +1195,85 @@ void VulkanRenderer::waitForFrame(uint64_t frameNumber)
 	m_frames[frameIndex]->waitForFinish();
 }
 
+VkCommandBuffer VulkanRenderer::getVkCurrentCommandBuffer() const
+{
+	return static_cast<VkCommandBuffer>(m_currentCommandBuffer);
+}
+
+void VulkanRenderer::createImGuiDescriptorPool()
+{
+	vk::DescriptorPoolSize poolSize;
+	poolSize.type = vk::DescriptorType::eCombinedImageSampler;
+	poolSize.descriptorCount = 100;
+
+	vk::DescriptorPoolCreateInfo poolInfo;
+	poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
+	poolInfo.maxSets = 100;
+	poolInfo.poolSizeCount = 1;
+	poolInfo.pPoolSizes = &poolSize;
+
+	m_imguiDescriptorPool = m_device->createDescriptorPoolUnique(poolInfo);
+}
+
+void VulkanRenderer::initImGui()
+{
+	createImGuiDescriptorPool();
+
+	ImGui_ImplVulkan_InitInfo initInfo = {};
+	initInfo.Instance = static_cast<VkInstance>(*m_vkInstance);
+	initInfo.PhysicalDevice = static_cast<VkPhysicalDevice>(m_physicalDevice);
+	initInfo.Device = static_cast<VkDevice>(*m_device);
+	initInfo.QueueFamily = m_graphicsQueueFamilyIndex;
+	initInfo.Queue = static_cast<VkQueue>(m_graphicsQueue);
+	initInfo.PipelineCache = VK_NULL_HANDLE;
+	initInfo.DescriptorPool = static_cast<VkDescriptorPool>(*m_imguiDescriptorPool);
+	initInfo.Subpass = 0;
+	initInfo.MinImageCount = 2;
+	initInfo.ImageCount = static_cast<uint32_t>(m_swapChainImages.size());
+	initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+	initInfo.Allocator = nullptr;
+	initInfo.CheckVkResultFn = nullptr;
+
+	ImGui_ImplVulkan_Init(&initInfo, static_cast<VkRenderPass>(*m_renderPass));
+
+	// Upload font textures via one-time command buffer
+	{
+		vk::CommandBufferAllocateInfo allocInfo;
+		allocInfo.commandPool = m_graphicsCommandPool.get();
+		allocInfo.level = vk::CommandBufferLevel::ePrimary;
+		allocInfo.commandBufferCount = 1;
+
+		auto cmdBuffers = m_device->allocateCommandBuffers(allocInfo);
+		auto cmd = cmdBuffers.front();
+
+		vk::CommandBufferBeginInfo beginInfo;
+		beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+		cmd.begin(beginInfo);
+
+		ImGui_ImplVulkan_CreateFontsTexture(static_cast<VkCommandBuffer>(cmd));
+
+		cmd.end();
+
+		vk::SubmitInfo submitInfo;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &cmd;
+		m_graphicsQueue.submit(submitInfo, nullptr);
+		m_graphicsQueue.waitIdle();
+
+		m_device->freeCommandBuffers(m_graphicsCommandPool.get(), cmdBuffers);
+		ImGui_ImplVulkan_DestroyFontUploadObjects();
+	}
+
+	mprintf(("Vulkan: ImGui backend initialized successfully\n"));
+}
+
+void VulkanRenderer::shutdownImGui()
+{
+	ImGui_ImplVulkan_Shutdown();
+	m_imguiDescriptorPool.reset();
+	mprintf(("Vulkan: ImGui backend shut down\n"));
+}
+
 void VulkanRenderer::shutdown()
 {
 	// Wait for all frames to complete to ensure no drawing is in progress when we destroy the device
@@ -1200,6 +1282,9 @@ void VulkanRenderer::shutdown()
 	}
 	// For good measure, also wait until the device is idle
 	m_device->waitIdle();
+
+	// Shutdown ImGui Vulkan backend before destroying any Vulkan objects
+	shutdownImGui();
 
 	// Shutdown managers in reverse order of initialization
 	// Phase 4 managers first

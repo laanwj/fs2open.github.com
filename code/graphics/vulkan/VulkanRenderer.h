@@ -91,6 +91,11 @@ class VulkanRenderer {
 	 */
 	void waitIdle();
 
+	/**
+	 * @brief Get the current command buffer as a raw Vulkan handle (for ImGui)
+	 */
+	VkCommandBuffer getVkCurrentCommandBuffer() const;
+
   private:
 	bool initDisplayDevice() const;
 
@@ -121,6 +126,10 @@ class VulkanRenderer {
 	void createPresentSyncObjects();
 
 	void acquireNextSwapChainImage();
+
+	void createImGuiDescriptorPool();
+	void initImGui();
+	void shutdownImGui();
 
 	std::unique_ptr<os::GraphicsOperations> m_graphicsOps;
 
@@ -153,6 +162,7 @@ class VulkanRenderer {
 	vk::Format m_depthFormat = vk::Format::eUndefined;
 
 	vk::UniqueRenderPass m_renderPass;
+	vk::UniqueDescriptorPool m_imguiDescriptorPool;
 
 	uint32_t m_currentFrame = 0;
 	uint64_t m_frameNumber = 0;  // Total frames rendered (for sync tracking)
