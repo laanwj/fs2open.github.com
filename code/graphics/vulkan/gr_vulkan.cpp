@@ -467,6 +467,12 @@ bool initialize(std::unique_ptr<os::GraphicsOperations>&& graphicsOps)
 	gr_reset_matrices();
 	gr_setup_viewport();
 
+	// Start first frame so a command buffer is active before the first draw calls.
+	// The engine draws the title screen during game_init(), before the main loop's
+	// first gr_flip() → setupFrame(). Without this, any gr_clear/gr_bitmap before
+	// the first flip would hit a null command buffer. Matches OpenGL init behavior.
+	gr_setup_frame();
+
 	mprintf(("Vulkan: Initialization complete\n"));
 	return true;
 }
