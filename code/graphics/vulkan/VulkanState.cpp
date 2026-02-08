@@ -187,11 +187,6 @@ void VulkanStateTracker::bindDescriptorSet(DescriptorSetIndex setIndex, vk::Desc
 	uint32_t index = static_cast<uint32_t>(setIndex);
 
 	if (m_boundDescriptorSets[index] != set && set && m_cmdBuffer && m_currentPipelineLayout) {
-		mprintf(("VulkanStateTracker: Binding descriptor set %p to index %u (cmdBuffer=%p)\n",
-			static_cast<void*>(static_cast<VkDescriptorSet>(set)),
-			index,
-			static_cast<void*>(static_cast<VkCommandBuffer>(m_cmdBuffer))));
-
 		m_cmdBuffer.bindDescriptorSets(
 			vk::PipelineBindPoint::eGraphics,
 			m_currentPipelineLayout,
