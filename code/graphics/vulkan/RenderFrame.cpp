@@ -60,9 +60,9 @@ void RenderFrame::submitAndPresent(const std::vector<vk::CommandBuffer>& cmdBuff
 {
 	Assertion(!m_inFlight, "Cannot submit a frame for presentation when it is still in flight.");
 
-	// Wait at transfer stage so the presentation engine releases the image before
-	// the render pass begins writing to it.
-	const std::array<vk::PipelineStageFlags, 1> waitStages = {vk::PipelineStageFlagBits::eTransfer};
+	// Wait at color attachment output stage — the first use of the swap chain image
+	// is loadOp=eClear at the start of the render pass, which is a color attachment write.
+	const std::array<vk::PipelineStageFlags, 1> waitStages = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
 	const std::array<vk::Semaphore, 1> waitSemaphores = {m_imageAvailableSemaphore.get()};
 
 	vk::SubmitInfo submitInfo;
