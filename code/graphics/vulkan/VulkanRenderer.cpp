@@ -292,8 +292,7 @@ bool VulkanRenderer::initialize()
 	createFrameBuffers();
 
 	// Transition swap chain images to ePresentSrcKHR so the render pass
-	// can use loadOp=eLoad with initialLayout=ePresentSrcKHR from the start.
-	// This also clears them to black so the first frame has clean contents.
+	// can use initialLayout=ePresentSrcKHR from the start.
 	{
 		vk::CommandBufferAllocateInfo allocInfo;
 		allocInfo.commandPool = m_graphicsCommandPool.get();
@@ -947,11 +946,8 @@ void VulkanRenderer::acquireNextSwapChainImage()
 }
 void VulkanRenderer::setupFrame()
 {
-	static int frameCounter = 0;
-	mprintf(("=== VulkanRenderer::setupFrame START (frame %d) ===\n", frameCounter++));
-
 	if (m_frameInProgress) {
-		mprintf(("VulkanRenderer::setupFrame called while frame already in progress!\n"));
+		Warning(LOCATION, "VulkanRenderer::setupFrame called while frame already in progress!");
 		return;
 	}
 
@@ -1015,17 +1011,12 @@ void VulkanRenderer::setupFrame()
 	}
 
 	m_frameInProgress = true;
-	mprintf(("=== VulkanRenderer::setupFrame END ===\n"));
 }
 
 void VulkanRenderer::flip()
 {
-	static int flipCounter = 0;
-	mprintf(("=== VulkanRenderer::flip START (flip %d, m_frameInProgress=%d) ===\n",
-		flipCounter++, m_frameInProgress ? 1 : 0));
-
 	if (!m_frameInProgress) {
-		mprintf(("VulkanRenderer::flip called without frame in progress, skipping\n"));
+		nprintf(("Vulkan", "VulkanRenderer::flip called without frame in progress, skipping\n"));
 		return;
 	}
 
@@ -1067,15 +1058,12 @@ void VulkanRenderer::flip()
 	// This ensures any buffer operations that happen before setupFrame() use the correct frame
 	m_bufferManager->setCurrentFrame(m_currentFrame);
 
-	mprintf(("VulkanRenderer::flip - about to acquireNextSwapChainImage, m_currentFrame now %d\n", m_currentFrame));
 	acquireNextSwapChainImage();
 
 	// Process deferred resource deletions AFTER the fence wait in
 	// acquireNextSwapChainImage, so we know the previous frame's commands
 	// (including async upload CBs) have completed before destroying resources.
 	m_deletionQueue->processDestructions();
-
-	mprintf(("=== VulkanRenderer::flip END ===\n"));
 }
 
 int VulkanRenderer::saveScreen(ubyte** outPixels)

@@ -58,14 +58,10 @@ uint32_t RenderFrame::acquireSwapchainImage()
 }
 void RenderFrame::submitAndPresent(const std::vector<vk::CommandBuffer>& cmdBuffers)
 {
-	mprintf(("RenderFrame::submitAndPresent - cmdBuffers.size()=%zu, swapChainIdx=%u\n",
-		cmdBuffers.size(), m_swapChainIdx));
-
 	Assertion(!m_inFlight, "Cannot submit a frame for presentation when it is still in flight.");
 
-	// Wait at transfer stage because setupFrame() may blit the previous swap chain
-	// image to the current one before the render pass. Without this, the blit could
-	// execute before the presentation engine releases the image.
+	// Wait at transfer stage so the presentation engine releases the image before
+	// the render pass begins writing to it.
 	const std::array<vk::PipelineStageFlags, 1> waitStages = {vk::PipelineStageFlagBits::eTransfer};
 	const std::array<vk::Semaphore, 1> waitSemaphores = {m_imageAvailableSemaphore.get()};
 
@@ -81,7 +77,6 @@ void RenderFrame::submitAndPresent(const std::vector<vk::CommandBuffer>& cmdBuff
 	submitInfo.signalSemaphoreCount = 1;
 	submitInfo.pSignalSemaphores = signalSemaphores.data();
 
-	mprintf(("RenderFrame::submitAndPresent - submitting to graphics queue\n"));
 	m_graphicsQueue.submit(submitInfo, m_frameInFlightFence.get());
 
 	// This frame is now officially in flight
@@ -97,9 +92,7 @@ void RenderFrame::submitAndPresent(const std::vector<vk::CommandBuffer>& cmdBuff
 	presentInfo.pImageIndices = &m_swapChainIdx;
 	presentInfo.pResults = nullptr;
 
-	mprintf(("RenderFrame::submitAndPresent - presenting\n"));
-	vk::Result res = m_presentQueue.presentKHR(presentInfo);
-	mprintf(("RenderFrame::submitAndPresent - present result: %d\n", static_cast<int>(res)));
+	(void)m_presentQueue.presentKHR(presentInfo);
 }
 
 } // namespace vulkan

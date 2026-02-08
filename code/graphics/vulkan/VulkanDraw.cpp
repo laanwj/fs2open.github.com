@@ -576,26 +576,6 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 		return;  // Nothing to draw
 	}
 
-	// Log model material textures for debugging
-	static int modelLogCount = 0;
-	if (modelLogCount < 10) {
-		int baseMap = material_info->get_texture_map(TM_BASE_TYPE);
-		int glowMap = material_info->get_texture_map(TM_GLOW_TYPE);
-		int specMap = material_info->get_texture_map(TM_SPECULAR_TYPE);
-		mprintf(("renderModel #%d: base=%d glow=%d spec=%d texType=%d shaderFlags=0x%x\n",
-			modelLogCount, baseMap, glowMap, specMap,
-			material_info->get_texture_type(),
-			material_info->get_shader_runtime_flags()));
-		if (baseMap >= 0) {
-			mprintf(("  baseMap: bmType=%d compType=%d hasAlpha=%d name=%s\n",
-				static_cast<int>(bm_get_type(baseMap)),
-				bm_is_compressed(baseMap),
-				bm_has_alpha_channel(baseMap) ? 1 : 0,
-				bm_get_filename(baseMap)));
-		}
-		modelLogCount++;
-	}
-
 	// Apply model material state and bind pipeline
 	// Model rendering always uses triangles
 	if (!applyMaterial(material_info, PRIM_TYPE_TRIS, &bufferp->layout)) {

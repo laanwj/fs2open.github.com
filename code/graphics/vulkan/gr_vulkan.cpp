@@ -474,8 +474,7 @@ bool initialize(std::unique_ptr<os::GraphicsOperations>&& graphicsOps)
 	gr_reset_matrices();
 	gr_setup_viewport();
 
-	// Nothing else is finished so always fail here
-	mprintf(("Vulkan support is not finished yet so graphics initialization will always fail...\n"));
+	mprintf(("Vulkan: Initialization complete\n"));
 	return true;
 }
 
