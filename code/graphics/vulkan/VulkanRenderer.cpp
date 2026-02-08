@@ -928,7 +928,7 @@ void VulkanRenderer::createRenderPass()
 	// Create a second render pass with loadOp=eLoad for resuming the swap chain
 	// after post-processing. Same formats/samples = render-pass-compatible with m_renderPass.
 	colorAttachment.loadOp = vk::AttachmentLoadOp::eLoad;
-	colorAttachment.initialLayout = vk::ImageLayout::eColorAttachmentOptimal;
+	colorAttachment.initialLayout = vk::ImageLayout::ePresentSrcKHR;
 
 	depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
 	depthAttachment.initialLayout = vk::ImageLayout::eUndefined;

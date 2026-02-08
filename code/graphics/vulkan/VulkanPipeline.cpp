@@ -271,6 +271,9 @@ void VulkanPipelineManager::createPipelineLayout()
 vk::UniquePipeline VulkanPipelineManager::createPipeline(const PipelineConfig& config,
                                                           const vertex_layout& vertexLayout)
 {
+	// Ensure shader is loaded (lazy creation on first use)
+	m_shaderManager->maybeCreateShader(config.shaderType, config.shaderFlags);
+
 	// Get shader modules
 	const VulkanShaderModule* shader = m_shaderManager->getShaderByType(config.shaderType, config.shaderFlags);
 	if (!shader || !shader->valid) {
