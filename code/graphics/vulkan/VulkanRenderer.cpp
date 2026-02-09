@@ -375,6 +375,7 @@ bool VulkanRenderer::initialize()
 		return false;
 	}
 	setPipelineManager(m_pipelineManager.get());
+	m_pipelineManager->loadPipelineCache("vulkan_pipeline.cache");
 
 	// Initialize state tracker
 	m_stateTracker = std::unique_ptr<VulkanStateTracker>(new VulkanStateTracker());
@@ -1575,6 +1576,7 @@ void VulkanRenderer::shutdown()
 	}
 
 	if (m_pipelineManager) {
+		m_pipelineManager->savePipelineCache("vulkan_pipeline.cache");
 		setPipelineManager(nullptr);
 		m_pipelineManager->shutdown();
 		m_pipelineManager.reset();
