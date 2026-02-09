@@ -217,7 +217,8 @@ private:
 	 */
 	void recordUploadCommands(vk::CommandBuffer cmd, vk::Image image, vk::Buffer stagingBuffer,
 	                          vk::Format format, uint32_t width, uint32_t height,
-	                          uint32_t mipLevels, vk::ImageLayout oldLayout);
+	                          uint32_t mipLevels, vk::ImageLayout oldLayout,
+	                          bool generateMips = false);
 
 	/**
 	 * @brief Submit an upload command buffer asynchronously and defer resource cleanup
