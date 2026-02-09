@@ -36,13 +36,13 @@ struct PhysicalDeviceValues {
 	vk::PhysicalDeviceProperties properties;
 	vk::PhysicalDeviceFeatures features;
 
-	std::vector<vk::ExtensionProperties> extensions;
+	SCP_vector<vk::ExtensionProperties> extensions;
 
 	vk::SurfaceCapabilitiesKHR surfaceCapabilities;
-	std::vector<vk::SurfaceFormatKHR> surfaceFormats;
-	std::vector<vk::PresentModeKHR> presentModes;
+	SCP_vector<vk::SurfaceFormatKHR> surfaceFormats;
+	SCP_vector<vk::PresentModeKHR> presentModes;
 
-	std::vector<vk::QueueFamilyProperties> queueProperties;
+	SCP_vector<vk::QueueFamilyProperties> queueProperties;
 	QueueIndex graphicsQueueIndex;
 	QueueIndex transferQueueIndex;
 	QueueIndex presentQueueIndex;
@@ -227,7 +227,7 @@ class VulkanRenderer {
 
 	// Current frame command buffer (valid between setupFrame and flip)
 	vk::CommandBuffer m_currentCommandBuffer;
-	std::vector<vk::CommandBuffer> m_currentCommandBuffers;  // For cleanup
+	SCP_vector<vk::CommandBuffer> m_currentCommandBuffers;  // For cleanup
 	bool m_frameInProgress = false;
 
 	// Physical device info (needed for memory manager)

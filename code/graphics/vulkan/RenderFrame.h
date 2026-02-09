@@ -17,7 +17,7 @@ class RenderFrame {
 
 	void onFrameFinished(std::function<void()> finishFunc);
 
-	void submitAndPresent(const std::vector<vk::CommandBuffer>& cmdBuffers);
+	void submitAndPresent(const SCP_vector<vk::CommandBuffer>& cmdBuffers);
 
   private:
 	vk::Device m_device;

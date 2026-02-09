@@ -56,7 +56,7 @@ uint32_t RenderFrame::acquireSwapchainImage()
 
 	return imageIndex;
 }
-void RenderFrame::submitAndPresent(const std::vector<vk::CommandBuffer>& cmdBuffers)
+void RenderFrame::submitAndPresent(const SCP_vector<vk::CommandBuffer>& cmdBuffers)
 {
 	Assertion(!m_inFlight, "Cannot submit a frame for presentation when it is still in flight.");
 

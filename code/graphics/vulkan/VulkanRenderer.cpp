@@ -55,7 +55,8 @@ const SCP_vector<const char*> RequiredDeviceExtensions = {
 
 bool checkDeviceExtensionSupport(PhysicalDeviceValues& values)
 {
-	values.extensions = values.device.enumerateDeviceExtensionProperties();
+	auto exts = values.device.enumerateDeviceExtensionProperties();
+	values.extensions.assign(exts.begin(), exts.end());
 
 	std::set<std::string> requiredExtensions(RequiredDeviceExtensions.cbegin(), RequiredDeviceExtensions.cend());
 	for (const auto& extension : values.extensions) {
@@ -68,8 +69,10 @@ bool checkDeviceExtensionSupport(PhysicalDeviceValues& values)
 bool checkSwapChainSupport(PhysicalDeviceValues& values, const vk::UniqueSurfaceKHR& surface)
 {
 	values.surfaceCapabilities = values.device.getSurfaceCapabilitiesKHR(surface.get());
-	values.surfaceFormats = values.device.getSurfaceFormatsKHR(surface.get());
-	values.presentModes = values.device.getSurfacePresentModesKHR(surface.get());
+	auto fmts = values.device.getSurfaceFormatsKHR(surface.get());
+	values.surfaceFormats.assign(fmts.begin(), fmts.end());
+	auto modes = values.device.getSurfacePresentModesKHR(surface.get());
+	values.presentModes.assign(modes.begin(), modes.end());
 
 	return !values.surfaceFormats.empty() && !values.presentModes.empty();
 }
@@ -472,7 +475,7 @@ bool VulkanRenderer::initializeInstance()
 		return false;
 	}
 
-	std::vector<const char*> extensions;
+	SCP_vector<const char*> extensions;
 	extensions.resize(count);
 
 	if (!SDL_Vulkan_GetInstanceExtensions(window, &count, extensions.data())) {
@@ -509,7 +512,7 @@ bool VulkanRenderer::initializeInstance()
 		}
 	}
 
-	std::vector<const char*> layers;
+	SCP_vector<const char*> layers;
 	const auto supportedLayers = vk::enumerateInstanceLayerProperties();
 	mprintf(("Instance layers:\n"));
 	for (const auto& layer : supportedLayers) {
@@ -612,7 +615,8 @@ bool VulkanRenderer::pickPhysicalDevice(PhysicalDeviceValues& deviceValues)
 		vals.device = dev;
 		vals.properties = dev.getProperties2().properties;
 		vals.features = dev.getFeatures2().features;
-		vals.queueProperties = dev.getQueueFamilyProperties();
+		auto qprops = dev.getQueueFamilyProperties();
+		vals.queueProperties.assign(qprops.begin(), qprops.end());
 		return vals;
 	});
 
@@ -647,7 +651,7 @@ bool VulkanRenderer::createLogicalDevice(const PhysicalDeviceValues& deviceValue
 {
 	float queuePriority = 1.0f;
 
-	std::vector<vk::DeviceQueueCreateInfo> queueInfos;
+	SCP_vector<vk::DeviceQueueCreateInfo> queueInfos;
 	const std::set<uint32_t> familyIndices{deviceValues.graphicsQueueIndex.index,
 	                                       deviceValues.transferQueueIndex.index,
 	                                       deviceValues.presentQueueIndex.index};
@@ -744,8 +748,8 @@ bool VulkanRenderer::createSwapChain(const PhysicalDeviceValues& deviceValues)
 
 	m_swapChain = m_device->createSwapchainKHRUnique(createInfo);
 
-	std::vector<vk::Image> swapChainImages = m_device->getSwapchainImagesKHR(m_swapChain.get());
-	m_swapChainImages = SCP_vector<vk::Image>(swapChainImages.begin(), swapChainImages.end());
+	auto swapChainImages = m_device->getSwapchainImagesKHR(m_swapChain.get());
+	m_swapChainImages.assign(swapChainImages.begin(), swapChainImages.end());
 	m_swapChainImageFormat = surfaceFormat.format;
 	m_swapChainExtent = createInfo.imageExtent;
 
@@ -983,7 +987,8 @@ void VulkanRenderer::setupFrame()
 	cmdBufferAlloc.level = vk::CommandBufferLevel::ePrimary;
 	cmdBufferAlloc.commandBufferCount = 1;
 
-	m_currentCommandBuffers = m_device->allocateCommandBuffers(cmdBufferAlloc);
+	auto cmdBufs = m_device->allocateCommandBuffers(cmdBufferAlloc);
+	m_currentCommandBuffers.assign(cmdBufs.begin(), cmdBufs.end());
 	m_currentCommandBuffer = m_currentCommandBuffers.front();
 
 	// Begin command buffer
