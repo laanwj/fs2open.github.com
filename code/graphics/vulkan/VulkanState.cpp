@@ -116,6 +116,13 @@ void VulkanStateTracker::setViewport(float x, float y, float width, float height
 		m_viewport.minDepth = minDepth;
 		m_viewport.maxDepth = maxDepth;
 		m_viewportDirty = true;
+
+		// When scissor is disabled, applyDynamicState derives the scissor rect
+		// from the viewport dimensions. So a viewport change invalidates that
+		// computed scissor and must trigger a re-flush.
+		if (!m_scissorEnabled) {
+			m_scissorDirty = true;
+		}
 	}
 }
 
