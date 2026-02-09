@@ -339,8 +339,6 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 			return false;
 		}
 
-		m_device.bindBufferMemory(m_tonemapUBO, m_tonemapUBOAlloc.memory, m_tonemapUBOAlloc.offset);
-
 		// Write default passthrough tonemapping data (linear, exposure=1.0)
 		auto* mapped = static_cast<graphics::generic_data::tonemapping_data*>(m_memoryManager->mapMemory(m_tonemapUBOAlloc));
 		if (mapped) {
@@ -717,7 +715,6 @@ bool VulkanPostProcessor::initBloom()
 			return false;
 		}
 
-		m_device.bindBufferMemory(m_bloomUBO, m_bloomUBOAlloc.memory, m_bloomUBOAlloc.offset);
 	}
 
 	m_bloomInitialized = true;

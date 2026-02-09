@@ -1175,8 +1175,6 @@ int VulkanRenderer::saveScreen(ubyte** outPixels)
 		return -1;
 	}
 
-	m_device->bindBufferMemory(stagingBuffer, stagingAlloc.memory, stagingAlloc.offset);
-
 	// Copy image to staging buffer
 	vk::BufferImageCopy region;
 	region.bufferOffset = 0;
