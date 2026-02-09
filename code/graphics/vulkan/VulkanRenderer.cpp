@@ -1501,6 +1501,48 @@ void VulkanRenderer::endSceneRendering()
 	m_sceneRendering = false;
 }
 
+void VulkanRenderer::copyEffectTexture()
+{
+	if (!m_sceneRendering || !m_postProcessor || !m_postProcessor->isInitialized()) {
+		return;
+	}
+
+	// End the current scene render pass
+	// This transitions scene color to eShaderReadOnlyOptimal (the render pass's finalLayout)
+	m_currentCommandBuffer.endRenderPass();
+
+	// Copy scene color → effect texture (handles all image transitions)
+	m_postProcessor->copyEffectTexture(m_currentCommandBuffer);
+
+	// Resume the scene render pass with loadOp=eLoad to preserve existing content
+	// Scene color is now in eColorAttachmentOptimal (copyEffectTexture transitions it back)
+	// Depth is still in eDepthStencilAttachmentOptimal (untouched by the copy)
+	vk::RenderPassBeginInfo rpBegin;
+	rpBegin.renderPass = m_postProcessor->getSceneRenderPassLoad();
+	rpBegin.framebuffer = m_postProcessor->getSceneFramebuffer();
+	rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+	rpBegin.renderArea.extent = m_postProcessor->getSceneExtent();
+
+	// Clear values are ignored for loadOp=eLoad but array must cover all attachments
+	std::array<vk::ClearValue, 2> clearValues;
+	clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+	clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+	rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+	rpBegin.pClearValues = clearValues.data();
+
+	m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+
+	// Update state tracker to use the resumed render pass (compatible with original)
+	m_stateTracker->setRenderPass(m_postProcessor->getSceneRenderPassLoad(), 0);
+
+	// Restore Y-flipped viewport for scene rendering
+	auto extent = m_postProcessor->getSceneExtent();
+	m_stateTracker->setViewport(0.0f,
+		static_cast<float>(extent.height),
+		static_cast<float>(extent.width),
+		-static_cast<float>(extent.height));
+}
+
 void VulkanRenderer::shutdown()
 {
 	// Wait for all frames to complete to ensure no drawing is in progress when we destroy the device

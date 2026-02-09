@@ -369,6 +369,7 @@ void vulkan_clear_states();
 // Scene texture
 void vulkan_scene_texture_begin();
 void vulkan_scene_texture_end();
+void vulkan_copy_effect_texture();
 
 // 3D primitives
 void vulkan_draw_sphere(material* material_def, float rad);

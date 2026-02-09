@@ -59,8 +59,10 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 	}
 
 	// Create HDR scene color target (RGBA16F)
+	// eTransferSrc needed for copy_effect_texture (mid-scene snapshot)
 	if (!createImage(extent.width, extent.height, vk::Format::eR16G16B16A16Sfloat,
-	                 vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+	                 vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
+	                 | vk::ImageUsageFlagBits::eTransferSrc,
 	                 vk::ImageAspectFlagBits::eColor,
 	                 m_sceneColor.image, m_sceneColor.view, m_sceneColor.allocation)) {
 		mprintf(("VulkanPostProcessor: Failed to create scene color image!\n"));
@@ -89,6 +91,19 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 	m_sceneDepth.width = extent.width;
 	m_sceneDepth.height = extent.height;
 
+	// Create effect/composite texture (RGBA16F, snapshot of scene color for distortion/soft particles)
+	if (!createImage(extent.width, extent.height, vk::Format::eR16G16B16A16Sfloat,
+	                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+	                 vk::ImageAspectFlagBits::eColor,
+	                 m_sceneEffect.image, m_sceneEffect.view, m_sceneEffect.allocation)) {
+		mprintf(("VulkanPostProcessor: Failed to create scene effect image!\n"));
+		shutdown();
+		return false;
+	}
+	m_sceneEffect.format = vk::Format::eR16G16B16A16Sfloat;
+	m_sceneEffect.width = extent.width;
+	m_sceneEffect.height = extent.height;
+
 	// Create HDR scene render pass
 	// Attachment 0: Color (RGBA16F)
 	//   loadOp=eClear: clear to black each frame
@@ -109,13 +124,15 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 		attachments[0].initialLayout = vk::ImageLayout::eUndefined;
 		attachments[0].finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
-		// Depth
+		// Depth — storeOp=eStore required for:
+		// 1. copy_effect_texture mid-scene interruption (depth must survive render pass end/resume)
+		// 2. lightshafts pass (samples scene depth after render pass ends)
 		attachments[1].format = depthFormat;
 		attachments[1].samples = vk::SampleCountFlagBits::e1;
 		attachments[1].loadOp = vk::AttachmentLoadOp::eClear;
-		attachments[1].storeOp = vk::AttachmentStoreOp::eDontCare;
+		attachments[1].storeOp = vk::AttachmentStoreOp::eStore;
 		attachments[1].stencilLoadOp = vk::AttachmentLoadOp::eClear;
-		attachments[1].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+		attachments[1].stencilStoreOp = vk::AttachmentStoreOp::eStore;
 		attachments[1].initialLayout = vk::ImageLayout::eUndefined;
 		attachments[1].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
 
@@ -156,6 +173,73 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 			m_sceneRenderPass = m_device.createRenderPass(rpInfo);
 		} catch (const vk::SystemError& e) {
 			mprintf(("VulkanPostProcessor: Failed to create scene render pass: %s\n", e.what()));
+			shutdown();
+			return false;
+		}
+	}
+
+	// Create scene render pass with loadOp=eLoad (for resuming after copy_effect_texture)
+	// Compatible with m_sceneRenderPass (same formats/samples) so shares the same framebuffer
+	{
+		std::array<vk::AttachmentDescription, 2> attachments;
+
+		// Color — load existing content, keep final layout for post-processing
+		attachments[0].format = vk::Format::eR16G16B16A16Sfloat;
+		attachments[0].samples = vk::SampleCountFlagBits::e1;
+		attachments[0].loadOp = vk::AttachmentLoadOp::eLoad;
+		attachments[0].storeOp = vk::AttachmentStoreOp::eStore;
+		attachments[0].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+		attachments[0].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+		attachments[0].initialLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		attachments[0].finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		// Depth — load existing content
+		attachments[1].format = depthFormat;
+		attachments[1].samples = vk::SampleCountFlagBits::e1;
+		attachments[1].loadOp = vk::AttachmentLoadOp::eLoad;
+		attachments[1].storeOp = vk::AttachmentStoreOp::eStore;
+		attachments[1].stencilLoadOp = vk::AttachmentLoadOp::eLoad;
+		attachments[1].stencilStoreOp = vk::AttachmentStoreOp::eStore;
+		attachments[1].initialLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+		attachments[1].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		vk::AttachmentReference colorRef;
+		colorRef.attachment = 0;
+		colorRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
+		vk::AttachmentReference depthRef;
+		depthRef.attachment = 1;
+		depthRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		vk::SubpassDescription subpass;
+		subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &colorRef;
+		subpass.pDepthStencilAttachment = &depthRef;
+
+		vk::SubpassDependency dependency;
+		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependency.dstSubpass = 0;
+		dependency.srcStageMask = vk::PipelineStageFlagBits::eTransfer;
+		dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+		dependency.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+		dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentRead;
+
+		vk::RenderPassCreateInfo rpInfo;
+		rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+		rpInfo.pAttachments = attachments.data();
+		rpInfo.subpassCount = 1;
+		rpInfo.pSubpasses = &subpass;
+		rpInfo.dependencyCount = 1;
+		rpInfo.pDependencies = &dependency;
+
+		try {
+			m_sceneRenderPassLoad = m_device.createRenderPass(rpInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create scene load render pass: %s\n", e.what()));
 			shutdown();
 			return false;
 		}
@@ -312,9 +396,26 @@ void VulkanPostProcessor::shutdown()
 			m_device.destroyFramebuffer(m_sceneFramebuffer);
 			m_sceneFramebuffer = nullptr;
 		}
+		if (m_sceneRenderPassLoad) {
+			m_device.destroyRenderPass(m_sceneRenderPassLoad);
+			m_sceneRenderPassLoad = nullptr;
+		}
 		if (m_sceneRenderPass) {
 			m_device.destroyRenderPass(m_sceneRenderPass);
 			m_sceneRenderPass = nullptr;
+		}
+
+		// Destroy scene effect/composite target
+		if (m_sceneEffect.view) {
+			m_device.destroyImageView(m_sceneEffect.view);
+			m_sceneEffect.view = nullptr;
+		}
+		if (m_sceneEffect.image) {
+			m_device.destroyImage(m_sceneEffect.image);
+			m_sceneEffect.image = nullptr;
+		}
+		if (m_sceneEffect.allocation.memory != VK_NULL_HANDLE) {
+			m_memoryManager->freeAllocation(m_sceneEffect.allocation);
 		}
 
 		// Destroy scene color target
@@ -1609,6 +1710,123 @@ void VulkanPostProcessor::executeLightshafts(vk::CommandBuffer cmd)
 
 	m_memoryManager->unmapMemory(m_bloomUBOAlloc);
 	m_bloomUBOMapped = nullptr;
+}
+
+void VulkanPostProcessor::copyEffectTexture(vk::CommandBuffer cmd)
+{
+	// Called mid-scene, outside a render pass.
+	// Scene color is in eShaderReadOnlyOptimal (from the ended scene render pass).
+	// Copies scene color → effect texture so distortion/soft particle shaders can sample it.
+
+	// Transition scene color: eShaderReadOnlyOptimal → eTransferSrcOptimal
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_sceneColor.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, {}, {}, barrier);
+	}
+
+	// Transition effect texture: eUndefined → eTransferDstOptimal
+	// Using eUndefined discards any previous content (which we're overwriting anyway)
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barrier.oldLayout = vk::ImageLayout::eUndefined;
+		barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_sceneEffect.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTopOfPipe,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, {}, {}, barrier);
+	}
+
+	// Copy scene color → effect texture (same format and extent, use vkCmdCopyImage)
+	{
+		vk::ImageCopy region;
+		region.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+		region.srcSubresource.mipLevel = 0;
+		region.srcSubresource.baseArrayLayer = 0;
+		region.srcSubresource.layerCount = 1;
+		region.srcOffset = vk::Offset3D(0, 0, 0);
+		region.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+		region.dstSubresource.mipLevel = 0;
+		region.dstSubresource.baseArrayLayer = 0;
+		region.dstSubresource.layerCount = 1;
+		region.dstOffset = vk::Offset3D(0, 0, 0);
+		region.extent = vk::Extent3D(m_extent.width, m_extent.height, 1);
+
+		cmd.copyImage(
+			m_sceneColor.image, vk::ImageLayout::eTransferSrcOptimal,
+			m_sceneEffect.image, vk::ImageLayout::eTransferDstOptimal,
+			region);
+	}
+
+	// Transition scene color: eTransferSrcOptimal → eColorAttachmentOptimal (ready for resumed render pass)
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_sceneColor.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			{}, {}, {}, barrier);
+	}
+
+	// Transition effect texture: eTransferDstOptimal → eShaderReadOnlyOptimal (ready for sampling)
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+		barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_sceneEffect.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			vk::PipelineStageFlagBits::eFragmentShader,
+			{}, {}, {}, barrier);
+	}
 }
 
 void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)

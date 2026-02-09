@@ -146,6 +146,15 @@ class VulkanRenderer {
 	void endSceneRendering();
 
 	/**
+	 * @brief Copy scene color to effect texture mid-scene
+	 *
+	 * Called by vulkan_copy_effect_texture(). Ends the current scene render
+	 * pass, copies scene color → effect texture, then resumes the scene
+	 * render pass with loadOp=eLoad to preserve existing content.
+	 */
+	void copyEffectTexture();
+
+	/**
 	 * @brief Check if we're currently rendering to the HDR scene target
 	 */
 	bool isSceneRendering() const { return m_sceneRendering; }

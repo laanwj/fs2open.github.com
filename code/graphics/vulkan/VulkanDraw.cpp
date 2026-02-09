@@ -1544,6 +1544,18 @@ void vulkan_scene_texture_end()
 	High_dynamic_range = false;
 }
 
+void vulkan_copy_effect_texture()
+{
+	auto* renderer = getRendererInstance();
+
+	// Only copy if we're actively rendering the HDR scene
+	if (!renderer->isSceneRendering()) {
+		return;
+	}
+
+	renderer->copyEffectTexture();
+}
+
 void vulkan_draw_sphere(material* material_def, float /*rad*/)
 {
 	auto* drawManager = getDrawManager();

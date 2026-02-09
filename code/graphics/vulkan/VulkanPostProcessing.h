@@ -51,6 +51,15 @@ public:
 	vk::RenderPass getSceneRenderPass() const { return m_sceneRenderPass; }
 
 	/**
+	 * @brief Get the HDR scene render pass with loadOp=eLoad
+	 *
+	 * Compatible with getSceneRenderPass() (same formats/samples) so uses
+	 * the same framebuffer. Used to resume scene rendering after
+	 * copy_effect_texture interrupts the pass.
+	 */
+	vk::RenderPass getSceneRenderPassLoad() const { return m_sceneRenderPassLoad; }
+
+	/**
 	 * @brief Get the HDR scene framebuffer
 	 */
 	vk::Framebuffer getSceneFramebuffer() const { return m_sceneFramebuffer; }
@@ -130,6 +139,17 @@ public:
 	void executeLightshafts(vk::CommandBuffer cmd);
 
 	/**
+	 * @brief Copy scene color to effect texture for distortion/soft particle sampling
+	 *
+	 * Must be called outside a render pass. Transitions scene color through
+	 * eTransferSrcOptimal and back to eColorAttachmentOptimal (ready for resumed
+	 * scene render pass). Transitions effect texture to eShaderReadOnlyOptimal.
+	 *
+	 * @param cmd Active command buffer (must be outside a render pass)
+	 */
+	void copyEffectTexture(vk::CommandBuffer cmd);
+
+	/**
 	 * @brief Check if LDR targets are available (tonemapping + FXAA ready)
 	 */
 	bool hasLDRTargets() const { return m_ldrInitialized; }
@@ -143,6 +163,19 @@ public:
 	 * @brief Get the scene color sampler
 	 */
 	vk::Sampler getSceneColorSampler() const { return m_linearSampler; }
+
+	/**
+	 * @brief Get the effect/composite texture view (snapshot of scene color)
+	 *
+	 * Available for sampling after copyEffectTexture() has been called.
+	 * Used by distortion and soft particle shaders.
+	 */
+	vk::ImageView getSceneEffectView() const { return m_sceneEffect.view; }
+
+	/**
+	 * @brief Get the effect texture sampler (linear, clamp-to-edge)
+	 */
+	vk::Sampler getSceneEffectSampler() const { return m_linearSampler; }
 
 	/**
 	 * @brief Check if post-processing is initialized
@@ -184,10 +217,12 @@ private:
 
 	RenderTarget m_sceneColor;    // RGBA16F HDR scene color
 	RenderTarget m_sceneDepth;    // Depth buffer for scene
+	RenderTarget m_sceneEffect;   // RGBA16F effect/composite (snapshot of scene color)
 
 	// Scene render pass and framebuffer
-	vk::RenderPass m_sceneRenderPass;
-	vk::Framebuffer m_sceneFramebuffer;
+	vk::RenderPass m_sceneRenderPass;       // loadOp=eClear (initial scene begin)
+	vk::RenderPass m_sceneRenderPassLoad;   // loadOp=eLoad (resume after copy_effect_texture)
+	vk::Framebuffer m_sceneFramebuffer;     // Shared by both scene render passes (compatible)
 
 	// Sampler for post-processing texture reads (maxLod=0)
 	vk::Sampler m_linearSampler;

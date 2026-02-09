@@ -62,7 +62,6 @@ bool vulkan_is_capable(gr_capability capability)
 		return Cmdline_height != 0;
 	case gr_capability::CAPABILITY_SOFT_PARTICLES:
 	case gr_capability::CAPABILITY_DISTORTION:
-		// Requires post-processing / scene texture pipeline
 		return Gr_post_processing_enabled;
 	case gr_capability::CAPABILITY_POST_PROCESSING:
 		return Gr_post_processing_enabled;
@@ -297,7 +296,6 @@ void stub_post_process_save_zbuffer() {}
 void stub_post_process_begin() {}
 void stub_post_process_end() {}
 void stub_post_process_restore_zbuffer() {}
-void stub_copy_effect_texture() {}
 void stub_deferred_lighting_begin(bool /*clearNonColorBufs*/) {}
 void stub_deferred_lighting_msaa() {}
 void stub_deferred_lighting_end() {}
@@ -403,7 +401,7 @@ void init_function_pointers()
 
 	gr_screen.gf_scene_texture_begin = vulkan_scene_texture_begin;
 	gr_screen.gf_scene_texture_end = vulkan_scene_texture_end;
-	gr_screen.gf_copy_effect_texture = stub_copy_effect_texture;
+	gr_screen.gf_copy_effect_texture = vulkan_copy_effect_texture;
 
 	gr_screen.gf_deferred_lighting_begin = stub_deferred_lighting_begin;
 	gr_screen.gf_deferred_lighting_msaa = stub_deferred_lighting_msaa;
