@@ -62,7 +62,9 @@ bool vulkan_is_capable(gr_capability capability)
 		return Cmdline_height != 0;
 	case gr_capability::CAPABILITY_SOFT_PARTICLES:
 	case gr_capability::CAPABILITY_DISTORTION:
-		return Gr_post_processing_enabled;
+		// Requires effect particle shader + scene depth texture binding (not yet implemented).
+		// Returning false forces FLAT_EMISSIVE path which uses the existing batched shader.
+		return false;
 	case gr_capability::CAPABILITY_POST_PROCESSING:
 		return Gr_post_processing_enabled;
 	case gr_capability::CAPABILITY_DEFERRED_LIGHTING:
