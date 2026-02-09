@@ -241,16 +241,16 @@ class VulkanRenderer {
 	std::unique_ptr<VulkanTextureManager> m_textureManager;
 	std::unique_ptr<VulkanDeletionQueue> m_deletionQueue;
 
-	// Shader, descriptor, and pipeline management (Phase 3)
+	// Shader, descriptor, and pipeline management
 	std::unique_ptr<VulkanShaderManager> m_shaderManager;
 	std::unique_ptr<VulkanDescriptorManager> m_descriptorManager;
 	std::unique_ptr<VulkanPipelineManager> m_pipelineManager;
 
-	// State tracking and draw management (Phase 4)
+	// State tracking and draw management
 	std::unique_ptr<VulkanStateTracker> m_stateTracker;
 	std::unique_ptr<VulkanDrawManager> m_drawManager;
 
-	// Post-processing (Phase 6)
+	// Post-processing
 	std::unique_ptr<VulkanPostProcessor> m_postProcessor;
 	bool m_sceneRendering = false;
 

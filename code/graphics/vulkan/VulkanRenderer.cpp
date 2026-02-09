@@ -352,7 +352,7 @@ bool VulkanRenderer::initialize()
 	}
 	setTextureManager(m_textureManager.get());
 
-	// Initialize shader manager (Phase 3)
+	// Initialize shader manager
 	m_shaderManager = std::unique_ptr<VulkanShaderManager>(new VulkanShaderManager());
 	if (!m_shaderManager->init(m_device.get())) {
 		mprintf(("Failed to initialize Vulkan shader manager!\n"));
@@ -360,7 +360,7 @@ bool VulkanRenderer::initialize()
 	}
 	setShaderManager(m_shaderManager.get());
 
-	// Initialize descriptor manager (Phase 3)
+	// Initialize descriptor manager
 	m_descriptorManager = std::unique_ptr<VulkanDescriptorManager>(new VulkanDescriptorManager());
 	if (!m_descriptorManager->init(m_device.get())) {
 		mprintf(("Failed to initialize Vulkan descriptor manager!\n"));
@@ -368,7 +368,7 @@ bool VulkanRenderer::initialize()
 	}
 	setDescriptorManager(m_descriptorManager.get());
 
-	// Initialize pipeline manager (Phase 3)
+	// Initialize pipeline manager
 	m_pipelineManager = std::unique_ptr<VulkanPipelineManager>(new VulkanPipelineManager());
 	if (!m_pipelineManager->init(m_device.get(), m_shaderManager.get(), m_descriptorManager.get())) {
 		mprintf(("Failed to initialize Vulkan pipeline manager!\n"));
@@ -376,7 +376,7 @@ bool VulkanRenderer::initialize()
 	}
 	setPipelineManager(m_pipelineManager.get());
 
-	// Initialize state tracker (Phase 4)
+	// Initialize state tracker
 	m_stateTracker = std::unique_ptr<VulkanStateTracker>(new VulkanStateTracker());
 	if (!m_stateTracker->init(m_device.get())) {
 		mprintf(("Failed to initialize Vulkan state tracker!\n"));
@@ -384,7 +384,7 @@ bool VulkanRenderer::initialize()
 	}
 	setStateTracker(m_stateTracker.get());
 
-	// Initialize draw manager (Phase 4)
+	// Initialize draw manager
 	m_drawManager = std::unique_ptr<VulkanDrawManager>(new VulkanDrawManager());
 	if (!m_drawManager->init(m_device.get())) {
 		mprintf(("Failed to initialize Vulkan draw manager!\n"));
@@ -392,7 +392,7 @@ bool VulkanRenderer::initialize()
 	}
 	setDrawManager(m_drawManager.get());
 
-	// Initialize post-processing (Phase 6)
+	// Initialize post-processing
 	m_postProcessor = std::unique_ptr<VulkanPostProcessor>(new VulkanPostProcessor());
 	if (!m_postProcessor->init(m_device.get(), m_physicalDevice, m_memoryManager.get(),
 	                           m_swapChainExtent, m_depthFormat)) {
@@ -1514,14 +1514,12 @@ void VulkanRenderer::shutdown()
 	shutdownImGui();
 
 	// Shutdown managers in reverse order of initialization
-	// Phase 6 post-processor
 	if (m_postProcessor) {
 		setPostProcessor(nullptr);
 		m_postProcessor->shutdown();
 		m_postProcessor.reset();
 	}
 
-	// Phase 4 managers first
 	if (m_drawManager) {
 		setDrawManager(nullptr);
 		m_drawManager->shutdown();
@@ -1534,7 +1532,6 @@ void VulkanRenderer::shutdown()
 		m_stateTracker.reset();
 	}
 
-	// Phase 3 managers
 	if (m_pipelineManager) {
 		setPipelineManager(nullptr);
 		m_pipelineManager->shutdown();
@@ -1553,14 +1550,12 @@ void VulkanRenderer::shutdown()
 		m_shaderManager.reset();
 	}
 
-	// Phase 2 managers
 	if (m_textureManager) {
 		setTextureManager(nullptr);
 		m_textureManager->shutdown();
 		m_textureManager.reset();
 	}
 
-	// Phase 1 managers
 	if (m_bufferManager) {
 		setBufferManager(nullptr);
 		m_bufferManager->shutdown();
