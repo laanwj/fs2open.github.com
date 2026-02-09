@@ -279,12 +279,12 @@ void VulkanTextureManager::bm_free_data(bitmap_slot* slot, bool release)
 	}
 }
 
-bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
+bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 {
 	static int callCount = 0;
 	if (callCount < 20) {
-		mprintf(("VulkanTextureManager::bm_data #%d: handle=%d bm=%p bm->data=%p\n",
-			callCount++, handle, bm, bm ? reinterpret_cast<void*>(bm->data) : nullptr));
+		mprintf(("VulkanTextureManager::bm_data #%d: handle=%d bm=%p bm->data=%p compType=%d\n",
+			callCount++, handle, bm, bm ? reinterpret_cast<void*>(bm->data) : nullptr, compType));
 	}
 
 	if (!m_initialized || !bm || !bm->data) {
@@ -307,45 +307,86 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
 	uint32_t height = static_cast<uint32_t>(bm->h);
 	uint32_t mipLevels = 1;
 	bool autoGenerateMips = false;
-
-	// Note: vulkan_preload locks all bitmaps at 32bpp with BMP_TEX_XPARENT,
-	// which decompresses DDS textures. bm_is_compressed() checks the file's
-	// original format, not the locked data format. Since our data is always
-	// decompressed, we always take the uncompressed upload path.
-	// TODO: Support native compressed texture uploads by fixing vulkan_preload
-	// to lock with the correct DDS flags (BMP_TEX_DXT1/3/5/BC7).
+	bool isCompressed = (compType == DDS_DXT1 || compType == DDS_DXT3 ||
+	                     compType == DDS_DXT5 || compType == DDS_BC7);
 
 	static int fmtLogCount = 0;
 	if (fmtLogCount < 30) {
 		mprintf(("VulkanTextureManager::bm_data: handle=%d w=%d h=%d bpp=%d true_bpp=%d flags=0x%x compType=%d\n",
-			handle, bm->w, bm->h, bm->bpp, bm->true_bpp, bm->flags, bm_is_compressed(handle)));
+			handle, bm->w, bm->h, bm->bpp, bm->true_bpp, bm->flags, compType));
 		fmtLogCount++;
 	}
 
-	// Determine format and data size (always uncompressed since vulkan_preload decompresses)
-	vk::Format format = bppToVkFormat(bm->bpp);
-	if (format == vk::Format::eUndefined) {
-		mprintf(("VulkanTextureManager::bm_data: Unsupported bpp %d\n", bm->bpp));
-		return false;
-	}
+	// Determine format and data size
+	vk::Format format;
+	size_t dataSize;
+	size_t blockSize = 0;
+	SCP_vector<vk::BufferImageCopy> copyRegions;
 
-	// 24bpp textures uploaded as 32bpp (Vulkan doesn't support 24bpp optimal tiling)
-	size_t dstBytesPerPixel = (bm->bpp == 24) ? 4 : (bm->bpp / 8);
-	size_t dataSize = width * height * dstBytesPerPixel;
+	if (isCompressed) {
+		format = bppToVkFormat(bm->bpp, true, compType);
+		if (format == vk::Format::eUndefined) {
+			mprintf(("VulkanTextureManager::bm_data: Unsupported compression type %d\n", compType));
+			return false;
+		}
 
-	// Auto-generate mipmaps for textures whose files originally had them.
-	// DDS files have pre-baked mipmaps for 3D model textures (diffuse, normal, specular),
-	// but vulkan_preload decompresses everything to 32bpp losing those mips.
-	// Auto-generating compensates for this.
-	if (width > 4 && height > 4) {
-		int numMipmaps = bm_get_num_mipmaps(handle);
-		if (numMipmaps > 1) {
-			vk::FormatProperties fmtProps = m_physicalDevice.getFormatProperties(format);
-			if ((fmtProps.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear) &&
-			    (fmtProps.optimalTilingFeatures & vk::FormatFeatureFlagBits::eBlitSrc) &&
-			    (fmtProps.optimalTilingFeatures & vk::FormatFeatureFlagBits::eBlitDst)) {
-				mipLevels = calculateMipLevels(width, height);
-				autoGenerateMips = true;
+		blockSize = (compType == DDS_DXT1) ? 8 : 16;
+
+		// Get pre-baked mipmap count from DDS file
+		mipLevels = static_cast<uint32_t>(bm_get_num_mipmaps(handle));
+		if (mipLevels < 1) {
+			mipLevels = 1;
+		}
+
+		// Calculate total data size for all mip levels and build copy regions
+		dataSize = 0;
+		uint32_t mipW = width;
+		uint32_t mipH = height;
+		for (uint32_t i = 0; i < mipLevels; i++) {
+			uint32_t blocksW = (mipW + 3) / 4;
+			uint32_t blocksH = (mipH + 3) / 4;
+			size_t mipSize = blocksW * blocksH * blockSize;
+
+			vk::BufferImageCopy region;
+			region.bufferOffset = static_cast<vk::DeviceSize>(dataSize);
+			region.bufferRowLength = 0;
+			region.bufferImageHeight = 0;
+			region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+			region.imageSubresource.mipLevel = i;
+			region.imageSubresource.baseArrayLayer = 0;
+			region.imageSubresource.layerCount = 1;
+			region.imageOffset = vk::Offset3D(0, 0, 0);
+			region.imageExtent = vk::Extent3D(mipW, mipH, 1);
+			copyRegions.push_back(region);
+
+			dataSize += mipSize;
+			mipW = std::max(1u, mipW / 2);
+			mipH = std::max(1u, mipH / 2);
+		}
+	} else {
+		format = bppToVkFormat(bm->bpp);
+		if (format == vk::Format::eUndefined) {
+			mprintf(("VulkanTextureManager::bm_data: Unsupported bpp %d\n", bm->bpp));
+			return false;
+		}
+
+		// 24bpp textures uploaded as 32bpp (Vulkan doesn't support 24bpp optimal tiling)
+		size_t dstBytesPerPixel = (bm->bpp == 24) ? 4 : (bm->bpp / 8);
+		dataSize = width * height * dstBytesPerPixel;
+
+		// Auto-generate mipmaps for textures whose files originally had them.
+		// This only triggers for uncompressed textures that were originally DDS
+		// with mipmaps but got decompressed by a non-DDS lock path.
+		if (width > 4 && height > 4) {
+			int numMipmaps = bm_get_num_mipmaps(handle);
+			if (numMipmaps > 1) {
+				vk::FormatProperties fmtProps = m_physicalDevice.getFormatProperties(format);
+				if ((fmtProps.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear) &&
+				    (fmtProps.optimalTilingFeatures & vk::FormatFeatureFlagBits::eBlitSrc) &&
+				    (fmtProps.optimalTilingFeatures & vk::FormatFeatureFlagBits::eBlitDst)) {
+					mipLevels = calculateMipLevels(width, height);
+					autoGenerateMips = true;
+				}
 			}
 		}
 	}
@@ -415,7 +456,10 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
 	// Copy data to staging buffer
 	void* mapped = m_memoryManager->mapMemory(stagingAllocation);
 	if (mapped) {
-		if (bm->bpp == 24) {
+		if (isCompressed) {
+			// Compressed data: copy raw block data directly (includes all mip levels)
+			memcpy(mapped, reinterpret_cast<const void*>(bm->data), dataSize);
+		} else if (bm->bpp == 24) {
 			// Convert BGR (3 bytes) to BGRA (4 bytes), adding alpha=255
 			const uint8_t* src = reinterpret_cast<const uint8_t*>(bm->data);
 			uint8_t* dst = static_cast<uint8_t*>(mapped);
@@ -438,7 +482,7 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm)
 	// Record transitions + copy (+ optional mipmap generation) and submit async
 	vk::CommandBuffer cmd = beginSingleTimeCommands();
 	recordUploadCommands(cmd, ts->image, stagingBuffer, format, width, height,
-	                     mipLevels, vk::ImageLayout::eUndefined, autoGenerateMips);
+	                     mipLevels, vk::ImageLayout::eUndefined, autoGenerateMips, copyRegions);
 	submitUploadAsync(cmd, stagingBuffer, stagingAllocation);
 
 	// Update slot info
@@ -1184,7 +1228,8 @@ void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image
                                                  vk::Buffer stagingBuffer, vk::Format format,
                                                  uint32_t width, uint32_t height,
                                                  uint32_t mipLevels, vk::ImageLayout oldLayout,
-                                                 bool generateMips)
+                                                 bool generateMips,
+                                                 const SCP_vector<vk::BufferImageCopy>& regions)
 {
 	(void)format;  // May be needed for depth/stencil transitions in the future
 
@@ -1217,8 +1262,12 @@ void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image
 		}
 	}
 
-	// Copy staging buffer to mip 0
-	{
+	if (!regions.empty()) {
+		// Pre-baked mip levels: copy all regions (one per mip level) from the staging buffer
+		cmd.copyBufferToImage(stagingBuffer, image, vk::ImageLayout::eTransferDstOptimal,
+		                      static_cast<uint32_t>(regions.size()), regions.data());
+	} else {
+		// Single mip-0 copy
 		vk::BufferImageCopy region;
 		region.bufferOffset = 0;
 		region.bufferRowLength = 0;
@@ -1233,7 +1282,7 @@ void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image
 		cmd.copyBufferToImage(stagingBuffer, image, vk::ImageLayout::eTransferDstOptimal, region);
 	}
 
-	if (generateMips && mipLevels > 1) {
+	if (generateMips && mipLevels > 1 && regions.empty()) {
 		// Generate mipmaps via blit chain: upload mip 0, then downsample each level
 
 		// Transition mip 0 from eTransferDstOptimal to eTransferSrcOptimal
@@ -1402,19 +1451,48 @@ int vulkan_preload(int bitmap_num, int /*is_aabitmap*/)
 		return 1;  // Already loaded
 	}
 
-	// Lock bitmap to get data pointer - use 32bpp for best compatibility
-	bitmap* bmp = bm_lock(bitmap_num, 32, BMP_TEX_XPARENT);
+	// Determine lock parameters based on compression type.
+	// For compressed DDS textures, lock with the matching DXT/BC7 flags to get
+	// raw compressed data with all pre-baked mipmap levels.
+	int compType = bm_is_compressed(bitmap_num);
+	int lockBpp = 32;
+	ubyte lockFlags = BMP_TEX_XPARENT;
+
+	switch (compType) {
+	case DDS_DXT1:
+		lockBpp = 24;
+		lockFlags = BMP_TEX_DXT1;
+		break;
+	case DDS_DXT3:
+		lockBpp = 32;
+		lockFlags = BMP_TEX_DXT3;
+		break;
+	case DDS_DXT5:
+		lockBpp = 32;
+		lockFlags = BMP_TEX_DXT5;
+		break;
+	case DDS_BC7:
+		lockBpp = 32;
+		lockFlags = BMP_TEX_BC7;
+		break;
+	default:
+		// Uncompressed or cubemap — use 32bpp decompressed
+		compType = 0;
+		break;
+	}
+
+	bitmap* bmp = bm_lock(bitmap_num, static_cast<ubyte>(lockBpp), lockFlags);
 	if (!bmp) {
 		static int warnCount = 0;
 		if (warnCount < 10) {
-			mprintf(("vulkan_preload: Failed to lock bitmap %d\n", bitmap_num));
+			mprintf(("vulkan_preload: Failed to lock bitmap %d (compType=%d)\n", bitmap_num, compType));
 			warnCount++;
 		}
 		return 0;
 	}
 
 	// Upload the texture
-	bool success = texManager->bm_data(bitmap_num, bmp);
+	bool success = texManager->bm_data(bitmap_num, bmp, compType);
 
 	// Unlock bitmap
 	bm_unlock(bitmap_num);
@@ -1422,7 +1500,8 @@ int vulkan_preload(int bitmap_num, int /*is_aabitmap*/)
 	if (success) {
 		static int successCount = 0;
 		if (successCount < 10) {
-			mprintf(("vulkan_preload: Successfully uploaded texture %d\n", bitmap_num));
+			mprintf(("vulkan_preload: Successfully uploaded texture %d (compressed=%d)\n",
+				bitmap_num, compType));
 			successCount++;
 		}
 	}

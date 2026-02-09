@@ -94,8 +94,9 @@ public:
 
 	/**
 	 * @brief Upload bitmap data to GPU
+	 * @param compType Compression type (DDS_DXT1/3/5, DDS_BC7) or 0 for uncompressed
 	 */
-	bool bm_data(int handle, bitmap* bm);
+	bool bm_data(int handle, bitmap* bm, int compType = 0);
 
 	/**
 	 * @brief Create a render target
@@ -218,7 +219,8 @@ private:
 	void recordUploadCommands(vk::CommandBuffer cmd, vk::Image image, vk::Buffer stagingBuffer,
 	                          vk::Format format, uint32_t width, uint32_t height,
 	                          uint32_t mipLevels, vk::ImageLayout oldLayout,
-	                          bool generateMips = false);
+	                          bool generateMips = false,
+	                          const SCP_vector<vk::BufferImageCopy>& regions = {});
 
 	/**
 	 * @brief Submit an upload command buffer asynchronously and defer resource cleanup
