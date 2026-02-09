@@ -12,6 +12,7 @@ layout(location = 5) in float vertModelID;
 // Model shader flags (from model_shader_flags.h)
 const int MODEL_SDR_FLAG_LIGHT       = (1 << 0);
 const int MODEL_SDR_FLAG_FOG         = (1 << 10);
+const int MODEL_SDR_FLAG_TRANSFORM   = (1 << 11);
 const int MODEL_SDR_FLAG_THRUSTER    = (1 << 13);
 
 #define MAX_LIGHTS 8
@@ -96,6 +97,13 @@ layout(set = 1, binding = 0, std140) uniform modelData {
 	float _pad0;
 };
 
+// Transform buffer for batched submodel rendering (set 1, binding 3)
+// Contains per-submodel transform matrices indexed by vertModelID + buffer_matrix_offset.
+// The visibility flag is stored in transform[3].w: >= 0.9 means invisible.
+layout(set = 1, binding = 3, std430) readonly buffer TransformBuffer {
+	mat4 transforms[];
+} transformBuf;
+
 // Outputs to fragment shader
 layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec3 outNormal;
@@ -108,6 +116,15 @@ layout(location = 6) out float outFogDist;
 void main()
 {
 	mat4 orient = mat4(1.0);
+	bool clipModel = false;
+
+	// Batched submodel transforms: read per-submodel matrix from the SSBO
+	if ((flags & MODEL_SDR_FLAG_TRANSFORM) != 0) {
+		int id = int(vertModelID);
+		orient = transformBuf.transforms[buffer_matrix_offset + id];
+		clipModel = (orient[3].w >= 0.9);
+		orient[3].w = 1.0;
+	}
 
 	vec4 texCoord = textureMatrix * vertTexCoord;
 	vec4 vertex = vertPosition;
@@ -124,6 +141,11 @@ void main()
 	vec4 position = modelViewMatrix * orient * vertex;
 
 	gl_Position = projMatrix * position;
+
+	// Clip invisible submodels by moving vertices off-screen
+	if ((flags & MODEL_SDR_FLAG_TRANSFORM) != 0 && clipModel) {
+		gl_Position = vec4(-2.0, -2.0, -2.0, 1.0);
+	}
 
 	// Setup stuff for normal maps and envmaps
 	vec3 t = normalize(mat3(modelViewMatrix) * mat3(orient) * vertTangent.xyz);

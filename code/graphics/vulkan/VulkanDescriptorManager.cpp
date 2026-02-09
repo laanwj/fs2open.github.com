@@ -163,6 +163,29 @@ void VulkanDescriptorManager::updateUniformBuffer(vk::DescriptorSet set, uint32_
 	m_device.updateDescriptorSets(1, &write, 0, nullptr);
 }
 
+void VulkanDescriptorManager::updateStorageBuffer(vk::DescriptorSet set, uint32_t binding,
+                                                   vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range)
+{
+	if (!buffer) {
+		return;
+	}
+
+	vk::DescriptorBufferInfo bufferInfo;
+	bufferInfo.buffer = buffer;
+	bufferInfo.offset = offset;
+	bufferInfo.range = range;
+
+	vk::WriteDescriptorSet write;
+	write.dstSet = set;
+	write.dstBinding = binding;
+	write.dstArrayElement = 0;
+	write.descriptorCount = 1;
+	write.descriptorType = vk::DescriptorType::eStorageBuffer;
+	write.pBufferInfo = &bufferInfo;
+
+	m_device.updateDescriptorSets(1, &write, 0, nullptr);
+}
+
 void VulkanDescriptorManager::updateTexture(vk::DescriptorSet set, uint32_t binding,
                                             vk::ImageView imageView, vk::Sampler sampler,
                                             vk::ImageLayout layout)
@@ -324,6 +347,10 @@ void VulkanDescriptorManager::createSetLayouts()
 			// Binding 2: DecalGlobals UBO
 			{ 2, vk::DescriptorType::eUniformBuffer, 1,
 			  vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment },
+
+			// Binding 3: Transform buffer SSBO (for batched submodel transforms)
+			{ 3, vk::DescriptorType::eStorageBuffer, 1,
+			  vk::ShaderStageFlagBits::eVertex },
 		};
 		m_setLayouts[static_cast<size_t>(DescriptorSetIndex::Material)] = createSetLayout(bindings);
 	}
@@ -369,6 +396,7 @@ vk::UniqueDescriptorPool VulkanDescriptorManager::createFramePool()
 	SCP_vector<vk::DescriptorPoolSize> poolSizes = {
 		{ vk::DescriptorType::eUniformBuffer, MAX_UNIFORM_BUFFERS },
 		{ vk::DescriptorType::eCombinedImageSampler, MAX_SAMPLERS },
+		{ vk::DescriptorType::eStorageBuffer, MAX_SETS_PER_POOL },
 	};
 
 	vk::DescriptorPoolCreateInfo poolInfo;

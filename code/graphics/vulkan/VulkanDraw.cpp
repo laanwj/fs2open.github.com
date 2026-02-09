@@ -7,6 +7,9 @@
 #include "VulkanRenderer.h"
 #include "VulkanPostProcessing.h"
 #include "VulkanDescriptorManager.h"
+#include "VulkanDeletionQueue.h"
+#include "VulkanMemory.h"
+#include "VulkanConstants.h"
 #include "gr_vulkan.h"
 #include "VulkanVertexFormat.h"
 #include "bmpman/bmpman.h"
@@ -48,6 +51,112 @@ static vk::SamplerAddressMode convertTextureAddressing(int mode)
 
 // Global draw manager pointer
 static VulkanDrawManager* g_drawManager = nullptr;
+
+// ========== Transform buffer for batched submodel rendering ==========
+// Per-frame sub-allocating buffer. Multiple draw lists may upload transforms
+// in a single frame (e.g. space view + HUD targeting). Because Vulkan defers
+// command submission until flip(), each upload must be preserved — we append
+// rather than overwrite, and bind the SSBO with the per-upload byte offset.
+
+// SSBO descriptor offsets must be aligned to minStorageBufferOffsetAlignment.
+// The Vulkan spec guarantees this value is <= 256, so 256 is always safe.
+static constexpr size_t SSBO_OFFSET_ALIGNMENT = 256;
+
+struct TransformBufferState {
+	vk::Buffer buffer;
+	VulkanAllocation allocation;
+	size_t capacity = 0;         // allocated bytes
+	size_t writeOffset = 0;      // append cursor (resets each frame)
+	size_t lastUploadOffset = 0; // byte offset of most recent upload
+	size_t lastUploadSize = 0;   // byte size of most recent upload
+};
+static TransformBufferState g_transformBuffers[MAX_FRAMES_IN_FLIGHT];
+static uint32_t g_lastTransformWriteFrame = UINT32_MAX;
+
+void vulkan_update_transform_buffer(void* data, size_t size)
+{
+	if (!data || size == 0) {
+		return;
+	}
+
+	auto* descManager = getDescriptorManager();
+	uint32_t frameIdx = descManager->getCurrentFrame();
+	auto& tb = g_transformBuffers[frameIdx];
+
+	// Reset write cursor on first call of each frame
+	if (g_lastTransformWriteFrame != frameIdx) {
+		tb.writeOffset = 0;
+		g_lastTransformWriteFrame = frameIdx;
+	}
+
+	// Align the write offset for SSBO descriptor binding
+	size_t alignedOffset = (tb.writeOffset + SSBO_OFFSET_ALIGNMENT - 1) & ~(SSBO_OFFSET_ALIGNMENT - 1);
+	size_t needed = alignedOffset + size;
+
+	auto* memManager = getMemoryManager();
+
+	// Resize if needed, preserving data already written this frame
+	if (needed > tb.capacity) {
+		size_t newCapacity = std::max(needed * 2, static_cast<size_t>(4096));
+
+		auto* bufferManager = getBufferManager();
+		vk::Device device = bufferManager->getDevice();
+
+		vk::BufferCreateInfo bufferInfo;
+		bufferInfo.size = static_cast<vk::DeviceSize>(newCapacity);
+		bufferInfo.usage = vk::BufferUsageFlagBits::eStorageBuffer;
+		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+		vk::Buffer newBuffer;
+		VulkanAllocation newAllocation;
+
+		try {
+			newBuffer = device.createBuffer(bufferInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("vulkan_update_transform_buffer: Failed to create buffer: %s\n", e.what()));
+			return;
+		}
+
+		if (!memManager->allocateBufferMemory(newBuffer, MemoryUsage::CpuToGpu, newAllocation)) {
+			device.destroyBuffer(newBuffer);
+			mprintf(("vulkan_update_transform_buffer: Failed to allocate memory\n"));
+			return;
+		}
+
+		// Copy data already written this frame from old buffer
+		if (tb.buffer && tb.writeOffset > 0) {
+			void* oldMapped = memManager->mapMemory(tb.allocation);
+			void* newMapped = memManager->mapMemory(newAllocation);
+			if (oldMapped && newMapped) {
+				memcpy(newMapped, oldMapped, tb.writeOffset);
+			}
+			if (oldMapped) memManager->unmapMemory(tb.allocation);
+			if (newMapped) memManager->unmapMemory(newAllocation);
+		}
+
+		// Defer destruction of old buffer
+		if (tb.buffer) {
+			auto* deletionQueue = getDeletionQueue();
+			deletionQueue->queueBuffer(tb.buffer, tb.allocation);
+		}
+
+		tb.buffer = newBuffer;
+		tb.allocation = newAllocation;
+		tb.capacity = newCapacity;
+	}
+
+	// Upload new data at the aligned offset
+	void* mapped = memManager->mapMemory(tb.allocation);
+	if (mapped) {
+		memcpy(static_cast<char*>(mapped) + alignedOffset, data, size);
+		memManager->flushMemory(tb.allocation, alignedOffset, size);
+		memManager->unmapMemory(tb.allocation);
+	}
+
+	tb.lastUploadOffset = alignedOffset;
+	tb.lastUploadSize = size;
+	tb.writeOffset = alignedOffset + size;
+}
 
 VulkanDrawManager* getDrawManager()
 {
@@ -1075,6 +1184,19 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 			if (fallbackUBO) {
 				descManager->updateUniformBuffer(materialSet, 0, fallbackUBO, 0, fallbackUBOSize);
 				descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
+				// Binding 3: Transform buffer SSBO — fallback to the zero UBO
+				descManager->updateStorageBuffer(materialSet, 3, fallbackUBO, 0, fallbackUBOSize);
+			}
+
+			// Bind actual transform buffer if available (with per-upload offset)
+			{
+				uint32_t tfIdx = descManager->getCurrentFrame();
+				auto& tf = g_transformBuffers[tfIdx];
+				if (tf.buffer && tf.lastUploadSize > 0) {
+					descManager->updateStorageBuffer(materialSet, 3, tf.buffer,
+					                                  static_cast<vk::DeviceSize>(tf.lastUploadOffset),
+					                                  static_cast<vk::DeviceSize>(tf.lastUploadSize));
+				}
 			}
 
 			// Bind textures (already handles fallback textures for unbound slots)

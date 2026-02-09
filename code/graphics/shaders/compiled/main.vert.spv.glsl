@@ -63,8 +63,14 @@ layout(std140) uniform modelData
     float alphaMult;
     int flags;
     float _pad0;
-} _31;
+} _33;
 
+layout(std430) readonly buffer TransformBuffer
+{
+    mat4 transforms[];
+} transformBuf;
+
+in float vertModelID;
 in vec4 vertTexCoord;
 in vec4 vertPosition;
 in vec3 vertNormal;
@@ -79,52 +85,72 @@ out vec4 outTexCoord;
 
 void main()
 {
-    vec4 _212;
-    if ((_31.flags & 8192) != 0)
+    bool _41 = (_33.flags & 2048) != 0;
+    mat4 _257;
+    bool _262;
+    if (_41)
     {
-        vec4 _213;
-        if (vertPosition.z < (-1.5))
-        {
-            vec4 _211 = vertPosition;
-            _211.z = vertPosition.z * _31.thruster_scale;
-            _213 = _211;
-        }
-        else
-        {
-            _213 = vertPosition;
-        }
-        _212 = _213;
+        int _58 = _33.buffer_matrix_offset + int(vertModelID);
+        mat4 _251 = transformBuf.transforms[_58];
+        _251[3].w = 1.0;
+        _262 = transformBuf.transforms[_58][3].w >= 0.89999997615814208984375;
+        _257 = _251;
     }
     else
     {
-        _212 = vertPosition;
+        _262 = false;
+        _257 = mat4(vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(0.0, 0.0, 0.0, 1.0));
     }
-    mat3 _90 = mat3(_31.modelViewMatrix[0].xyz, _31.modelViewMatrix[1].xyz, _31.modelViewMatrix[2].xyz) * mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0));
-    vec3 _95 = normalize(_90 * vertNormal);
-    vec4 _102 = (_31.modelViewMatrix * mat4(vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(0.0, 0.0, 0.0, 1.0))) * _212;
-    gl_Position = _31.projMatrix * _102;
-    vec3 _138 = normalize(_90 * vertTangent.xyz);
-    outTangent = _138;
-    outBitangent = cross(_95, _138) * vertTangent.w;
-    outTangentNormal = _95;
-    if ((_31.flags & 1024) != 0)
+    vec4 _259;
+    if ((_33.flags & 8192) != 0)
     {
-        outFogDist = clamp(((gl_Position.z - _31.fogStart) * 0.75) * _31.fogScale, 0.0, 1.0);
+        vec4 _260;
+        if (vertPosition.z < (-1.5))
+        {
+            vec4 _255 = vertPosition;
+            _255.z = vertPosition.z * _33.thruster_scale;
+            _260 = _255;
+        }
+        else
+        {
+            _260 = vertPosition;
+        }
+        _259 = _260;
+    }
+    else
+    {
+        _259 = vertPosition;
+    }
+    mat3 _124 = mat3(_33.modelViewMatrix[0].xyz, _33.modelViewMatrix[1].xyz, _33.modelViewMatrix[2].xyz) * mat3(_257[0].xyz, _257[1].xyz, _257[2].xyz);
+    vec3 _129 = normalize(_124 * vertNormal);
+    vec4 _136 = (_33.modelViewMatrix * _257) * _259;
+    gl_Position = _33.projMatrix * _136;
+    if (_41 && _262)
+    {
+        gl_Position = vec4(-2.0, -2.0, -2.0, 1.0);
+    }
+    vec3 _182 = normalize(_124 * vertTangent.xyz);
+    outTangent = _182;
+    outBitangent = cross(_129, _182) * vertTangent.w;
+    outTangentNormal = _129;
+    if ((_33.flags & 1024) != 0)
+    {
+        outFogDist = clamp(((gl_Position.z - _33.fogStart) * 0.75) * _33.fogScale, 0.0, 1.0);
     }
     else
     {
         outFogDist = 0.0;
     }
-    if (_31.use_clip_plane != 0)
+    if (_33.use_clip_plane != 0)
     {
-        gl_ClipDistance[0] = dot(_31.clip_equation, (_31.modelMatrix * mat4(vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(0.0, 0.0, 0.0, 1.0))) * _212);
+        gl_ClipDistance[0] = dot(_33.clip_equation, (_33.modelMatrix * _257) * _259);
     }
     else
     {
         gl_ClipDistance[0] = 1.0;
     }
-    outPosition = _102;
-    outNormal = _95;
-    outTexCoord = _31.textureMatrix * vertTexCoord;
+    outPosition = _136;
+    outNormal = _129;
+    outTexCoord = _33.textureMatrix * vertTexCoord;
 }
 

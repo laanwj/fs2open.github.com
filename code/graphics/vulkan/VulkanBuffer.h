@@ -100,6 +100,11 @@ public:
 	uint32_t getCurrentFrame() const { return m_currentFrame; }
 
 	/**
+	 * @brief Get the Vulkan logical device
+	 */
+	vk::Device getDevice() const { return m_device; }
+
+	/**
 	 * @brief Create a new buffer
 	 * @param type The buffer type (Vertex, Index, Uniform)
 	 * @param usage Usage hint for optimization

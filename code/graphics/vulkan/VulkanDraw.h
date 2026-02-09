@@ -393,5 +393,8 @@ void vulkan_render_rocket_primitives(interface_material* material_info,
 	primitive_type prim_type, vertex_layout* layout, int n_indices,
 	gr_buffer_handle vertex_buffer, gr_buffer_handle index_buffer);
 
+// Transform buffer for batched submodel rendering
+void vulkan_update_transform_buffer(void* data, size_t size);
+
 } // namespace vulkan
 } // namespace graphics

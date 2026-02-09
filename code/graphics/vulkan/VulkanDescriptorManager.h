@@ -96,6 +96,12 @@ public:
 	                         vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range);
 
 	/**
+	 * @brief Update a storage buffer binding in a descriptor set
+	 */
+	void updateStorageBuffer(vk::DescriptorSet set, uint32_t binding,
+	                         vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range);
+
+	/**
 	 * @brief Update a combined image sampler binding
 	 */
 	void updateTexture(vk::DescriptorSet set, uint32_t binding,

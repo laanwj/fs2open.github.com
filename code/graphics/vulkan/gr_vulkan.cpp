@@ -73,8 +73,7 @@ bool vulkan_is_capable(gr_capability capability)
 		// Requires geometry shaders / shadow map pipeline (not yet implemented)
 		return false;
 	case gr_capability::CAPABILITY_BATCHED_SUBMODELS:
-		// Requires update_transform_buffer (not yet implemented)
-		return false;
+		return true;
 	case gr_capability::CAPABILITY_TIMESTAMP_QUERY:
 		// Query objects not yet implemented
 		return false;
@@ -252,7 +251,7 @@ void stub_print_screen(const char* /*filename*/) {}
 SCP_string stub_blob_screen() { return ""; }
 void stub_get_region(int /*front*/, int /*w*/, int /*h*/, ubyte* /*data*/) {}
 void stub_bm_page_in_start() {}
-void stub_update_transform_buffer(void* /*data*/, size_t /*size*/) {}
+
 void vulkan_post_process_set_effect(const char* name, int value, const vec3d* rgb)
 {
 	if (!Gr_post_processing_enabled || !graphics::Post_processing_manager) {
@@ -381,7 +380,7 @@ void init_function_pointers()
 	gr_screen.gf_create_buffer = vulkan_create_buffer;
 	gr_screen.gf_delete_buffer = vulkan_delete_buffer;
 
-	gr_screen.gf_update_transform_buffer = stub_update_transform_buffer;
+	gr_screen.gf_update_transform_buffer = vulkan_update_transform_buffer;
 	gr_screen.gf_update_buffer_data = vulkan_update_buffer_data;
 	gr_screen.gf_update_buffer_data_offset = vulkan_update_buffer_data_offset;
 	gr_screen.gf_map_buffer = vulkan_map_buffer;
