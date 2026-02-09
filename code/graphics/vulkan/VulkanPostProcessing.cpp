@@ -2083,5 +2083,22 @@ bool VulkanPostProcessor::createImage(uint32_t width, uint32_t height, vk::Forma
 	return true;
 }
 
+// No-op: In OpenGL, begin/end push/pop an FBO and run the post-processing
+// pipeline. In Vulkan, this is handled by vulkan_scene_texture_begin/end
+// which manage the HDR render pass and post-processing passes. These
+// functions are not actively called by the engine.
+void vulkan_post_process_begin() {}
+void vulkan_post_process_end() {}
+
+// No-op: In OpenGL, save/restore swap the depth attachment between
+// Scene_depth_texture and Cockpit_depth_texture to isolate cockpit
+// depth from the main scene. In Vulkan, the render pass loadOp=eClear
+// clears depth at the start of each scene pass, and separate cockpit
+// depth isolation is not yet implemented. Called from ship.cpp during
+// cockpit rendering but degrades gracefully as a no-op (cockpit just
+// shares the scene depth buffer).
+void vulkan_post_process_save_zbuffer() {}
+void vulkan_post_process_restore_zbuffer() {}
+
 } // namespace vulkan
 } // namespace graphics

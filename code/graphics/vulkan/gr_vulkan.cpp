@@ -292,10 +292,6 @@ void vulkan_post_process_set_defaults()
 		effect.intensity = effect.default_intensity;
 	}
 }
-void stub_post_process_save_zbuffer() {}
-void stub_post_process_begin() {}
-void stub_post_process_end() {}
-void stub_post_process_restore_zbuffer() {}
 void stub_deferred_lighting_begin(bool /*clearNonColorBufs*/) {}
 void stub_deferred_lighting_msaa() {}
 void stub_deferred_lighting_end() {}
@@ -394,10 +390,10 @@ void init_function_pointers()
 	gr_screen.gf_post_process_set_effect = vulkan_post_process_set_effect;
 	gr_screen.gf_post_process_set_defaults = vulkan_post_process_set_defaults;
 
-	gr_screen.gf_post_process_begin = stub_post_process_begin;
-	gr_screen.gf_post_process_end = stub_post_process_end;
-	gr_screen.gf_post_process_save_zbuffer = stub_post_process_save_zbuffer;
-	gr_screen.gf_post_process_restore_zbuffer = stub_post_process_restore_zbuffer;
+	gr_screen.gf_post_process_begin = vulkan_post_process_begin;
+	gr_screen.gf_post_process_end = vulkan_post_process_end;
+	gr_screen.gf_post_process_save_zbuffer = vulkan_post_process_save_zbuffer;
+	gr_screen.gf_post_process_restore_zbuffer = vulkan_post_process_restore_zbuffer;
 
 	gr_screen.gf_scene_texture_begin = vulkan_scene_texture_begin;
 	gr_screen.gf_scene_texture_end = vulkan_scene_texture_end;

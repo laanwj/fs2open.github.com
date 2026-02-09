@@ -283,5 +283,11 @@ private:
 VulkanPostProcessor* getPostProcessor();
 void setPostProcessor(VulkanPostProcessor* pp);
 
+// gr_screen function pointer implementations for post-processing
+void vulkan_post_process_begin();
+void vulkan_post_process_end();
+void vulkan_post_process_save_zbuffer();
+void vulkan_post_process_restore_zbuffer();
+
 } // namespace vulkan
 } // namespace graphics
