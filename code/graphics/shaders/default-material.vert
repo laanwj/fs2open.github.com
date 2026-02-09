@@ -36,7 +36,12 @@ void main()
 	fragColor = vertColor * color;
 	gl_Position = projMatrix * modelViewMatrix * vertPosition;
 
+	// Vulkan has no glEnable(GL_CLIP_DISTANCE0) equivalent — clip distances are
+	// always evaluated when declared in the shader.  Must write a positive value
+	// when clipping is disabled to prevent undefined-value vertex culling.
 	if (clipEnabled != 0u) {
 		gl_ClipDistance[0] = dot(clipEquation, modelMatrix * vertPosition);
+	} else {
+		gl_ClipDistance[0] = 1.0;
 	}
 }

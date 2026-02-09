@@ -722,23 +722,25 @@ void VulkanDrawManager::clearStates()
 {
 	auto* stateTracker = getStateTracker();
 
-	// Reset to default state
-	m_zbufferMode = GR_ZBUFF_FULL;
+	// Match OpenGL's gr_opengl_clear_states() behavior:
+	//   gr_zbias(0), gr_zbuffer_set(ZBUFFER_TYPE_READ), gr_set_cull(0),
+	//   gr_set_fill_mode(GR_FILL_MODE_SOLID)
+	m_zbufferMode = GR_ZBUFF_READ;
 	m_stencilMode = GR_STENCIL_NONE;
-	m_cullEnabled = true;
+	m_cullEnabled = false;
 	m_fillMode = GR_FILL_MODE_SOLID;
 	m_colorBufferEnabled = true;
 	m_textureAddressing = TMAP_ADDRESS_WRAP;
 	m_depthBiasEnabled = false;
 
 	gr_zbuffering = 1;
-	gr_zbuffering_mode = GR_ZBUFF_FULL;
+	gr_zbuffering_mode = GR_ZBUFF_READ;
 	gr_global_zbuffering = 1;
 	gr_stencil_mode = GR_STENCIL_NONE;
 
-	stateTracker->setZBufferMode(ZBUFFER_TYPE_FULL);
+	stateTracker->setZBufferMode(ZBUFFER_TYPE_READ);
 	stateTracker->setStencilMode(GR_STENCIL_NONE);
-	stateTracker->setCullMode(true);
+	stateTracker->setCullMode(false);
 	stateTracker->setScissorEnabled(false);
 	stateTracker->setDepthBias(0.0f, 0.0f);
 	stateTracker->setLineWidth(1.0f);
