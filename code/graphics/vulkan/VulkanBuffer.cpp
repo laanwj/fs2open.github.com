@@ -124,7 +124,7 @@ bool VulkanBufferManager::init(vk::Device device,
 	{
 		vk::BufferCreateInfo bufferInfo;
 		bufferInfo.size = FALLBACK_UNIFORM_BUFFER_SIZE;
-		bufferInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
+		bufferInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eStorageBuffer;
 		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
 
 		try {
