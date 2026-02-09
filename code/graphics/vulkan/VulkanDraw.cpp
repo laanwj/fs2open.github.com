@@ -212,7 +212,8 @@ void VulkanDrawManager::clear()
 	vk::ClearRect clearRect;
 	if (stateTracker->isScissorEnabled()) {
 		// Respect the current clip region (matches OpenGL scissor behavior)
-		clearRect.rect.offset = vk::Offset2D(gr_screen.clip_left, gr_screen.clip_top);
+		clearRect.rect.offset = vk::Offset2D(gr_screen.offset_x + gr_screen.clip_left,
+		                                      gr_screen.offset_y + gr_screen.clip_top);
 		clearRect.rect.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.clip_width),
 		                                      static_cast<uint32_t>(gr_screen.clip_height));
 	} else {
