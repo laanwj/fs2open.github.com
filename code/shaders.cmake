@@ -31,6 +31,8 @@ set(SHADERS
 	${SHADER_DIR}/lightshafts.frag
 	${SHADER_DIR}/effect.vert
 	${SHADER_DIR}/effect.frag
+	${SHADER_DIR}/effect-distort.vert
+	${SHADER_DIR}/effect-distort.frag
 )
 
 # Shaders that have complex uniform blocks with vec3 members that cause struct generation issues
@@ -50,6 +52,8 @@ set(SHADERS_SKIP_STRUCT_GEN
 	${SHADER_DIR}/lightshafts.frag
 	${SHADER_DIR}/effect.vert
 	${SHADER_DIR}/effect.frag
+	${SHADER_DIR}/effect-distort.vert
+	${SHADER_DIR}/effect-distort.frag
 )
 
 target_sources(code PRIVATE ${SHADERS})

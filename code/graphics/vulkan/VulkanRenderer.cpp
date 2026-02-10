@@ -20,6 +20,8 @@
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
+extern float flFrametime;
+
 namespace graphics {
 namespace vulkan {
 
@@ -1461,6 +1463,11 @@ void VulkanRenderer::endSceneRendering()
 
 	// End HDR scene render pass (transitions scene color to eShaderReadOnlyOptimal)
 	m_currentCommandBuffer.endRenderPass();
+
+	// Update distortion ping-pong textures (every ~30ms, matching OpenGL)
+	if (Gr_framebuffer_effects.any_set()) {
+		m_postProcessor->updateDistortion(m_currentCommandBuffer, flFrametime);
+	}
 
 	// Execute post-processing passes (all between HDR scene pass and swap chain pass)
 	m_postProcessor->executeBloom(m_currentCommandBuffer);

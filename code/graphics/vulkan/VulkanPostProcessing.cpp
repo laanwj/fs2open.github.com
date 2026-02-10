@@ -1,5 +1,6 @@
 #include "VulkanPostProcessing.h"
 #include "VulkanBuffer.h"
+#include "VulkanDeletionQueue.h"
 #include "VulkanTexture.h"
 #include "VulkanPipeline.h"
 #include "VulkanState.h"
@@ -15,6 +16,7 @@
 #include "math/floating.h"
 #include "math/vecmat.h"
 #include "render/3d.h"
+#include "utils/Random.h"
 
 extern float Sun_spot;
 extern int Game_subspace_effect;
@@ -383,6 +385,52 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 		mprintf(("VulkanPostProcessor: LDR target initialization failed (non-fatal)\n"));
 	}
 
+	// Initialize distortion ping-pong textures (32x32 RGBA8, non-fatal)
+	{
+		bool distOk = true;
+		for (int i = 0; i < 2; i++) {
+			if (!createImage(32, 32, vk::Format::eR8G8B8A8Unorm,
+			                 vk::ImageUsageFlagBits::eTransferSrc
+			                 | vk::ImageUsageFlagBits::eTransferDst
+			                 | vk::ImageUsageFlagBits::eSampled,
+			                 vk::ImageAspectFlagBits::eColor,
+			                 m_distortionTex[i].image, m_distortionTex[i].view,
+			                 m_distortionTex[i].allocation)) {
+				mprintf(("VulkanPostProcessor: Failed to create distortion texture %d\n", i));
+				distOk = false;
+				break;
+			}
+			m_distortionTex[i].format = vk::Format::eR8G8B8A8Unorm;
+			m_distortionTex[i].width = 32;
+			m_distortionTex[i].height = 32;
+		}
+
+		if (distOk) {
+			// Create LINEAR/REPEAT sampler for distortion textures
+			vk::SamplerCreateInfo samplerInfo;
+			samplerInfo.magFilter = vk::Filter::eLinear;
+			samplerInfo.minFilter = vk::Filter::eLinear;
+			samplerInfo.mipmapMode = vk::SamplerMipmapMode::eNearest;
+			samplerInfo.addressModeU = vk::SamplerAddressMode::eRepeat;
+			samplerInfo.addressModeV = vk::SamplerAddressMode::eRepeat;
+			samplerInfo.addressModeW = vk::SamplerAddressMode::eRepeat;
+			samplerInfo.mipLodBias = 0.0f;
+			samplerInfo.anisotropyEnable = VK_FALSE;
+			samplerInfo.compareEnable = VK_FALSE;
+			samplerInfo.minLod = 0.0f;
+			samplerInfo.maxLod = 0.0f;
+			samplerInfo.borderColor = vk::BorderColor::eFloatOpaqueBlack;
+
+			try {
+				m_distortionSampler = m_device.createSampler(samplerInfo);
+				m_distortionInitialized = true;
+				mprintf(("VulkanPostProcessor: Distortion textures initialized (2x 32x32 RGBA8)\n"));
+			} catch (const vk::SystemError& e) {
+				mprintf(("VulkanPostProcessor: Failed to create distortion sampler: %s\n", e.what()));
+			}
+		}
+	}
+
 	m_initialized = true;
 	mprintf(("VulkanPostProcessor: Initialized (%ux%u, RGBA16F scene color)\n",
 		extent.width, extent.height));
@@ -478,6 +526,26 @@ void VulkanPostProcessor::shutdown()
 		if (m_sceneDepthCopy.allocation.memory != VK_NULL_HANDLE) {
 			m_memoryManager->freeAllocation(m_sceneDepthCopy.allocation);
 		}
+
+		// Destroy distortion textures
+		if (m_distortionSampler) {
+			m_device.destroySampler(m_distortionSampler);
+			m_distortionSampler = nullptr;
+		}
+		for (int i = 0; i < 2; i++) {
+			if (m_distortionTex[i].view) {
+				m_device.destroyImageView(m_distortionTex[i].view);
+				m_distortionTex[i].view = nullptr;
+			}
+			if (m_distortionTex[i].image) {
+				m_device.destroyImage(m_distortionTex[i].image);
+				m_distortionTex[i].image = nullptr;
+			}
+			if (m_distortionTex[i].allocation.memory != VK_NULL_HANDLE) {
+				m_memoryManager->freeAllocation(m_distortionTex[i].allocation);
+			}
+		}
+		m_distortionInitialized = false;
 	}
 
 	m_initialized = false;
@@ -1084,7 +1152,35 @@ void VulkanPostProcessor::drawFullscreenTriangle(vk::CommandBuffer cmd, vk::Rend
 		depthMapWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
 		depthMapWrite.pImageInfo = &depthMapFallback;
 
-		std::array<vk::WriteDescriptorSet, 6> writes = {texWrite, modelWrite, decalWrite, fallbackTexWrite, ssboWrite, depthMapWrite};
+		// Binding 5: Scene color / frameBuffer (fallback to 2D white texture)
+		vk::DescriptorImageInfo sceneColorFallback;
+		sceneColorFallback.sampler = defaultSampler;
+		sceneColorFallback.imageView = fallbackView;
+		sceneColorFallback.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet sceneColorWrite;
+		sceneColorWrite.dstSet = materialSet;
+		sceneColorWrite.dstBinding = 5;
+		sceneColorWrite.dstArrayElement = 0;
+		sceneColorWrite.descriptorCount = 1;
+		sceneColorWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		sceneColorWrite.pImageInfo = &sceneColorFallback;
+
+		// Binding 6: Distortion map (fallback to 2D white texture)
+		vk::DescriptorImageInfo distMapFallback;
+		distMapFallback.sampler = defaultSampler;
+		distMapFallback.imageView = fallbackView;
+		distMapFallback.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet distMapWrite;
+		distMapWrite.dstSet = materialSet;
+		distMapWrite.dstBinding = 6;
+		distMapWrite.dstArrayElement = 0;
+		distMapWrite.descriptorCount = 1;
+		distMapWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		distMapWrite.pImageInfo = &distMapFallback;
+
+		std::array<vk::WriteDescriptorSet, 8> writes = {texWrite, modelWrite, decalWrite, fallbackTexWrite, ssboWrite, depthMapWrite, sceneColorWrite, distMapWrite};
 		m_device.updateDescriptorSets(writes, {});
 	}
 
@@ -2004,6 +2100,196 @@ void VulkanPostProcessor::copySceneDepth(vk::CommandBuffer cmd)
 	}
 }
 
+void VulkanPostProcessor::updateDistortion(vk::CommandBuffer cmd, float frametime)
+{
+	if (!m_distortionInitialized) {
+		return;
+	}
+
+	m_distortionTimer += frametime;
+	if (m_distortionTimer < 0.03f) {
+		return;
+	}
+	m_distortionTimer = 0.0f;
+
+	int dst = !m_distortionSwitch;  // Write target
+	int src = m_distortionSwitch;   // Read source
+
+	// On first update, images are still in eUndefined layout
+	vk::ImageLayout srcOldLayout = m_distortionFirstUpdate
+		? vk::ImageLayout::eUndefined : vk::ImageLayout::eShaderReadOnlyOptimal;
+	vk::AccessFlags srcOldAccess = m_distortionFirstUpdate
+		? vk::AccessFlags{} : vk::AccessFlagBits::eShaderRead;
+
+	// Transition both distortion textures for transfer operations
+	{
+		std::array<vk::ImageMemoryBarrier, 2> barriers;
+
+		// dst: eShaderReadOnlyOptimal (or eUndefined on first use) → eTransferDstOptimal
+		barriers[0].srcAccessMask = srcOldAccess;
+		barriers[0].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barriers[0].oldLayout = srcOldLayout;
+		barriers[0].newLayout = vk::ImageLayout::eTransferDstOptimal;
+		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].image = m_distortionTex[dst].image;
+		barriers[0].subresourceRange = vk::ImageSubresourceRange(
+			vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+
+		// src: eShaderReadOnlyOptimal (or eUndefined on first use) → eTransferSrcOptimal
+		barriers[1].srcAccessMask = srcOldAccess;
+		barriers[1].dstAccessMask = vk::AccessFlagBits::eTransferRead;
+		barriers[1].oldLayout = srcOldLayout;
+		barriers[1].newLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].image = m_distortionTex[src].image;
+		barriers[1].subresourceRange = vk::ImageSubresourceRange(
+			vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eFragmentShader,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, {}, {}, barriers);
+	}
+
+	// Clear dest to mid-gray (0.5, 0.5, 0.0, 1.0) = no distortion
+	{
+		vk::ClearColorValue clearColor;
+		clearColor.setFloat32({0.5f, 0.5f, 0.0f, 1.0f});
+		vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+		cmd.clearColorImage(m_distortionTex[dst].image,
+			vk::ImageLayout::eTransferDstOptimal, clearColor, range);
+	}
+
+	// Blit: scroll old data right by 1 pixel
+	// src columns 0-30 → dst columns 1-31 (with LINEAR filtering)
+	{
+		vk::ImageBlit blit;
+		blit.srcSubresource = vk::ImageSubresourceLayers(
+			vk::ImageAspectFlagBits::eColor, 0, 0, 1);
+		blit.srcOffsets[0] = vk::Offset3D(0, 0, 0);
+		blit.srcOffsets[1] = vk::Offset3D(31, 32, 1);
+		blit.dstSubresource = vk::ImageSubresourceLayers(
+			vk::ImageAspectFlagBits::eColor, 0, 0, 1);
+		blit.dstOffsets[0] = vk::Offset3D(1, 0, 0);
+		blit.dstOffsets[1] = vk::Offset3D(32, 32, 1);
+
+		cmd.blitImage(
+			m_distortionTex[src].image, vk::ImageLayout::eTransferSrcOptimal,
+			m_distortionTex[dst].image, vk::ImageLayout::eTransferDstOptimal,
+			blit, vk::Filter::eLinear);
+	}
+
+	// Generate random noise and copy to column 0 of dst
+	// OpenGL draws 33 GL_POINTS at x=0 with random R,G values — we write 32 pixels
+	{
+		// Create a small host-visible staging buffer for 32 RGBA8 pixels (128 bytes)
+		vk::BufferCreateInfo bufInfo;
+		bufInfo.size = 32 * 4;
+		bufInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+		bufInfo.sharingMode = vk::SharingMode::eExclusive;
+
+		vk::Buffer stagingBuf;
+		VulkanAllocation stagingAlloc;
+		try {
+			stagingBuf = m_device.createBuffer(bufInfo);
+		} catch (const vk::SystemError&) {
+			// Non-fatal: skip noise injection this frame
+			goto skip_noise;
+		}
+
+		if (!m_memoryManager->allocateBufferMemory(stagingBuf, MemoryUsage::CpuOnly, stagingAlloc)) {
+			m_device.destroyBuffer(stagingBuf);
+			goto skip_noise;
+		}
+
+		{
+			auto* pixels = static_cast<uint8_t*>(m_memoryManager->mapMemory(stagingAlloc));
+			if (pixels) {
+				for (int i = 0; i < 32; i++) {
+					pixels[i * 4 + 0] = static_cast<uint8_t>(::util::Random::next(256));  // R
+					pixels[i * 4 + 1] = static_cast<uint8_t>(::util::Random::next(256));  // G
+					pixels[i * 4 + 2] = 255;  // B
+					pixels[i * 4 + 3] = 255;  // A
+				}
+				m_memoryManager->unmapMemory(stagingAlloc);
+			}
+
+			// Copy staging buffer → column 0 of dst (1 pixel wide, 32 pixels tall)
+			vk::BufferImageCopy region;
+			region.bufferOffset = 0;
+			region.bufferRowLength = 0;    // Tightly packed
+			region.bufferImageHeight = 0;
+			region.imageSubresource = vk::ImageSubresourceLayers(
+				vk::ImageAspectFlagBits::eColor, 0, 0, 1);
+			region.imageOffset = vk::Offset3D(0, 0, 0);
+			region.imageExtent = vk::Extent3D(1, 32, 1);
+
+			cmd.copyBufferToImage(stagingBuf, m_distortionTex[dst].image,
+				vk::ImageLayout::eTransferDstOptimal, region);
+		}
+
+		// Schedule staging buffer for deferred destruction (GPU may still be reading)
+		auto* delQueue = getDeletionQueue();
+		if (delQueue) {
+			delQueue->queueBuffer(stagingBuf, stagingAlloc);
+		} else {
+			m_device.destroyBuffer(stagingBuf);
+			m_memoryManager->freeAllocation(stagingAlloc);
+		}
+	}
+
+skip_noise:
+	// Transition both textures back to eShaderReadOnlyOptimal
+	{
+		std::array<vk::ImageMemoryBarrier, 2> barriers;
+
+		// dst: eTransferDstOptimal → eShaderReadOnlyOptimal
+		barriers[0].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barriers[0].dstAccessMask = vk::AccessFlagBits::eShaderRead;
+		barriers[0].oldLayout = vk::ImageLayout::eTransferDstOptimal;
+		barriers[0].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].image = m_distortionTex[dst].image;
+		barriers[0].subresourceRange = vk::ImageSubresourceRange(
+			vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+
+		// src: eTransferSrcOptimal → eShaderReadOnlyOptimal
+		barriers[1].srcAccessMask = vk::AccessFlagBits::eTransferRead;
+		barriers[1].dstAccessMask = vk::AccessFlagBits::eShaderRead;
+		barriers[1].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barriers[1].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].image = m_distortionTex[src].image;
+		barriers[1].subresourceRange = vk::ImageSubresourceRange(
+			vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			vk::PipelineStageFlagBits::eFragmentShader,
+			{}, {}, {}, barriers);
+	}
+
+	m_distortionSwitch = !m_distortionSwitch;
+	m_distortionFirstUpdate = false;
+}
+
+vk::ImageView VulkanPostProcessor::getDistortionTextureView() const
+{
+	if (!m_distortionInitialized) {
+		return nullptr;
+	}
+	// Return the most recently written texture (matching OpenGL's
+	// Distortion_texture[!Distortion_switch] binding for thrusters).
+	// After updateDistortion toggles the switch, m_distortionSwitch points
+	// to the old read source. The write target was !old_switch = new switch.
+	// So the most recently written texture is m_distortionTex[m_distortionSwitch].
+	return m_distortionTex[m_distortionSwitch].view;
+}
+
 void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 {
 	// If LDR targets exist, executeTonemap()+executeFXAA() already ran.
@@ -2150,7 +2436,35 @@ void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 		depthMapWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
 		depthMapWrite.pImageInfo = &depthMapFallback;
 
-		std::array<vk::WriteDescriptorSet, 6> writes = {write, uboWrite, decalWrite, fallbackTexWrite, ssboWrite, depthMapWrite};
+		// Binding 5: Scene color / frameBuffer (fallback to 2D white texture)
+		vk::DescriptorImageInfo sceneColorFallback;
+		sceneColorFallback.sampler = defaultSampler;
+		sceneColorFallback.imageView = fallbackView;
+		sceneColorFallback.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet sceneColorWrite;
+		sceneColorWrite.dstSet = materialSet;
+		sceneColorWrite.dstBinding = 5;
+		sceneColorWrite.dstArrayElement = 0;
+		sceneColorWrite.descriptorCount = 1;
+		sceneColorWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		sceneColorWrite.pImageInfo = &sceneColorFallback;
+
+		// Binding 6: Distortion map (fallback to 2D white texture)
+		vk::DescriptorImageInfo distMapFallback;
+		distMapFallback.sampler = defaultSampler;
+		distMapFallback.imageView = fallbackView;
+		distMapFallback.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet distMapWrite;
+		distMapWrite.dstSet = materialSet;
+		distMapWrite.dstBinding = 6;
+		distMapWrite.dstArrayElement = 0;
+		distMapWrite.descriptorCount = 1;
+		distMapWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		distMapWrite.pImageInfo = &distMapFallback;
+
+		std::array<vk::WriteDescriptorSet, 8> writes = {write, uboWrite, decalWrite, fallbackTexWrite, ssboWrite, depthMapWrite, sceneColorWrite, distMapWrite};
 		m_device.updateDescriptorSets(writes, {});
 	}
 

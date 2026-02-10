@@ -63,8 +63,7 @@ bool vulkan_is_capable(gr_capability capability)
 	case gr_capability::CAPABILITY_SOFT_PARTICLES:
 		return Gr_post_processing_enabled;
 	case gr_capability::CAPABILITY_DISTORTION:
-		// Requires effect-distort shader + scene color texture binding (not yet implemented).
-		return false;
+		return Gr_post_processing_enabled;
 	case gr_capability::CAPABILITY_POST_PROCESSING:
 		return Gr_post_processing_enabled;
 	case gr_capability::CAPABILITY_DEFERRED_LIGHTING:

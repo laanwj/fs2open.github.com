@@ -217,6 +217,21 @@ public:
 	void clearDepthTextureOverride();
 
 	/**
+	 * @brief Set scene color texture override for binding 5 (distortion effects)
+	 */
+	void setSceneColorOverride(vk::ImageView view, vk::Sampler sampler);
+
+	/**
+	 * @brief Set distortion map texture override for binding 6 (distortion effects)
+	 */
+	void setDistMapOverride(vk::ImageView view, vk::Sampler sampler);
+
+	/**
+	 * @brief Clear distortion texture overrides (bindings 5 and 6, reverts to fallback)
+	 */
+	void clearDistortionOverrides();
+
+	/**
 	 * @brief Get current texture addressing mode
 	 */
 	int getTextureAddressing() const { return m_textureAddressing; }
@@ -342,6 +357,14 @@ private:
 	// Set before applyMaterial() so binding 4 gets the real depth texture instead of fallback
 	vk::ImageView m_depthTextureOverride;
 	vk::Sampler m_depthSamplerOverride;
+
+	// Scene color override for distortion rendering (binding 5)
+	vk::ImageView m_sceneColorOverride;
+	vk::Sampler m_sceneColorSamplerOverride;
+
+	// Distortion map override for distortion rendering (binding 6)
+	vk::ImageView m_distMapOverride;
+	vk::Sampler m_distMapSamplerOverride;
 
 	// Pre-built sphere mesh for draw_sphere / deferred light volumes
 	gr_buffer_handle m_sphereVBO;

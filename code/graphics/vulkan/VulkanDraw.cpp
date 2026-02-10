@@ -747,6 +747,26 @@ void VulkanDrawManager::clearDepthTextureOverride()
 	m_depthSamplerOverride = nullptr;
 }
 
+void VulkanDrawManager::setSceneColorOverride(vk::ImageView view, vk::Sampler sampler)
+{
+	m_sceneColorOverride = view;
+	m_sceneColorSamplerOverride = sampler;
+}
+
+void VulkanDrawManager::setDistMapOverride(vk::ImageView view, vk::Sampler sampler)
+{
+	m_distMapOverride = view;
+	m_distMapSamplerOverride = sampler;
+}
+
+void VulkanDrawManager::clearDistortionOverrides()
+{
+	m_sceneColorOverride = nullptr;
+	m_sceneColorSamplerOverride = nullptr;
+	m_distMapOverride = nullptr;
+	m_distMapSamplerOverride = nullptr;
+}
+
 void VulkanDrawManager::clearStates()
 {
 	auto* stateTracker = getStateTracker();
@@ -1228,6 +1248,28 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 				                                                   : texManager->getDefaultSampler();
 				if (depthView && depthSampler) {
 					descManager->updateTexture(materialSet, 4, depthView, depthSampler);
+				}
+			}
+
+			// Binding 5: scene color / frameBuffer for distortion — use override if set, else fallback
+			{
+				vk::ImageView sceneView = m_sceneColorOverride ? m_sceneColorOverride
+				                                                : texManager->getFallbackTextureView2D();
+				vk::Sampler sceneSampler = m_sceneColorSamplerOverride ? m_sceneColorSamplerOverride
+				                                                       : texManager->getDefaultSampler();
+				if (sceneView && sceneSampler) {
+					descManager->updateTexture(materialSet, 5, sceneView, sceneSampler);
+				}
+			}
+
+			// Binding 6: distortion map — use override if set, else fallback
+			{
+				vk::ImageView distView = m_distMapOverride ? m_distMapOverride
+				                                            : texManager->getFallbackTextureView2D();
+				vk::Sampler distSampler = m_distMapSamplerOverride ? m_distMapSamplerOverride
+				                                                    : texManager->getDefaultSampler();
+				if (distView && distSampler) {
+					descManager->updateTexture(materialSet, 6, distView, distSampler);
 				}
 			}
 
@@ -1861,11 +1903,43 @@ void vulkan_render_primitives_distortion(distortion_material* material_info,
 	int n_verts,
 	gr_buffer_handle buffer_handle)
 {
-	gr_matrix_set_uniforms();
-	vulkan_set_default_material_uniforms(material_info);
-
 	auto* drawManager = getDrawManager();
+	auto* pp = getPostProcessor();
+
+	// Set up matrices
+	gr_matrix_set_uniforms();
+
+	// Set effect_distort_data GenericData UBO (16 bytes — NOT genericData_default_material_vert!)
+	{
+		auto buffer = gr_get_uniform_buffer(uniform_block_type::GenericData, 1,
+		                                     sizeof(graphics::generic_data::effect_distort_data));
+		auto* data = buffer.aligner().addTypedElement<graphics::generic_data::effect_distort_data>();
+
+		data->window_width  = static_cast<float>(gr_screen.max_w);
+		data->window_height = static_cast<float>(gr_screen.max_h);
+		data->use_offset    = material_info->get_thruster_rendering() ? 1.0f : 0.0f;
+
+		buffer.submitData();
+		gr_bind_uniform_buffer(uniform_block_type::GenericData, buffer.getBufferOffset(0),
+		                       sizeof(graphics::generic_data::effect_distort_data), buffer.bufferHandle());
+	}
+
+	// Set scene color override (binding 5) — snapshot of scene color for distortion sampling
+	if (pp && pp->getSceneEffectView()) {
+		drawManager->setSceneColorOverride(
+			pp->getSceneEffectView(), pp->getSceneEffectSampler());
+	}
+
+	// Set distortion map override (binding 6) — ping-pong noise texture for thrusters
+	if (material_info->get_thruster_rendering() && pp && pp->getDistortionTextureView()) {
+		drawManager->setDistMapOverride(
+			pp->getDistortionTextureView(), pp->getDistortionSampler());
+	}
+
 	drawManager->renderPrimitivesDistortion(material_info, prim_type, layout, n_verts, buffer_handle);
+
+	// Clear overrides so subsequent draws use fallback textures
+	drawManager->clearDistortionOverrides();
 }
 
 void vulkan_render_movie(movie_material* material_info,

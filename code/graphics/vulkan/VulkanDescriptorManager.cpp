@@ -355,6 +355,14 @@ void VulkanDescriptorManager::createSetLayouts()
 			// Binding 4: Depth map (sampler2D for soft particles)
 			{ 4, vk::DescriptorType::eCombinedImageSampler, 1,
 			  vk::ShaderStageFlagBits::eFragment },
+
+			// Binding 5: Scene color / frameBuffer (distortion effects)
+			{ 5, vk::DescriptorType::eCombinedImageSampler, 1,
+			  vk::ShaderStageFlagBits::eFragment },
+
+			// Binding 6: Distortion map (distortion effects)
+			{ 6, vk::DescriptorType::eCombinedImageSampler, 1,
+			  vk::ShaderStageFlagBits::eFragment },
 		};
 		m_setLayouts[static_cast<size_t>(DescriptorSetIndex::Material)] = createSetLayout(bindings);
 	}

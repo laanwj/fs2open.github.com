@@ -139,6 +139,32 @@ public:
 	void executeLightshafts(vk::CommandBuffer cmd);
 
 	/**
+	 * @brief Update distortion ping-pong textures
+	 *
+	 * Called every frame from endSceneRendering(). Internally tracks a ~30ms
+	 * timer. When triggered, scrolls old distortion data right by 1 pixel and
+	 * injects random noise at the left edge (matching OpenGL's
+	 * gr_opengl_update_distortion()). Must be called outside a render pass.
+	 *
+	 * @param cmd Active command buffer (must be outside a render pass)
+	 * @param frametime Time since last frame in seconds
+	 */
+	void updateDistortion(vk::CommandBuffer cmd, float frametime);
+
+	/**
+	 * @brief Get the current distortion texture view for thruster sampling
+	 *
+	 * Returns the most recently written distortion texture (the one thrusters
+	 * should read from). Returns nullptr if distortion textures aren't initialized.
+	 */
+	vk::ImageView getDistortionTextureView() const;
+
+	/**
+	 * @brief Get the distortion texture sampler (LINEAR, REPEAT)
+	 */
+	vk::Sampler getDistortionSampler() const { return m_distortionSampler; }
+
+	/**
 	 * @brief Copy scene color to effect texture for distortion/soft particle sampling
 	 *
 	 * Must be called outside a render pass. Transitions scene color through
@@ -294,6 +320,14 @@ private:
 	vk::Framebuffer m_sceneLuminanceFB;
 	bool m_ldrInitialized = false;
 	bool m_postEffectsApplied = false; // Set per-frame by executePostEffects
+
+	// ---- Distortion ping-pong textures (32x32 RGBA8) ----
+	RenderTarget m_distortionTex[2];
+	int m_distortionSwitch = 0;        // Which texture is the current read source
+	float m_distortionTimer = 0.0f;    // Accumulator for ~30ms update interval
+	vk::Sampler m_distortionSampler;   // LINEAR filter, REPEAT wrapping
+	bool m_distortionInitialized = false;
+	bool m_distortionFirstUpdate = true;  // First update needs eUndefined old layout
 
 	vk::Device m_device;
 	VulkanMemoryManager* m_memoryManager = nullptr;
