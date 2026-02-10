@@ -150,16 +150,22 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 		subpass.pColorAttachments = &colorRef;
 		subpass.pDepthStencilAttachment = &depthRef;
 
-		// Dependency: external → subpass 0 (ensure previous frame's reads are done)
+		// Dependency: external → subpass 0
+		// Includes eTransfer in srcStageMask so this render pass is compatible with
+		// m_sceneRenderPassLoad (which follows copy_effect_texture transfer ops).
+		// Vulkan requires render passes sharing a framebuffer to have identical dependencies.
 		vk::SubpassDependency dependency;
 		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
 		dependency.dstSubpass = 0;
 		dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
-		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests
+		                        | vk::PipelineStageFlagBits::eTransfer;
 		dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
 		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+		dependency.srcAccessMask = vk::AccessFlagBits::eTransferRead;
 		dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite
-		                         | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentRead;
 
 		vk::RenderPassCreateInfo rpInfo;
 		rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
@@ -217,10 +223,13 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 		subpass.pColorAttachments = &colorRef;
 		subpass.pDepthStencilAttachment = &depthRef;
 
+		// Must match m_sceneRenderPass dependency exactly for render pass compatibility
 		vk::SubpassDependency dependency;
 		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
 		dependency.dstSubpass = 0;
-		dependency.srcStageMask = vk::PipelineStageFlagBits::eTransfer;
+		dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests
+		                        | vk::PipelineStageFlagBits::eTransfer;
 		dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
 		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests;
 		dependency.srcAccessMask = vk::AccessFlagBits::eTransferRead;
