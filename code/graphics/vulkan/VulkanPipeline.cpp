@@ -28,6 +28,7 @@ bool PipelineConfig::operator==(const PipelineConfig& other) const
 	       depthMode == other.depthMode &&
 	       blendMode == other.blendMode &&
 	       cullEnabled == other.cullEnabled &&
+	       frontFaceCW == other.frontFaceCW &&
 	       depthWriteEnabled == other.depthWriteEnabled &&
 	       stencilEnabled == other.stencilEnabled &&
 	       stencilFunc == other.stencilFunc &&
@@ -60,9 +61,10 @@ size_t PipelineConfig::hash() const
 	h ^= std::hash<int>()(static_cast<int>(depthMode)) << 16;
 	h ^= std::hash<int>()(static_cast<int>(blendMode)) << 20;
 	h ^= std::hash<bool>()(cullEnabled) << 24;
-	h ^= std::hash<bool>()(depthWriteEnabled) << 25;
-	h ^= std::hash<bool>()(stencilEnabled) << 26;
-	h ^= std::hash<int>()(static_cast<int>(stencilFunc)) << 27;
+	h ^= std::hash<bool>()(frontFaceCW) << 25;
+	h ^= std::hash<bool>()(depthWriteEnabled) << 26;
+	h ^= std::hash<bool>()(stencilEnabled) << 27;
+	h ^= std::hash<int>()(static_cast<int>(stencilFunc)) << 28;
 	h ^= std::hash<uint32_t>()(stencilMask) << 31;
 	h ^= std::hash<int>()(static_cast<int>(frontStencilOp.stencilFailOperation)) << 33;
 	h ^= std::hash<int>()(static_cast<int>(frontStencilOp.depthFailOperation)) << 35;
@@ -330,7 +332,7 @@ vk::UniquePipeline VulkanPipelineManager::createPipeline(const PipelineConfig& c
 
 	// Rasterization state
 	vk::PipelineRasterizationStateCreateInfo rasterizer = createRasterizationState(
-		config.cullEnabled, config.fillMode, true, config.depthBiasEnabled);
+		config.cullEnabled, config.fillMode, config.frontFaceCW, config.depthBiasEnabled);
 
 	// Multisample state
 	vk::PipelineMultisampleStateCreateInfo multisampling;

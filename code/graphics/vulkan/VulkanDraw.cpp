@@ -887,6 +887,10 @@ PipelineConfig VulkanDrawManager::buildPipelineConfig(material* mat, primitive_t
 	// Cull mode
 	config.cullEnabled = mat->get_cull_mode();
 
+	// Front face winding: match OpenGL which defaults to CCW and only switches to CW
+	// for model rendering (opengl_tnl_set_model_material sets GL_CW).
+	config.frontFaceCW = (config.shaderType == SDR_TYPE_MODEL);
+
 	// Depth write
 	config.depthWriteEnabled = (config.depthMode == ZBUFFER_TYPE_FULL ||
 	                             config.depthMode == ZBUFFER_TYPE_WRITE);

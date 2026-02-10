@@ -31,6 +31,7 @@ struct PipelineConfig {
 	gr_zbuffer_type depthMode = ZBUFFER_TYPE_NONE;
 	gr_alpha_blend blendMode = ALPHA_BLEND_NONE;
 	bool cullEnabled = true;
+	bool frontFaceCW = false;  // Match OpenGL default (CCW); models override to CW
 	bool depthWriteEnabled = true;
 
 	// Stencil state
