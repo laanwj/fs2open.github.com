@@ -141,9 +141,10 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 		}
 	}
 
-	// If no color attribute in vertex data, add a fallback using a dedicated binding
-	// This provides white (1,1,1,1) color for shaders that expect vertColor
-	if (!hasColorAttribute) {
+	// Only add fallback bindings when the layout has actual vertex components.
+	// Empty layouts (e.g. fullscreen triangles) generate vertices in the shader
+	// and don't need any vertex input bindings.
+	if (!hasColorAttribute && numComponents > 0) {
 		config.needsFallbackColor = true;
 
 		// Add binding for fallback color buffer (instanced so one value applies to all vertices)
@@ -164,7 +165,7 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 
 	// If no texcoord attribute, add a fallback providing (0,0,0,0)
 	// In OpenGL, missing vertex attributes default to (0,0,0,1); Vulkan requires explicit input
-	if (!hasTexCoordAttribute) {
+	if (!hasTexCoordAttribute && numComponents > 0) {
 		config.needsFallbackTexCoord = true;
 
 		vk::VertexInputBindingDescription texCoordBinding;
