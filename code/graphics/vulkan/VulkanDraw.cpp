@@ -777,8 +777,9 @@ void VulkanDrawManager::clearStates()
 	// Clear pending uniform bindings
 	clearPendingUniformBindings();
 
-	// Reset clip
-	resetClip();
+	// NOTE: Do NOT call resetClip() here. OpenGL's gr_opengl_clear_states() does
+	// not reset the clip region, and callers (e.g. model_render_immediate) rely on
+	// the clip/offset state surviving through clear_states for subsequent 2D draws.
 }
 
 void VulkanDrawManager::setPendingUniformBinding(uniform_block_type blockType, gr_buffer_handle bufferHandle,
