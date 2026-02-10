@@ -131,6 +131,18 @@ bool VulkanTextureManager::init(vk::Device device, vk::PhysicalDevice physicalDe
 		return false;
 	}
 
+	// Also create a 2D (non-array) view of the same texture for post-processing shaders
+	// that use sampler2D instead of sampler2DArray
+	m_fallbackTextureView2D = createImageView(m_fallbackTexture, vk::Format::eR8G8B8A8Unorm,
+	                                           vk::ImageAspectFlagBits::eColor, 1, false);
+	if (!m_fallbackTextureView2D) {
+		mprintf(("Failed to create fallback texture 2D view!\n"));
+		m_device.destroyImageView(m_fallbackTextureView);
+		m_device.destroyImage(m_fallbackTexture);
+		m_memoryManager->freeAllocation(m_fallbackTextureAllocation);
+		return false;
+	}
+
 	// Upload white pixel data to fallback texture
 	{
 		// Create staging buffer with white pixel (RGBA: 255, 255, 255, 255)
@@ -181,6 +193,10 @@ void VulkanTextureManager::shutdown()
 	}
 
 	// Destroy fallback texture
+	if (m_fallbackTextureView2D) {
+		m_device.destroyImageView(m_fallbackTextureView2D);
+		m_fallbackTextureView2D = nullptr;
+	}
 	if (m_fallbackTextureView) {
 		m_device.destroyImageView(m_fallbackTextureView);
 		m_fallbackTextureView = nullptr;
@@ -850,6 +866,11 @@ vk::Sampler VulkanTextureManager::getDefaultSampler()
 vk::ImageView VulkanTextureManager::getFallbackTextureView()
 {
 	return m_fallbackTextureView;
+}
+
+vk::ImageView VulkanTextureManager::getFallbackTextureView2D()
+{
+	return m_fallbackTextureView2D;
 }
 
 tcache_slot_vulkan* VulkanTextureManager::getTextureSlot(int handle)

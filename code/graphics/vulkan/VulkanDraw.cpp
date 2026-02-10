@@ -190,6 +190,22 @@ void VulkanDrawManager::shutdown()
 		return;
 	}
 
+	// Destroy transform SSBO buffers (static globals, not tracked by deletion queue)
+	auto* bufferManager = getBufferManager();
+	auto* memManager = getMemoryManager();
+	if (bufferManager && memManager) {
+		vk::Device device = bufferManager->getDevice();
+		for (auto& tb : g_transformBuffers) {
+			if (tb.buffer) {
+				device.destroyBuffer(tb.buffer);
+				memManager->freeAllocation(tb.allocation);
+				tb.buffer = nullptr;
+				tb.capacity = 0;
+				tb.writeOffset = 0;
+			}
+		}
+	}
+
 	shutdownSphereBuffers();
 
 	m_initialized = false;

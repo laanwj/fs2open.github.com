@@ -134,9 +134,14 @@ public:
 	vk::Sampler getDefaultSampler();
 
 	/**
-	 * @brief Get fallback white texture image view for unbound slots
+	 * @brief Get fallback white texture image view (2D_ARRAY) for unbound material texture slots
 	 */
 	vk::ImageView getFallbackTextureView();
+
+	/**
+	 * @brief Get fallback white texture image view (2D) for post-processing sampler2D slots
+	 */
+	vk::ImageView getFallbackTextureView2D();
 
 	// Texture access
 
@@ -260,7 +265,8 @@ private:
 
 	// Fallback 1x1 white texture for unbound texture slots
 	vk::Image m_fallbackTexture;
-	vk::ImageView m_fallbackTextureView;
+	vk::ImageView m_fallbackTextureView;      // 2D_ARRAY view (for material texture arrays)
+	vk::ImageView m_fallbackTextureView2D;    // 2D view (for post-processing sampler2D)
 	VulkanAllocation m_fallbackTextureAllocation;
 
 	// Device limits

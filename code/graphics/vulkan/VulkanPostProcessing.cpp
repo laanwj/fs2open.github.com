@@ -1013,8 +1013,9 @@ void VulkanPostProcessor::drawFullscreenTriangle(vk::CommandBuffer cmd, vk::Rend
 		decalWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
 		decalWrite.pBufferInfo = &fallbackBufInfo;
 
-		// Fill remaining texture array elements with fallback
-		vk::ImageView fallbackView = texMgr->getFallbackTextureView();
+		// Fill remaining texture array elements with fallback (use 2D view since
+		// post-processing shaders declare sampler2D, not sampler2DArray)
+		vk::ImageView fallbackView = texMgr->getFallbackTextureView2D();
 		vk::Sampler defaultSampler = texMgr->getDefaultSampler();
 
 		SCP_vector<vk::DescriptorImageInfo> fallbackImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1);
@@ -1937,9 +1938,10 @@ void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 		decalWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
 		decalWrite.pBufferInfo = &bufferInfo;
 
-		// Fill remaining texture array elements with fallback
+		// Fill remaining texture array elements with fallback (use 2D view since
+		// post-processing shaders declare sampler2D, not sampler2DArray)
 		auto* texMgr = getTextureManager();
-		vk::ImageView fallbackView = texMgr->getFallbackTextureView();
+		vk::ImageView fallbackView = texMgr->getFallbackTextureView2D();
 		vk::Sampler defaultSampler = texMgr->getDefaultSampler();
 
 		SCP_vector<vk::DescriptorImageInfo> fallbackImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1);
