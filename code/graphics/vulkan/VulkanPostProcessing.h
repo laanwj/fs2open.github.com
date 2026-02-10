@@ -150,9 +150,25 @@ public:
 	void copyEffectTexture(vk::CommandBuffer cmd);
 
 	/**
+	 * @brief Copy scene depth to samplable depth copy for soft particle rendering
+	 *
+	 * Must be called outside a render pass. Transitions scene depth through
+	 * eTransferSrcOptimal and back to eDepthStencilAttachmentOptimal. Transitions
+	 * depth copy to eShaderReadOnlyOptimal for fragment shader sampling.
+	 *
+	 * @param cmd Active command buffer (must be outside a render pass)
+	 */
+	void copySceneDepth(vk::CommandBuffer cmd);
+
+	/**
 	 * @brief Check if LDR targets are available (tonemapping + FXAA ready)
 	 */
 	bool hasLDRTargets() const { return m_ldrInitialized; }
+
+	/**
+	 * @brief Get the scene color image (for layout transitions outside post-processor)
+	 */
+	vk::Image getSceneColorImage() const { return m_sceneColor.image; }
 
 	/**
 	 * @brief Get the scene color image view (for post-processing texture binding)
@@ -171,6 +187,13 @@ public:
 	 * Used by distortion and soft particle shaders.
 	 */
 	vk::ImageView getSceneEffectView() const { return m_sceneEffect.view; }
+
+	/**
+	 * @brief Get the scene depth copy view (for soft particle depth sampling)
+	 *
+	 * Available for sampling after copySceneDepth() has been called.
+	 */
+	vk::ImageView getSceneDepthCopyView() const { return m_sceneDepthCopy.view; }
 
 	/**
 	 * @brief Get the effect texture sampler (linear, clamp-to-edge)
@@ -215,9 +238,10 @@ private:
 		uint32_t height = 0;
 	};
 
-	RenderTarget m_sceneColor;    // RGBA16F HDR scene color
-	RenderTarget m_sceneDepth;    // Depth buffer for scene
-	RenderTarget m_sceneEffect;   // RGBA16F effect/composite (snapshot of scene color)
+	RenderTarget m_sceneColor;      // RGBA16F HDR scene color
+	RenderTarget m_sceneDepth;      // Depth buffer for scene
+	RenderTarget m_sceneDepthCopy;  // Samplable copy of scene depth (for soft particles)
+	RenderTarget m_sceneEffect;     // RGBA16F effect/composite (snapshot of scene color)
 
 	// Scene render pass and framebuffer
 	vk::RenderPass m_sceneRenderPass;       // loadOp=eClear (initial scene begin)

@@ -203,6 +203,20 @@ public:
 	void setDepthBiasEnabled(bool enabled);
 
 	/**
+	 * @brief Set depth texture override for soft particle rendering
+	 *
+	 * When set, applyMaterial() binds this texture to Material set binding 4
+	 * instead of the fallback white texture. Must be set before the render call
+	 * and cleared afterwards.
+	 */
+	void setDepthTextureOverride(vk::ImageView view, vk::Sampler sampler);
+
+	/**
+	 * @brief Clear depth texture override (reverts to fallback)
+	 */
+	void clearDepthTextureOverride();
+
+	/**
 	 * @brief Get current texture addressing mode
 	 */
 	int getTextureAddressing() const { return m_textureAddressing; }
@@ -323,6 +337,11 @@ private:
 	};
 	FrameStats m_frameStats;
 	int m_frameStatsFrameNum = 0;
+
+	// Depth texture override for soft particle rendering
+	// Set before applyMaterial() so binding 4 gets the real depth texture instead of fallback
+	vk::ImageView m_depthTextureOverride;
+	vk::Sampler m_depthSamplerOverride;
 
 	// Pre-built sphere mesh for draw_sphere / deferred light volumes
 	gr_buffer_handle m_sphereVBO;

@@ -735,6 +735,18 @@ void VulkanDrawManager::setDepthBiasEnabled(bool enabled)
 	m_depthBiasEnabled = enabled;
 }
 
+void VulkanDrawManager::setDepthTextureOverride(vk::ImageView view, vk::Sampler sampler)
+{
+	m_depthTextureOverride = view;
+	m_depthSamplerOverride = sampler;
+}
+
+void VulkanDrawManager::clearDepthTextureOverride()
+{
+	m_depthTextureOverride = nullptr;
+	m_depthSamplerOverride = nullptr;
+}
+
 void VulkanDrawManager::clearStates()
 {
 	auto* stateTracker = getStateTracker();
@@ -1205,6 +1217,17 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 				descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
 				// Binding 3: Transform buffer SSBO — fallback to the zero UBO
 				descManager->updateStorageBuffer(materialSet, 3, fallbackUBO, 0, fallbackUBOSize);
+			}
+
+			// Binding 4: depth map for soft particles — use override if set, else fallback
+			{
+				vk::ImageView depthView = m_depthTextureOverride ? m_depthTextureOverride
+				                                                  : texManager->getFallbackTextureView2D();
+				vk::Sampler depthSampler = m_depthSamplerOverride ? m_depthSamplerOverride
+				                                                   : texManager->getDefaultSampler();
+				if (depthView && depthSampler) {
+					descManager->updateTexture(materialSet, 4, depthView, depthSampler);
+				}
 			}
 
 			// Bind actual transform buffer if available (with per-upload offset)
@@ -1784,11 +1807,50 @@ void vulkan_render_primitives_particle(particle_material* material_info,
 	int n_verts,
 	gr_buffer_handle buffer_handle)
 {
-	gr_matrix_set_uniforms();
-	vulkan_set_default_material_uniforms(material_info);
-
+	auto* renderer = getRendererInstance();
 	auto* drawManager = getDrawManager();
+
+	// Trigger lazy scene depth copy (first particle draw per frame)
+	renderer->copySceneDepthForParticles();
+
+	// Set up matrices
+	gr_matrix_set_uniforms();
+
+	// Set effect_data GenericData UBO (matching OpenGL's opengl_tnl_set_material_particle)
+	{
+		auto buffer = gr_get_uniform_buffer(uniform_block_type::GenericData, 1,
+		                                     sizeof(graphics::generic_data::effect_data));
+		auto* data = buffer.aligner().addTypedElement<graphics::generic_data::effect_data>();
+
+		data->window_width  = static_cast<float>(gr_screen.max_w);
+		data->window_height = static_cast<float>(gr_screen.max_h);
+		data->nearZ         = Min_draw_distance;
+		data->farZ          = Max_draw_distance;
+		data->srgb          = High_dynamic_range ? 1 : 0;
+		data->blend_alpha   = material_info->get_blend_mode() != ALPHA_BLEND_ADDITIVE ? 1 : 0;
+		data->linear_depth  = 0;  // Deferred lighting not yet implemented
+
+		buffer.submitData();
+		gr_bind_uniform_buffer(uniform_block_type::GenericData, buffer.getBufferOffset(0),
+		                       sizeof(graphics::generic_data::effect_data), buffer.bufferHandle());
+	}
+
+	// Set depth texture override so applyMaterial binds the real depth copy
+	if (renderer->isSceneDepthCopied()) {
+		auto* pp = getPostProcessor();
+		if (pp) {
+			auto* texMgr = getTextureManager();
+			drawManager->setDepthTextureOverride(
+				pp->getSceneDepthCopyView(),
+				texMgr->getSampler(vk::Filter::eNearest, vk::Filter::eNearest,
+				                   vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false));
+		}
+	}
+
 	drawManager->renderPrimitivesParticle(material_info, prim_type, layout, offset, n_verts, buffer_handle);
+
+	// Clear the override
+	drawManager->clearDepthTextureOverride();
 }
 
 void vulkan_render_primitives_distortion(distortion_material* material_info,

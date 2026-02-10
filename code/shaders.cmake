@@ -29,6 +29,8 @@ set(SHADERS
 	${SHADER_DIR}/fxaa.frag
 	${SHADER_DIR}/post.frag
 	${SHADER_DIR}/lightshafts.frag
+	${SHADER_DIR}/effect.vert
+	${SHADER_DIR}/effect.frag
 )
 
 # Shaders that have complex uniform blocks with vec3 members that cause struct generation issues
@@ -46,6 +48,8 @@ set(SHADERS_SKIP_STRUCT_GEN
 	${SHADER_DIR}/fxaa.frag
 	${SHADER_DIR}/post.frag
 	${SHADER_DIR}/lightshafts.frag
+	${SHADER_DIR}/effect.vert
+	${SHADER_DIR}/effect.frag
 )
 
 target_sources(code PRIVATE ${SHADERS})

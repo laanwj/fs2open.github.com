@@ -351,6 +351,10 @@ void VulkanDescriptorManager::createSetLayouts()
 			// Binding 3: Transform buffer SSBO (for batched submodel transforms)
 			{ 3, vk::DescriptorType::eStorageBuffer, 1,
 			  vk::ShaderStageFlagBits::eVertex },
+
+			// Binding 4: Depth map (sampler2D for soft particles)
+			{ 4, vk::DescriptorType::eCombinedImageSampler, 1,
+			  vk::ShaderStageFlagBits::eFragment },
 		};
 		m_setLayouts[static_cast<size_t>(DescriptorSetIndex::Material)] = createSetLayout(bindings);
 	}

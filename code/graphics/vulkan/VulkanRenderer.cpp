@@ -1003,6 +1003,9 @@ void VulkanRenderer::setupFrame()
 	Assertion(m_stateTracker, "Vulkan StateTracker not initialized in setupFrame!");
 	m_stateTracker->beginFrame(m_currentCommandBuffer);
 
+	// Reset per-frame flags
+	m_sceneDepthCopiedThisFrame = false;
+
 	// Reset per-frame draw statistics
 	Assertion(m_drawManager, "Vulkan DrawManager not initialized in setupFrame!");
 	m_drawManager->resetFrameStats();
@@ -1540,6 +1543,71 @@ void VulkanRenderer::copyEffectTexture()
 		static_cast<float>(extent.height),
 		static_cast<float>(extent.width),
 		-static_cast<float>(extent.height));
+}
+
+void VulkanRenderer::copySceneDepthForParticles()
+{
+	if (m_sceneDepthCopiedThisFrame || !m_sceneRendering || !m_postProcessor || !m_postProcessor->isInitialized()) {
+		return;
+	}
+
+	// End the current scene render pass
+	// This transitions: color → eShaderReadOnlyOptimal, depth → eDepthStencilAttachmentOptimal
+	m_currentCommandBuffer.endRenderPass();
+
+	// Copy scene depth → samplable depth copy (handles all depth image transitions)
+	m_postProcessor->copySceneDepth(m_currentCommandBuffer);
+
+	// Transition scene color: eShaderReadOnlyOptimal → eColorAttachmentOptimal
+	// (needed for the resumed render pass with loadOp=eLoad, which expects
+	// initialLayout=eColorAttachmentOptimal; copySceneDepth only touches depth)
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_postProcessor->getSceneColorImage();
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		m_currentCommandBuffer.pipelineBarrier(
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			{}, {}, {}, barrier);
+	}
+
+	// Resume the scene render pass with loadOp=eLoad
+	vk::RenderPassBeginInfo rpBegin;
+	rpBegin.renderPass = m_postProcessor->getSceneRenderPassLoad();
+	rpBegin.framebuffer = m_postProcessor->getSceneFramebuffer();
+	rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+	rpBegin.renderArea.extent = m_postProcessor->getSceneExtent();
+
+	std::array<vk::ClearValue, 2> clearValues;
+	clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+	clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+	rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+	rpBegin.pClearValues = clearValues.data();
+
+	m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+
+	// Update state tracker
+	m_stateTracker->setRenderPass(m_postProcessor->getSceneRenderPassLoad(), 0);
+
+	// Restore Y-flipped viewport for scene rendering
+	auto extent = m_postProcessor->getSceneExtent();
+	m_stateTracker->setViewport(0.0f,
+		static_cast<float>(extent.height),
+		static_cast<float>(extent.width),
+		-static_cast<float>(extent.height));
+
+	m_sceneDepthCopiedThisFrame = true;
 }
 
 void VulkanRenderer::shutdown()

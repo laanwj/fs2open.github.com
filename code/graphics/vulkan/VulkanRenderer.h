@@ -155,6 +155,20 @@ class VulkanRenderer {
 	void copyEffectTexture();
 
 	/**
+	 * @brief Copy scene depth mid-scene for soft particle sampling
+	 *
+	 * Called lazily from the first particle draw per frame. Ends the current
+	 * scene render pass, copies depth → samplable copy, then resumes the
+	 * scene render pass with loadOp=eLoad. No-op if already copied this frame.
+	 */
+	void copySceneDepthForParticles();
+
+	/**
+	 * @brief Check if scene depth copy is available for sampling this frame
+	 */
+	bool isSceneDepthCopied() const { return m_sceneDepthCopiedThisFrame; }
+
+	/**
 	 * @brief Check if we're currently rendering to the HDR scene target
 	 */
 	bool isSceneRendering() const { return m_sceneRendering; }
@@ -262,6 +276,7 @@ class VulkanRenderer {
 	// Post-processing
 	std::unique_ptr<VulkanPostProcessor> m_postProcessor;
 	bool m_sceneRendering = false;
+	bool m_sceneDepthCopiedThisFrame = false;
 
 #if SDL_SUPPORTS_VULKAN
 	bool m_debugReportEnabled = false;

@@ -80,7 +80,8 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 
 	if (!createImage(extent.width, extent.height, depthFormat,
 	                 vk::ImageUsageFlagBits::eDepthStencilAttachment
-	                 | vk::ImageUsageFlagBits::eSampled,
+	                 | vk::ImageUsageFlagBits::eSampled
+	                 | vk::ImageUsageFlagBits::eTransferSrc,
 	                 vk::ImageAspectFlagBits::eDepth,  // View uses depth-only aspect
 	                 m_sceneDepth.image, m_sceneDepth.view, m_sceneDepth.allocation)) {
 		mprintf(("VulkanPostProcessor: Failed to create scene depth image!\n"));
@@ -103,6 +104,20 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 	m_sceneEffect.format = vk::Format::eR16G16B16A16Sfloat;
 	m_sceneEffect.width = extent.width;
 	m_sceneEffect.height = extent.height;
+
+	// Create scene depth copy (samplable copy for soft particles)
+	// Same depth format, usage: eTransferDst (copy target) + eSampled (fragment shader reads)
+	if (!createImage(extent.width, extent.height, depthFormat,
+	                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+	                 vk::ImageAspectFlagBits::eDepth,
+	                 m_sceneDepthCopy.image, m_sceneDepthCopy.view, m_sceneDepthCopy.allocation)) {
+		mprintf(("VulkanPostProcessor: Failed to create scene depth copy image!\n"));
+		shutdown();
+		return false;
+	}
+	m_sceneDepthCopy.format = depthFormat;
+	m_sceneDepthCopy.width = extent.width;
+	m_sceneDepthCopy.height = extent.height;
 
 	// Create HDR scene render pass
 	// Attachment 0: Color (RGBA16F)
@@ -449,6 +464,19 @@ void VulkanPostProcessor::shutdown()
 		}
 		if (m_sceneDepth.allocation.memory != VK_NULL_HANDLE) {
 			m_memoryManager->freeAllocation(m_sceneDepth.allocation);
+		}
+
+		// Destroy scene depth copy target
+		if (m_sceneDepthCopy.view) {
+			m_device.destroyImageView(m_sceneDepthCopy.view);
+			m_sceneDepthCopy.view = nullptr;
+		}
+		if (m_sceneDepthCopy.image) {
+			m_device.destroyImage(m_sceneDepthCopy.image);
+			m_sceneDepthCopy.image = nullptr;
+		}
+		if (m_sceneDepthCopy.allocation.memory != VK_NULL_HANDLE) {
+			m_memoryManager->freeAllocation(m_sceneDepthCopy.allocation);
 		}
 	}
 
@@ -1033,7 +1061,30 @@ void VulkanPostProcessor::drawFullscreenTriangle(vk::CommandBuffer cmd, vk::Rend
 		fallbackTexWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
 		fallbackTexWrite.pImageInfo = fallbackImages.data();
 
-		std::array<vk::WriteDescriptorSet, 4> writes = {texWrite, modelWrite, decalWrite, fallbackTexWrite};
+		// Binding 3: Transform SSBO (fallback to zero UBO)
+		vk::WriteDescriptorSet ssboWrite;
+		ssboWrite.dstSet = materialSet;
+		ssboWrite.dstBinding = 3;
+		ssboWrite.dstArrayElement = 0;
+		ssboWrite.descriptorCount = 1;
+		ssboWrite.descriptorType = vk::DescriptorType::eStorageBuffer;
+		ssboWrite.pBufferInfo = &fallbackBufInfo;
+
+		// Binding 4: Depth map (fallback to 2D white texture)
+		vk::DescriptorImageInfo depthMapFallback;
+		depthMapFallback.sampler = defaultSampler;
+		depthMapFallback.imageView = fallbackView;
+		depthMapFallback.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet depthMapWrite;
+		depthMapWrite.dstSet = materialSet;
+		depthMapWrite.dstBinding = 4;
+		depthMapWrite.dstArrayElement = 0;
+		depthMapWrite.descriptorCount = 1;
+		depthMapWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		depthMapWrite.pImageInfo = &depthMapFallback;
+
+		std::array<vk::WriteDescriptorSet, 6> writes = {texWrite, modelWrite, decalWrite, fallbackTexWrite, ssboWrite, depthMapWrite};
 		m_device.updateDescriptorSets(writes, {});
 	}
 
@@ -1836,6 +1887,123 @@ void VulkanPostProcessor::copyEffectTexture(vk::CommandBuffer cmd)
 	}
 }
 
+void VulkanPostProcessor::copySceneDepth(vk::CommandBuffer cmd)
+{
+	// Called mid-scene, outside a render pass.
+	// Copies scene depth → depth copy texture so soft particle shaders can sample it.
+	// Scene depth is in eDepthStencilAttachmentOptimal (from the ended scene render pass).
+
+	// Transition scene depth: eDepthStencilAttachmentOptimal → eTransferSrcOptimal
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+		barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+		barrier.oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+		barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_sceneDepth.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eLateFragmentTests,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, {}, {}, barrier);
+	}
+
+	// Transition depth copy: eUndefined → eTransferDstOptimal
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barrier.oldLayout = vk::ImageLayout::eUndefined;
+		barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_sceneDepthCopy.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTopOfPipe,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, {}, {}, barrier);
+	}
+
+	// Copy scene depth → depth copy (depth aspect only)
+	{
+		vk::ImageCopy region;
+		region.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
+		region.srcSubresource.mipLevel = 0;
+		region.srcSubresource.baseArrayLayer = 0;
+		region.srcSubresource.layerCount = 1;
+		region.srcOffset = vk::Offset3D(0, 0, 0);
+		region.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
+		region.dstSubresource.mipLevel = 0;
+		region.dstSubresource.baseArrayLayer = 0;
+		region.dstSubresource.layerCount = 1;
+		region.dstOffset = vk::Offset3D(0, 0, 0);
+		region.extent = vk::Extent3D(m_extent.width, m_extent.height, 1);
+
+		cmd.copyImage(
+			m_sceneDepth.image, vk::ImageLayout::eTransferSrcOptimal,
+			m_sceneDepthCopy.image, vk::ImageLayout::eTransferDstOptimal,
+			region);
+	}
+
+	// Transition scene depth back: eTransferSrcOptimal → eDepthStencilAttachmentOptimal
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+		barrier.dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite
+		                      | vk::AccessFlagBits::eDepthStencilAttachmentRead;
+		barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barrier.newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_sceneDepth.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			vk::PipelineStageFlagBits::eEarlyFragmentTests,
+			{}, {}, {}, barrier);
+	}
+
+	// Transition depth copy: eTransferDstOptimal → eShaderReadOnlyOptimal (ready for sampling)
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+		barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_sceneDepthCopy.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			vk::PipelineStageFlagBits::eFragmentShader,
+			{}, {}, {}, barrier);
+	}
+}
+
 void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 {
 	// If LDR targets exist, executeTonemap()+executeFXAA() already ran.
@@ -1959,7 +2127,30 @@ void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 		fallbackTexWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
 		fallbackTexWrite.pImageInfo = fallbackImages.data();
 
-		std::array<vk::WriteDescriptorSet, 4> writes = {write, uboWrite, decalWrite, fallbackTexWrite};
+		// Binding 3: Transform SSBO (fallback to zero UBO)
+		vk::WriteDescriptorSet ssboWrite;
+		ssboWrite.dstSet = materialSet;
+		ssboWrite.dstBinding = 3;
+		ssboWrite.dstArrayElement = 0;
+		ssboWrite.descriptorCount = 1;
+		ssboWrite.descriptorType = vk::DescriptorType::eStorageBuffer;
+		ssboWrite.pBufferInfo = &bufferInfo;
+
+		// Binding 4: Depth map (fallback to 2D white texture)
+		vk::DescriptorImageInfo depthMapFallback;
+		depthMapFallback.sampler = defaultSampler;
+		depthMapFallback.imageView = fallbackView;
+		depthMapFallback.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet depthMapWrite;
+		depthMapWrite.dstSet = materialSet;
+		depthMapWrite.dstBinding = 4;
+		depthMapWrite.dstArrayElement = 0;
+		depthMapWrite.descriptorCount = 1;
+		depthMapWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		depthMapWrite.pImageInfo = &depthMapFallback;
+
+		std::array<vk::WriteDescriptorSet, 6> writes = {write, uboWrite, decalWrite, fallbackTexWrite, ssboWrite, depthMapWrite};
 		m_device.updateDescriptorSets(writes, {});
 	}
 
