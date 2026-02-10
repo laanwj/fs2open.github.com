@@ -882,7 +882,7 @@ void VulkanRenderer::createRenderPass()
 	colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
 	colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
 	colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-	colorAttachment.initialLayout = vk::ImageLayout::ePresentSrcKHR;
+	colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
 	colorAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
 
 	// Attachment 1: Depth
@@ -938,7 +938,7 @@ void VulkanRenderer::createRenderPass()
 	colorAttachment.initialLayout = vk::ImageLayout::ePresentSrcKHR;
 
 	depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
-	depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
+	depthAttachment.initialLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
 
 	attachments = {colorAttachment, depthAttachment};
 
