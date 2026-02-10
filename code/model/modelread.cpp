@@ -2328,7 +2328,7 @@ modelread_status read_model_file_no_subsys(polymodel * pm, const char* filename,
 							sprintf(bay->name, "<unnamed bay %c>", 'A' + i);
 						}
 
-#ifndef NDEBUG
+#if 0
 						// check for duplicates
 						// (we just warn here and take no action, because even some retail models have duplicate dockpoints)
 						for (j = 0; j < i; j++) {
