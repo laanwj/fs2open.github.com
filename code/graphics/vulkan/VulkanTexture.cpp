@@ -259,6 +259,48 @@ void VulkanTextureManager::bm_free_data(bitmap_slot* slot, bool release)
 	auto* ts = static_cast<tcache_slot_vulkan*>(slot->gr_info);
 	auto* deletionQueue = getDeletionQueue();
 
+	// For shared animation texture arrays: check if any other frame still needs the image.
+	// We compute base frame from slot data (bitmapHandle - arrayIndex) rather than calling
+	// bm_get_base_frame(), because during shutdown/mission-unload the bitmap entries may
+	// already be cleaned up, causing bm_get_base_frame() to return -1. That would skip
+	// ref-counting and every frame slot would independently queue the same shared resources
+	// for destruction (double-free).
+	if (ts->arrayLayers > 1 && ts->bitmapHandle >= 0) {
+		ts->used = false;
+
+		int baseFrame = ts->bitmapHandle - static_cast<int>(ts->arrayIndex);
+		int numFrames = static_cast<int>(ts->arrayLayers);
+		vk::Image sharedImage = ts->image;
+
+		bool anyInUse = false;
+		for (int f = baseFrame; f < baseFrame + numFrames; f++) {
+			if (f == ts->bitmapHandle) {
+				continue;  // skip self (already marked unused)
+			}
+			auto* fSlot = bm_get_slot(f, true);
+			if (fSlot && fSlot->gr_info) {
+				auto* fTs = static_cast<tcache_slot_vulkan*>(fSlot->gr_info);
+				if (fTs->used && fTs->image == sharedImage) {
+					anyInUse = true;
+					break;
+				}
+			}
+		}
+		if (anyInUse) {
+			// Other frames still use the shared image — just detach this slot
+			ts->image = nullptr;
+			ts->imageView = nullptr;
+			ts->allocation = VulkanAllocation{};
+			ts->reset();
+			if (release) {
+				delete ts;
+				slot->gr_info = nullptr;
+			}
+			return;
+		}
+		// No frames in use — fall through to destroy the shared image
+	}
+
 	// Queue resources for deferred destruction to avoid destroying
 	// resources that may still be referenced by in-flight command buffers
 	if (ts->framebuffer) {
@@ -295,6 +337,321 @@ void VulkanTextureManager::bm_free_data(bitmap_slot* slot, bool release)
 	}
 }
 
+bool VulkanTextureManager::uploadAnimationFrames(int handle, bitmap* bm, int compType,
+                                                   int baseFrame, int numFrames)
+{
+	mprintf(("VulkanTexture: Uploading animation array: base=%d numFrames=%d triggered by handle=%d\n",
+		baseFrame, numFrames, handle));
+
+	// Get dimensions and format from the triggering frame's bitmap
+	uint32_t width = static_cast<uint32_t>(bm->w);
+	uint32_t height = static_cast<uint32_t>(bm->h);
+	uint32_t arrayLayerCount = static_cast<uint32_t>(numFrames);
+
+	bool isCompressed = (compType == DDS_DXT1 || compType == DDS_DXT3 ||
+	                     compType == DDS_DXT5 || compType == DDS_BC7);
+
+	// Determine format
+	vk::Format format;
+	if (isCompressed) {
+		format = bppToVkFormat(bm->bpp, true, compType);
+	} else {
+		format = bppToVkFormat(bm->bpp);
+	}
+	if (format == vk::Format::eUndefined) {
+		mprintf(("VulkanTexture: uploadAnimationFrames: unsupported format bpp=%d compType=%d\n",
+			bm->bpp, compType));
+		return false;
+	}
+
+	// Calculate per-layer data size
+	size_t blockSize = 0;
+	size_t layerDataSize = 0;
+	uint32_t mipLevels = 1;
+
+	if (isCompressed) {
+		blockSize = (compType == DDS_DXT1) ? 8 : 16;
+		mipLevels = static_cast<uint32_t>(bm_get_num_mipmaps(handle));
+		if (mipLevels < 1) {
+			mipLevels = 1;
+		}
+
+		// Calculate total data size per layer (all mips)
+		uint32_t mipW = width;
+		uint32_t mipH = height;
+		for (uint32_t i = 0; i < mipLevels; i++) {
+			uint32_t blocksW = (mipW + 3) / 4;
+			uint32_t blocksH = (mipH + 3) / 4;
+			layerDataSize += blocksW * blocksH * blockSize;
+			mipW = std::max(1u, mipW / 2);
+			mipH = std::max(1u, mipH / 2);
+		}
+	} else {
+		size_t dstBytesPerPixel = (bm->bpp == 24) ? 4 : (bm->bpp / 8);
+		layerDataSize = width * height * dstBytesPerPixel;
+	}
+
+	size_t totalDataSize = layerDataSize * arrayLayerCount;
+
+	// Create multi-layer image
+	vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+	vk::Image image;
+	VulkanAllocation allocation;
+
+	if (!createImage(width, height, mipLevels, format, vk::ImageTiling::eOptimal,
+	                 usage, MemoryUsage::GpuOnly, image, allocation, arrayLayerCount)) {
+		mprintf(("VulkanTexture: uploadAnimationFrames: failed to create %ux%u x%d array image\n",
+			width, height, numFrames));
+		return false;
+	}
+
+	// Create multi-layer image view
+	vk::ImageView imageView = createImageView(image, format,
+		vk::ImageAspectFlagBits::eColor, mipLevels, true, arrayLayerCount);
+	if (!imageView) {
+		mprintf(("VulkanTexture: uploadAnimationFrames: failed to create image view\n"));
+		m_device.destroyImage(image);
+		m_memoryManager->freeAllocation(allocation);
+		return false;
+	}
+
+	// Create staging buffer for all layers
+	vk::BufferCreateInfo bufferInfo;
+	bufferInfo.size = totalDataSize;
+	bufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+	vk::Buffer stagingBuffer;
+	VulkanAllocation stagingAllocation;
+
+	try {
+		stagingBuffer = m_device.createBuffer(bufferInfo);
+	} catch (const vk::SystemError& e) {
+		mprintf(("VulkanTexture: uploadAnimationFrames: failed to create staging buffer: %s\n", e.what()));
+		m_device.destroyImageView(imageView);
+		m_device.destroyImage(image);
+		m_memoryManager->freeAllocation(allocation);
+		return false;
+	}
+
+	if (!m_memoryManager->allocateBufferMemory(stagingBuffer, MemoryUsage::CpuOnly, stagingAllocation)) {
+		m_device.destroyBuffer(stagingBuffer);
+		m_device.destroyImageView(imageView);
+		m_device.destroyImage(image);
+		m_memoryManager->freeAllocation(allocation);
+		return false;
+	}
+
+	void* mapped = m_memoryManager->mapMemory(stagingAllocation);
+	if (!mapped) {
+		m_memoryManager->freeAllocation(stagingAllocation);
+		m_device.destroyBuffer(stagingBuffer);
+		m_device.destroyImageView(imageView);
+		m_device.destroyImage(image);
+		m_memoryManager->freeAllocation(allocation);
+		return false;
+	}
+
+	// Build per-layer copy regions and upload each frame's data
+	SCP_vector<vk::BufferImageCopy> copyRegions;
+
+	// Use the same lock parameters that were used for the triggering frame.
+	// bm->flags contains the lock flags (BMP_AABITMAP, BMP_TEX_OTHER, BMP_TEX_DXT*, etc.)
+	// bm->bpp contains the requested bpp. Using these ensures all frames are locked
+	// consistently (e.g., 8bpp for aabitmaps, 32bpp for RGBA textures).
+	int lockBpp = bm->bpp;
+	ushort lockFlags = bm->flags;
+
+	// Set guard flag to make recursive bm_data calls no-ops
+	m_uploadingAnimation = true;
+
+	for (int frame = baseFrame; frame < baseFrame + numFrames; frame++) {
+		int layerIndex = frame - baseFrame;
+		size_t layerOffset = layerIndex * layerDataSize;
+		uint8_t* dst = static_cast<uint8_t*>(mapped) + layerOffset;
+
+		bitmap* frameBm;
+		bool needUnlock = false;
+
+		if (frame == handle) {
+			// This is the frame that triggered us — use the passed bitmap directly
+			frameBm = bm;
+		} else {
+			// Lock this frame to get its data
+			frameBm = bm_lock(frame, lockBpp, lockFlags);
+			if (!frameBm) {
+				mprintf(("VulkanTexture: uploadAnimationFrames: failed to lock frame %d\n", frame));
+				// Fill with zeros to avoid undefined data
+				memset(dst, 0, layerDataSize);
+				// Build copy regions anyway
+				if (isCompressed) {
+					uint32_t mipW = width, mipH = height;
+					size_t mipOffset = layerOffset;
+					for (uint32_t m = 0; m < mipLevels; m++) {
+						vk::BufferImageCopy region;
+						region.bufferOffset = static_cast<vk::DeviceSize>(mipOffset);
+						region.bufferRowLength = 0;
+						region.bufferImageHeight = 0;
+						region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+						region.imageSubresource.mipLevel = m;
+						region.imageSubresource.baseArrayLayer = static_cast<uint32_t>(layerIndex);
+						region.imageSubresource.layerCount = 1;
+						region.imageOffset = vk::Offset3D(0, 0, 0);
+						region.imageExtent = vk::Extent3D(mipW, mipH, 1);
+						copyRegions.push_back(region);
+						uint32_t blocksW = (mipW + 3) / 4;
+						uint32_t blocksH = (mipH + 3) / 4;
+						mipOffset += blocksW * blocksH * blockSize;
+						mipW = std::max(1u, mipW / 2);
+						mipH = std::max(1u, mipH / 2);
+					}
+				} else {
+					vk::BufferImageCopy region;
+					region.bufferOffset = static_cast<vk::DeviceSize>(layerOffset);
+					region.bufferRowLength = 0;
+					region.bufferImageHeight = 0;
+					region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+					region.imageSubresource.mipLevel = 0;
+					region.imageSubresource.baseArrayLayer = static_cast<uint32_t>(layerIndex);
+					region.imageSubresource.layerCount = 1;
+					region.imageOffset = vk::Offset3D(0, 0, 0);
+					region.imageExtent = vk::Extent3D(width, height, 1);
+					copyRegions.push_back(region);
+				}
+				continue;
+			}
+			needUnlock = true;
+		}
+
+		// Copy frame data to staging buffer
+		if (isCompressed) {
+			memcpy(dst, reinterpret_cast<const void*>(frameBm->data), layerDataSize);
+
+			// Build per-mip copy regions for this layer
+			uint32_t mipW = width, mipH = height;
+			size_t mipOffset = layerOffset;
+			for (uint32_t m = 0; m < mipLevels; m++) {
+				uint32_t blocksW = (mipW + 3) / 4;
+				uint32_t blocksH = (mipH + 3) / 4;
+				size_t mipSize = blocksW * blocksH * blockSize;
+
+				vk::BufferImageCopy region;
+				region.bufferOffset = static_cast<vk::DeviceSize>(mipOffset);
+				region.bufferRowLength = 0;
+				region.bufferImageHeight = 0;
+				region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+				region.imageSubresource.mipLevel = m;
+				region.imageSubresource.baseArrayLayer = static_cast<uint32_t>(layerIndex);
+				region.imageSubresource.layerCount = 1;
+				region.imageOffset = vk::Offset3D(0, 0, 0);
+				region.imageExtent = vk::Extent3D(mipW, mipH, 1);
+				copyRegions.push_back(region);
+
+				mipOffset += mipSize;
+				mipW = std::max(1u, mipW / 2);
+				mipH = std::max(1u, mipH / 2);
+			}
+		} else if (frameBm->bpp == 24) {
+			// Convert BGR (3 bytes) to BGRA (4 bytes)
+			const uint8_t* src = reinterpret_cast<const uint8_t*>(frameBm->data);
+			size_t pixelCount = width * height;
+			for (size_t i = 0; i < pixelCount; ++i) {
+				dst[0] = src[0];  // B
+				dst[1] = src[1];  // G
+				dst[2] = src[2];  // R
+				dst[3] = 255;     // A
+				src += 3;
+				dst += 4;
+			}
+
+			vk::BufferImageCopy region;
+			region.bufferOffset = static_cast<vk::DeviceSize>(layerOffset);
+			region.bufferRowLength = 0;
+			region.bufferImageHeight = 0;
+			region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+			region.imageSubresource.mipLevel = 0;
+			region.imageSubresource.baseArrayLayer = static_cast<uint32_t>(layerIndex);
+			region.imageSubresource.layerCount = 1;
+			region.imageOffset = vk::Offset3D(0, 0, 0);
+			region.imageExtent = vk::Extent3D(width, height, 1);
+			copyRegions.push_back(region);
+		} else {
+			memcpy(dst, reinterpret_cast<const void*>(frameBm->data), layerDataSize);
+
+			vk::BufferImageCopy region;
+			region.bufferOffset = static_cast<vk::DeviceSize>(layerOffset);
+			region.bufferRowLength = 0;
+			region.bufferImageHeight = 0;
+			region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+			region.imageSubresource.mipLevel = 0;
+			region.imageSubresource.baseArrayLayer = static_cast<uint32_t>(layerIndex);
+			region.imageSubresource.layerCount = 1;
+			region.imageOffset = vk::Offset3D(0, 0, 0);
+			region.imageExtent = vk::Extent3D(width, height, 1);
+			copyRegions.push_back(region);
+		}
+
+		if (needUnlock) {
+			bm_unlock(frame);
+		}
+	}
+
+	m_uploadingAnimation = false;
+
+	// Flush staging buffer
+	m_memoryManager->flushMemory(stagingAllocation, 0, totalDataSize);
+	m_memoryManager->unmapMemory(stagingAllocation);
+
+	// Record transitions + copy and submit async
+	vk::CommandBuffer cmd = beginSingleTimeCommands();
+	recordUploadCommands(cmd, image, stagingBuffer, format, width, height,
+	                     mipLevels, vk::ImageLayout::eUndefined, false, copyRegions,
+	                     arrayLayerCount);
+	submitUploadAsync(cmd, stagingBuffer, stagingAllocation);
+
+	// Store shared image in ALL frame slots
+	for (int frame = baseFrame; frame < baseFrame + numFrames; frame++) {
+		int layerIndex = frame - baseFrame;
+		auto* frameSlot = bm_get_slot(frame, true);
+		if (!frameSlot) {
+			continue;
+		}
+		if (!frameSlot->gr_info) {
+			bm_init(frameSlot);
+		}
+		auto* ts = static_cast<tcache_slot_vulkan*>(frameSlot->gr_info);
+
+		// Defer destruction of any existing image in this slot
+		if (ts->image && ts->arrayLayers <= 1) {
+			auto* deletionQueue = getDeletionQueue();
+			if (ts->imageView) {
+				deletionQueue->queueImageView(ts->imageView);
+			}
+			deletionQueue->queueImage(ts->image, ts->allocation);
+		}
+
+		ts->image = image;
+		ts->imageView = imageView;
+		ts->allocation = allocation;
+		ts->width = width;
+		ts->height = height;
+		ts->format = format;
+		ts->mipLevels = mipLevels;
+		ts->bpp = bm->bpp;
+		ts->arrayLayers = arrayLayerCount;
+		ts->arrayIndex = static_cast<uint32_t>(layerIndex);
+		ts->bitmapHandle = frame;
+		ts->currentLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		ts->used = true;
+		ts->uScale = 1.0f;
+		ts->vScale = 1.0f;
+	}
+
+	mprintf(("VulkanTexture: Animation array uploaded: %ux%u x%d layers, %zu bytes total\n",
+		width, height, numFrames, totalDataSize));
+	return true;
+}
+
 bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 {
 	static int callCount = 0;
@@ -305,6 +662,53 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 
 	if (!m_initialized || !bm || !bm->data) {
 		return false;
+	}
+
+	// Guard: nested bm_lock→bm_data calls during animation upload are no-ops
+	if (m_uploadingAnimation) {
+		return true;
+	}
+
+	// Detect animated texture arrays
+	int numFrames = 0;
+	int baseFrame = bm_get_base_frame(handle, &numFrames);
+	if (baseFrame < 0) {
+		return false;
+	}
+
+	if (numFrames > 1) {
+		// Check if the shared image already exists (earlier frame created it)
+		auto* baseSlot = bm_get_slot(baseFrame, true);
+		if (baseSlot) {
+			if (!baseSlot->gr_info) {
+				bm_init(baseSlot);
+			}
+			auto* baseTs = static_cast<tcache_slot_vulkan*>(baseSlot->gr_info);
+			if (baseTs->image && baseTs->arrayLayers == static_cast<uint32_t>(numFrames)) {
+				// Share existing image with this frame's slot
+				auto* slot = bm_get_slot(handle, true);
+				if (!slot->gr_info) {
+					bm_init(slot);
+				}
+				auto* ts = static_cast<tcache_slot_vulkan*>(slot->gr_info);
+				ts->image = baseTs->image;
+				ts->imageView = baseTs->imageView;
+				ts->allocation = baseTs->allocation;
+				ts->width = baseTs->width;
+				ts->height = baseTs->height;
+				ts->format = baseTs->format;
+				ts->mipLevels = baseTs->mipLevels;
+				ts->bpp = baseTs->bpp;
+				ts->arrayLayers = baseTs->arrayLayers;
+				ts->arrayIndex = static_cast<uint32_t>(handle - baseFrame);
+				ts->bitmapHandle = handle;
+				ts->currentLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+				ts->used = true;
+				return true;
+			}
+		}
+		// First frame requested — create array and upload all frames
+		return uploadAnimationFrames(handle, bm, compType, baseFrame, numFrames);
 	}
 
 	auto* slot = bm_get_slot(handle, true);
@@ -416,14 +820,22 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 	// Defer destruction of existing resources — they may still be referenced
 	// by in-flight render or upload command buffers
 	if (ts->image) {
-		auto* deletionQueue = getDeletionQueue();
-		if (ts->imageView) {
-			deletionQueue->queueImageView(ts->imageView);
+		if (ts->arrayLayers > 1) {
+			// Shared animation image — just clear references, don't destroy
+			// (the image is shared with other frame slots)
 			ts->imageView = nullptr;
+			ts->image = nullptr;
+			ts->allocation = VulkanAllocation{};
+		} else {
+			auto* deletionQueue = getDeletionQueue();
+			if (ts->imageView) {
+				deletionQueue->queueImageView(ts->imageView);
+				ts->imageView = nullptr;
+			}
+			deletionQueue->queueImage(ts->image, ts->allocation);
+			ts->image = nullptr;
+			ts->allocation = VulkanAllocation{};
 		}
-		deletionQueue->queueImage(ts->image, ts->allocation);
-		ts->image = nullptr;
-		ts->allocation = VulkanAllocation{};
 	}
 
 	// Create image
@@ -1136,7 +1548,8 @@ void VulkanTextureManager::frameStart()
 bool VulkanTextureManager::createImage(uint32_t width, uint32_t height, uint32_t mipLevels,
                                         vk::Format format, vk::ImageTiling tiling,
                                         vk::ImageUsageFlags usage, MemoryUsage memUsage,
-                                        vk::Image& image, VulkanAllocation& allocation)
+                                        vk::Image& image, VulkanAllocation& allocation,
+                                        uint32_t arrayLayers)
 {
 	vk::ImageCreateInfo imageInfo;
 	imageInfo.imageType = vk::ImageType::e2D;
@@ -1144,7 +1557,7 @@ bool VulkanTextureManager::createImage(uint32_t width, uint32_t height, uint32_t
 	imageInfo.extent.height = height;
 	imageInfo.extent.depth = 1;
 	imageInfo.mipLevels = mipLevels;
-	imageInfo.arrayLayers = 1;
+	imageInfo.arrayLayers = arrayLayers;
 	imageInfo.format = format;
 	imageInfo.tiling = tiling;
 	imageInfo.initialLayout = vk::ImageLayout::eUndefined;
@@ -1171,7 +1584,8 @@ bool VulkanTextureManager::createImage(uint32_t width, uint32_t height, uint32_t
 vk::ImageView VulkanTextureManager::createImageView(vk::Image image, vk::Format format,
                                                      vk::ImageAspectFlags aspectFlags,
                                                      uint32_t mipLevels,
-                                                     bool asArray)
+                                                     bool asArray,
+                                                     uint32_t layerCount)
 {
 	vk::ImageViewCreateInfo viewInfo;
 	viewInfo.image = image;
@@ -1183,7 +1597,7 @@ vk::ImageView VulkanTextureManager::createImageView(vk::Image image, vk::Format 
 	viewInfo.subresourceRange.baseMipLevel = 0;
 	viewInfo.subresourceRange.levelCount = mipLevels;
 	viewInfo.subresourceRange.baseArrayLayer = 0;
-	viewInfo.subresourceRange.layerCount = 1;
+	viewInfo.subresourceRange.layerCount = layerCount;
 
 	try {
 		return m_device.createImageView(viewInfo);
@@ -1250,11 +1664,12 @@ void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image
                                                  uint32_t width, uint32_t height,
                                                  uint32_t mipLevels, vk::ImageLayout oldLayout,
                                                  bool generateMips,
-                                                 const SCP_vector<vk::BufferImageCopy>& regions)
+                                                 const SCP_vector<vk::BufferImageCopy>& regions,
+                                                 uint32_t arrayLayers)
 {
 	(void)format;  // May be needed for depth/stencil transitions in the future
 
-	// Barrier 1: oldLayout -> eTransferDstOptimal (all mip levels)
+	// Barrier 1: oldLayout -> eTransferDstOptimal (all mip levels, all layers)
 	{
 		vk::ImageMemoryBarrier barrier;
 		barrier.oldLayout = oldLayout;
@@ -1266,7 +1681,7 @@ void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image
 		barrier.subresourceRange.baseMipLevel = 0;
 		barrier.subresourceRange.levelCount = mipLevels;
 		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
+		barrier.subresourceRange.layerCount = arrayLayers;
 
 		if (oldLayout == vk::ImageLayout::eUndefined) {
 			barrier.srcAccessMask = {};
@@ -1320,7 +1735,7 @@ void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image
 			barrier.subresourceRange.baseMipLevel = 0;
 			barrier.subresourceRange.levelCount = 1;
 			barrier.subresourceRange.baseArrayLayer = 0;
-			barrier.subresourceRange.layerCount = 1;
+			barrier.subresourceRange.layerCount = arrayLayers;
 
 			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
 			                    vk::PipelineStageFlagBits::eTransfer,
@@ -1341,14 +1756,14 @@ void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image
 			blit.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
 			blit.srcSubresource.mipLevel = i - 1;
 			blit.srcSubresource.baseArrayLayer = 0;
-			blit.srcSubresource.layerCount = 1;
+			blit.srcSubresource.layerCount = arrayLayers;
 			blit.srcOffsets[0] = vk::Offset3D(0, 0, 0);
 			blit.srcOffsets[1] = vk::Offset3D(static_cast<int32_t>(srcW), static_cast<int32_t>(srcH), 1);
 
 			blit.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
 			blit.dstSubresource.mipLevel = i;
 			blit.dstSubresource.baseArrayLayer = 0;
-			blit.dstSubresource.layerCount = 1;
+			blit.dstSubresource.layerCount = arrayLayers;
 			blit.dstOffsets[0] = vk::Offset3D(0, 0, 0);
 			blit.dstOffsets[1] = vk::Offset3D(static_cast<int32_t>(dstW), static_cast<int32_t>(dstH), 1);
 
@@ -1370,7 +1785,7 @@ void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image
 				barrier.subresourceRange.baseMipLevel = i;
 				barrier.subresourceRange.levelCount = 1;
 				barrier.subresourceRange.baseArrayLayer = 0;
-				barrier.subresourceRange.layerCount = 1;
+				barrier.subresourceRange.layerCount = arrayLayers;
 
 				cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
 				                    vk::PipelineStageFlagBits::eTransfer,
@@ -1392,7 +1807,7 @@ void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image
 			barrier.subresourceRange.baseMipLevel = 0;
 			barrier.subresourceRange.levelCount = mipLevels;
 			barrier.subresourceRange.baseArrayLayer = 0;
-			barrier.subresourceRange.layerCount = 1;
+			barrier.subresourceRange.layerCount = arrayLayers;
 
 			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
 			                    vk::PipelineStageFlagBits::eFragmentShader,
@@ -1411,7 +1826,7 @@ void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image
 			barrier.subresourceRange.baseMipLevel = 0;
 			barrier.subresourceRange.levelCount = mipLevels;
 			barrier.subresourceRange.baseArrayLayer = 0;
-			barrier.subresourceRange.layerCount = 1;
+			barrier.subresourceRange.layerCount = arrayLayers;
 			barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
 			barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
 

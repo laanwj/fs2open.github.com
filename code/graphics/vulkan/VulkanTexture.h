@@ -191,7 +191,8 @@ private:
 	bool createImage(uint32_t width, uint32_t height, uint32_t mipLevels,
 	                 vk::Format format, vk::ImageTiling tiling,
 	                 vk::ImageUsageFlags usage, MemoryUsage memUsage,
-	                 vk::Image& image, VulkanAllocation& allocation);
+	                 vk::Image& image, VulkanAllocation& allocation,
+	                 uint32_t arrayLayers = 1);
 
 	/**
 	 * @brief Create an image view
@@ -200,7 +201,8 @@ private:
 	vk::ImageView createImageView(vk::Image image, vk::Format format,
 	                               vk::ImageAspectFlags aspectFlags,
 	                               uint32_t mipLevels,
-	                               bool asArray = false);
+	                               bool asArray = false,
+	                               uint32_t layerCount = 1);
 
 	/**
 	 * @brief Copy buffer data to image
@@ -225,7 +227,8 @@ private:
 	                          vk::Format format, uint32_t width, uint32_t height,
 	                          uint32_t mipLevels, vk::ImageLayout oldLayout,
 	                          bool generateMips = false,
-	                          const SCP_vector<vk::BufferImageCopy>& regions = {});
+	                          const SCP_vector<vk::BufferImageCopy>& regions = {},
+	                          uint32_t arrayLayers = 1);
 
 	/**
 	 * @brief Submit an upload command buffer asynchronously and defer resource cleanup
@@ -245,6 +248,15 @@ private:
 	 * @brief Calculate number of mipmap levels
 	 */
 	static uint32_t calculateMipLevels(uint32_t width, uint32_t height);
+
+	/**
+	 * @brief Upload all frames of an animation as layers of a single texture array
+	 */
+	bool uploadAnimationFrames(int handle, bitmap* bm, int compType,
+	                           int baseFrame, int numFrames);
+
+	// Guard flag to prevent recursion when bm_lock calls bm_data during animation upload
+	bool m_uploadingAnimation = false;
 
 	// Deferred command buffer free list
 	struct PendingCommandBuffer {

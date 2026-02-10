@@ -1553,7 +1553,9 @@ void vulkan_set_default_material_uniforms(material* material_info)
 	// Texturing flags
 	if (textured) {
 		data->noTexturing = 0;
-		data->baseMapIndex = 0;  // Array index in texture array
+		// Get array index for animated texture arrays
+		auto* texSlot = getTextureManager()->getTextureSlot(base_map);
+		data->baseMapIndex = texSlot ? static_cast<int>(texSlot->arrayIndex) : 0;
 	} else {
 		data->noTexturing = 1;
 		data->baseMapIndex = 0;
