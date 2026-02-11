@@ -468,13 +468,17 @@ void vulkan_deferred_lighting_begin(bool clearNonColorBufs)
 		stateTracker->setRenderPass(pp->getGbufRenderPassLoad(), 0);
 	}
 
-	// Clear color attachment (0) to black inside the render pass
-	// (emissive was just copied, so don't clear it; other G-buffer attachments
-	// were already cleared by the eClear pass at beginSceneRendering)
-	{
+	// Don't clear attachment 0 — keep the pre-deferred content (starfield, backgrounds).
+	// The model shader writes fragOut0 = baseColor on top via depth test.
+	// In the full pipeline, attachment 0 will be cleared here and the
+	// background will be recovered from emissive during light accumulation.
+	//
+	// Optionally clear non-color G-buffer attachments (position, normal, specular, composite).
+	// These were already cleared by the eClear render pass but the caller may want to
+	// re-clear them (e.g. between cockpit and external rendering passes).
+	if (clearNonColorBufs) {
 		vk::ClearAttachment clearAtt;
 		clearAtt.aspectMask = vk::ImageAspectFlagBits::eColor;
-		clearAtt.colorAttachment = 0;
 		clearAtt.clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f});
 
 		auto extent = pp->getSceneExtent();
@@ -483,14 +487,10 @@ void vulkan_deferred_lighting_begin(bool clearNonColorBufs)
 		clearRect.rect.extent = extent;
 		clearRect.baseArrayLayer = 0;
 		clearRect.layerCount = 1;
-		cmd.clearAttachments(clearAtt, clearRect);
 
-		// Optionally clear non-color G-buffer attachments (position, normal, specular, composite)
-		if (clearNonColorBufs) {
-			for (uint32_t att : {1u, 2u, 3u, 5u}) {
-				clearAtt.colorAttachment = att;
-				cmd.clearAttachments(clearAtt, clearRect);
-			}
+		for (uint32_t att : {1u, 2u, 3u, 5u}) {
+			clearAtt.colorAttachment = att;
+			cmd.clearAttachments(clearAtt, clearRect);
 		}
 	}
 
@@ -534,81 +534,29 @@ void vulkan_deferred_lighting_finish()
 	auto* stateTracker = getStateTracker();
 	vk::CommandBuffer cmd = stateTracker->getCommandBuffer();
 
-	// Stub implementation for phase 7a: copy emissive → color.
-	// Full light accumulation pass will be implemented in phase 7b.
-	// This makes the scene appear as emissive-only (no dynamic lights).
+	// Stub for phase 7a: no light accumulation yet.
+	// The model shader already wrote fragOut0 = baseColor to attachment 0 (unlit diffuse).
+	// Just leave attachment 0 as-is — ships appear unlit but visible.
+	// Full light accumulation (phase 7b) will read G-buffer and write proper lighting.
 
-	// End the G-buffer render pass
+	// End the G-buffer render pass (all colors → eShaderReadOnlyOptimal)
 	cmd.endRenderPass();
 
-	// Transition emissive → eTransferSrc, color → eTransferDst
+	// Transition scene color (attachment 0) back to eColorAttachmentOptimal for pass resume
 	{
-		std::array<vk::ImageMemoryBarrier, 2> barriers;
-
-		barriers[0].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-		barriers[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
-		barriers[0].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barriers[0].newLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].image = pp->getGbufEmissiveImage();
-		barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-		barriers[1].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-		barriers[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barriers[1].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barriers[1].newLayout = vk::ImageLayout::eTransferDstOptimal;
-		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].image = pp->getSceneColorImage();
-		barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = pp->getSceneColorImage();
+		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
 		cmd.pipelineBarrier(
 			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, nullptr, nullptr, barriers);
-	}
-
-	// Copy emissive → color
-	{
-		auto extent = pp->getSceneExtent();
-		vk::ImageCopy region;
-		region.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		region.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		region.extent = vk::Extent3D(extent.width, extent.height, 1);
-		cmd.copyImage(
-			pp->getGbufEmissiveImage(), vk::ImageLayout::eTransferSrcOptimal,
-			pp->getSceneColorImage(), vk::ImageLayout::eTransferDstOptimal,
-			region);
-	}
-
-	// Transition color → eColorAttachmentOptimal for resumed render pass.
-	// Transition emissive → eShaderReadOnlyOptimal (where transitionGbufForResume expects it).
-	{
-		std::array<vk::ImageMemoryBarrier, 2> barriers;
-
-		barriers[0].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barriers[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-		barriers[0].oldLayout = vk::ImageLayout::eTransferDstOptimal;
-		barriers[0].newLayout = vk::ImageLayout::eColorAttachmentOptimal;
-		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].image = pp->getSceneColorImage();
-		barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-		barriers[1].srcAccessMask = vk::AccessFlagBits::eTransferRead;
-		barriers[1].dstAccessMask = {};
-		barriers[1].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barriers[1].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].image = pp->getGbufEmissiveImage();
-		barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
 			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			{}, nullptr, nullptr, barriers);
+			{}, nullptr, nullptr, barrier);
 	}
 
 	// Transition G-buffer attachments 1-5 from eShaderReadOnlyOptimal → eColorAttachmentOptimal
