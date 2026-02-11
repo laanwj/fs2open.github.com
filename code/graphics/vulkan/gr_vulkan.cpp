@@ -305,9 +305,12 @@ SCP_string vulkan_blob_screen()
 	return "data:image/png;base64," + result;
 }
 
-// ========== Stub functions (not yet implemented) ==========
-
-void stub_get_region(int /*front*/, int /*w*/, int /*h*/, ubyte* /*data*/) {}
+// get_region: intentional no-op. The only caller is neb2_pre_render() in
+// NEB2_RENDER_POF mode, which renders a 32x32 background thumbnail into a
+// CPU buffer that is never actually read — the pixel data, ex_scale, and
+// ey_scale it computes have no consumers. Modern nebula rendering uses
+// NEB2_RENDER_HTL (fog color + gr_clear) and doesn't need get_region at all.
+void vulkan_get_region(int /*front*/, int /*w*/, int /*h*/, ubyte* /*data*/) {}
 
 void vulkan_post_process_set_effect(const char* name, int value, const vec3d* rgb)
 {
@@ -348,6 +351,8 @@ void vulkan_post_process_set_defaults()
 		effect.intensity = effect.default_intensity;
 	}
 }
+// ========== Stub functions (not yet implemented) ==========
+
 void stub_deferred_lighting_begin(bool /*clearNonColorBufs*/) {}
 void stub_deferred_lighting_msaa() {}
 void stub_deferred_lighting_end() {}
@@ -407,7 +412,7 @@ void init_function_pointers()
 	gr_screen.gf_restore_screen = vulkan_restore_screen;
 	gr_screen.gf_free_screen = vulkan_free_screen;
 
-	gr_screen.gf_get_region = stub_get_region;
+	gr_screen.gf_get_region = vulkan_get_region;
 
 	// now for the bitmap functions
 	gr_screen.gf_bm_free_data = vulkan_bm_free_data;
