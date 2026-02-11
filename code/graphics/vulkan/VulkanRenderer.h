@@ -69,16 +69,18 @@ class VulkanRenderer {
 	void shutdown();
 
 	/**
-	 * @brief Save the previous frame's screen contents for popup backgrounds
+	 * @brief Read back the previous frame's framebuffer to CPU memory
 	 *
-	 * Copies the previously presented swap chain image to CPU memory and creates
-	 * a bitmap from it. Used by gr_save_screen() for popups that need to preserve
-	 * the background while drawing overlay UI.
+	 * Copies the previously presented swap chain image to a vm_malloc'd RGBA
+	 * pixel buffer. Handles the BGRA→RGBA swizzle since the swap chain uses
+	 * B8G8R8A8 format. Caller must vm_free the returned buffer.
 	 *
-	 * @param[out] outPixels Receives the vm_malloc'd pixel buffer (caller must vm_free)
-	 * @return Bitmap ID from bm_create, or -1 on failure
+	 * @param[out] outPixels Receives the vm_malloc'd RGBA pixel buffer
+	 * @param[out] outWidth  Receives the image width
+	 * @param[out] outHeight Receives the image height
+	 * @return true on success, false on failure
 	 */
-	int saveScreen(ubyte** outPixels);
+	bool readbackFramebuffer(ubyte** outPixels, uint32_t* outWidth, uint32_t* outHeight);
 
 	/**
 	 * @brief Get the minimum uniform buffer offset alignment requirement

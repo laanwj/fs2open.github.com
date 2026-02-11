@@ -14,12 +14,14 @@
 #include "osapi/osapi.h"
 
 #include "bmpman/bmpman.h"
+#include "cfile/cfile.h"
 #include "cmdline/cmdline.h"
 #include "graphics/2d.h"
 #include "graphics/matrix.h"
 #include "graphics/material.h"
 #include "graphics/post_processing.h"
 #include "graphics/grinternal.h"
+#include "pngutils/pngutils.h"
 
 namespace graphics {
 namespace vulkan {
@@ -186,7 +188,7 @@ void vulkan_sync_delete(gr_sync sync)
 	}
 }
 
-// ========== Save/Restore screen (for popups) ==========
+// ========== Screen capture (save/restore, screenshots) ==========
 
 static ubyte* Vulkan_saved_screen = nullptr;
 static int Vulkan_saved_screen_id = -1;
@@ -199,9 +201,14 @@ int vulkan_save_screen()
 	}
 
 	ubyte* pixels = nullptr;
-	int bmpId = renderer_instance->saveScreen(&pixels);
+	uint32_t w, h;
+	if (!renderer_instance->readbackFramebuffer(&pixels, &w, &h)) {
+		return -1;
+	}
 
+	int bmpId = bm_create(32, static_cast<int>(w), static_cast<int>(h), pixels, 0);
 	if (bmpId < 0) {
+		vm_free(pixels);
 		return -1;
 	}
 
@@ -246,10 +253,56 @@ void vulkan_free_screen(int bmp_id)
 	}
 }
 
+// Swizzle BGRA→RGBA in-place for PNG output (swap chain is B8G8R8A8)
+static void swizzle_bgra_to_rgba(ubyte* pixels, size_t pixelCount)
+{
+	for (size_t i = 0; i < pixelCount; i++) {
+		size_t off = i * 4;
+		std::swap(pixels[off + 0], pixels[off + 2]);
+	}
+}
+
+void vulkan_print_screen(const char* filename)
+{
+	ubyte* pixels = nullptr;
+	uint32_t w, h;
+	if (!renderer_instance->readbackFramebuffer(&pixels, &w, &h)) {
+		return;
+	}
+
+	swizzle_bgra_to_rgba(pixels, static_cast<size_t>(w) * h);
+
+	char tmp[MAX_PATH_LEN];
+	snprintf(tmp, MAX_PATH_LEN - 1, "screenshots/%s.png", filename);
+
+	_mkdir(os_get_config_path("screenshots").c_str());
+
+	if (!png_write_bitmap(os_get_config_path(tmp).c_str(), w, h, false, pixels)) {
+		ReleaseWarning(LOCATION, "Failed to write screenshot to \"%s\".", os_get_config_path(tmp).c_str());
+	}
+
+	vm_free(pixels);
+}
+
+SCP_string vulkan_blob_screen()
+{
+	ubyte* pixels = nullptr;
+	uint32_t w, h;
+	if (!renderer_instance->readbackFramebuffer(&pixels, &w, &h)) {
+		return "";
+	}
+
+	swizzle_bgra_to_rgba(pixels, static_cast<size_t>(w) * h);
+
+	SCP_string result = png_b64_bitmap(w, h, false, pixels);
+
+	vm_free(pixels);
+
+	return "data:image/png;base64," + result;
+}
+
 // ========== Stub functions (not yet implemented) ==========
 
-void stub_print_screen(const char* /*filename*/) {}
-SCP_string stub_blob_screen() { return ""; }
 void stub_get_region(int /*front*/, int /*w*/, int /*h*/, ubyte* /*data*/) {}
 void stub_bm_page_in_start() {}
 
@@ -340,8 +393,8 @@ void init_function_pointers()
 
 	gr_screen.gf_clear = vulkan_clear;
 
-	gr_screen.gf_print_screen = stub_print_screen;
-	gr_screen.gf_blob_screen = stub_blob_screen;
+	gr_screen.gf_print_screen = vulkan_print_screen;
+	gr_screen.gf_blob_screen = vulkan_blob_screen;
 
 	gr_screen.gf_zbuffer_get = vulkan_zbuffer_get;
 	gr_screen.gf_zbuffer_set = vulkan_zbuffer_set;

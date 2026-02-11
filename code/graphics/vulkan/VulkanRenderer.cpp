@@ -1092,18 +1092,20 @@ void VulkanRenderer::flip()
 	m_deletionQueue->processDestructions();
 }
 
-int VulkanRenderer::saveScreen(ubyte** outPixels)
+bool VulkanRenderer::readbackFramebuffer(ubyte** outPixels, uint32_t* outWidth, uint32_t* outHeight)
 {
 	*outPixels = nullptr;
+	*outWidth = 0;
+	*outHeight = 0;
 
 	if (m_previousSwapChainImage == UINT32_MAX) {
-		mprintf(("VulkanRenderer::saveScreen - no previous frame available\n"));
-		return -1;
+		mprintf(("VulkanRenderer::readbackFramebuffer - no previous frame available\n"));
+		return false;
 	}
 
 	if (!m_frameInProgress) {
-		mprintf(("VulkanRenderer::saveScreen - no frame in progress\n"));
-		return -1;
+		mprintf(("VulkanRenderer::readbackFramebuffer - no frame in progress\n"));
+		return false;
 	}
 
 	auto prevImage = m_swapChainImages[m_previousSwapChainImage];
@@ -1145,16 +1147,16 @@ int VulkanRenderer::saveScreen(ubyte** outPixels)
 		{}, nullptr, nullptr, preBarrier);
 
 	// Create staging buffer for readback
-	vk::BufferCreateInfo bufferInfo;
-	bufferInfo.size = bufferSize;
-	bufferInfo.usage = vk::BufferUsageFlagBits::eTransferDst;
-	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+	vk::BufferCreateInfo bufferCreateInfo;
+	bufferCreateInfo.size = bufferSize;
+	bufferCreateInfo.usage = vk::BufferUsageFlagBits::eTransferDst;
+	bufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
 
-	auto stagingBuffer = m_device->createBuffer(bufferInfo);
+	auto stagingBuffer = m_device->createBuffer(bufferCreateInfo);
 
 	VulkanAllocation stagingAlloc{};
 	if (!m_memoryManager->allocateBufferMemory(stagingBuffer, MemoryUsage::GpuToCpu, stagingAlloc)) {
-		mprintf(("VulkanRenderer::saveScreen - failed to allocate staging buffer\n"));
+		mprintf(("VulkanRenderer::readbackFramebuffer - failed to allocate staging buffer\n"));
 		m_device->destroyBuffer(stagingBuffer);
 		cmd.end();
 		m_device->freeCommandBuffers(m_graphicsCommandPool.get(), cmdBuffers);
@@ -1177,7 +1179,7 @@ int VulkanRenderer::saveScreen(ubyte** outPixels)
 			static_cast<float>(m_swapChainExtent.height),
 			static_cast<float>(m_swapChainExtent.width),
 			-static_cast<float>(m_swapChainExtent.height));
-		return -1;
+		return false;
 	}
 
 	// Copy image to staging buffer
@@ -1219,26 +1221,24 @@ int VulkanRenderer::saveScreen(ubyte** outPixels)
 
 	auto waitResult = m_device->waitForFences(fence, VK_TRUE, UINT64_MAX);
 	if (waitResult != vk::Result::eSuccess) {
-		mprintf(("VulkanRenderer::saveScreen - fence wait failed\n"));
+		mprintf(("VulkanRenderer::readbackFramebuffer - fence wait failed\n"));
 	}
 
 	m_device->destroyFence(fence);
 	m_device->freeCommandBuffers(m_graphicsCommandPool.get(), cmdBuffers);
 
-	// Read back pixels from staging buffer
+	// Read back pixels from staging buffer (raw BGRA matching swap chain format)
+	bool success = false;
 	auto* mappedPtr = static_cast<ubyte*>(m_memoryManager->mapMemory(stagingAlloc));
 
-	int bmpId = -1;
 	if (mappedPtr) {
 		auto* pixels = static_cast<ubyte*>(vm_malloc(static_cast<int>(bufferSize)));
 		if (pixels) {
 			memcpy(pixels, mappedPtr, bufferSize);
-			bmpId = bm_create(32, static_cast<int>(w), static_cast<int>(h), pixels, 0);
-			if (bmpId >= 0) {
-				*outPixels = pixels;
-			} else {
-				vm_free(pixels);
-			}
+			*outPixels = pixels;
+			*outWidth = w;
+			*outHeight = h;
+			success = true;
 		}
 		m_memoryManager->unmapMemory(stagingAlloc);
 	}
@@ -1270,8 +1270,7 @@ int VulkanRenderer::saveScreen(ubyte** outPixels)
 		static_cast<float>(m_swapChainExtent.width),
 		-static_cast<float>(m_swapChainExtent.height));
 
-	mprintf(("VulkanRenderer::saveScreen - saved %dx%d screen, bmpId=%d\n", w, h, bmpId));
-	return bmpId;
+	return success;
 }
 
 uint32_t VulkanRenderer::getMinUniformBufferOffsetAlignment() const
