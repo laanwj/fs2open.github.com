@@ -231,6 +231,50 @@ public:
 	 */
 	bool isInitialized() const { return m_initialized; }
 
+	// ========== G-Buffer (deferred lighting) ==========
+
+	/**
+	 * @brief Get the G-buffer render pass (6 color + depth, loadOp=eClear)
+	 */
+	vk::RenderPass getGbufRenderPass() const { return m_gbufRenderPass; }
+
+	/**
+	 * @brief Get the G-buffer render pass with loadOp=eLoad (resume after mid-pass copy)
+	 */
+	vk::RenderPass getGbufRenderPassLoad() const { return m_gbufRenderPassLoad; }
+
+	/**
+	 * @brief Get the G-buffer framebuffer (6 color + depth)
+	 */
+	vk::Framebuffer getGbufFramebuffer() const { return m_gbufFramebuffer; }
+
+	/**
+	 * @brief Check if G-buffer resources are initialized
+	 */
+	bool isGbufInitialized() const { return m_gbufInitialized; }
+
+	// G-buffer image views (for future light pass texture sampling)
+	vk::ImageView getGbufPositionView() const { return m_gbufPosition.view; }
+	vk::ImageView getGbufNormalView() const { return m_gbufNormal.view; }
+	vk::ImageView getGbufSpecularView() const { return m_gbufSpecular.view; }
+	vk::ImageView getGbufEmissiveView() const { return m_gbufEmissive.view; }
+	vk::ImageView getGbufCompositeView() const { return m_gbufComposite.view; }
+
+	// G-buffer images (for copy operations)
+	vk::Image getGbufEmissiveImage() const { return m_gbufEmissive.image; }
+	vk::Image getGbufCompositeImage() const { return m_gbufComposite.image; }
+
+	/**
+	 * @brief Transition G-buffer color attachments 1-5 for render pass resume
+	 *
+	 * After ending the G-buffer render pass, all color attachments are in
+	 * eShaderReadOnlyOptimal. The eLoad pass expects eColorAttachmentOptimal.
+	 * The caller handles attachment 0 (scene color); this transitions the rest.
+	 *
+	 * @param cmd Active command buffer (must be outside a render pass)
+	 */
+	void transitionGbufForResume(vk::CommandBuffer cmd);
+
 private:
 	void updateTonemappingUBO();
 
@@ -238,6 +282,10 @@ private:
 	                 vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect,
 	                 vk::Image& outImage, vk::ImageView& outView,
 	                 VulkanAllocation& outAllocation);
+
+	// G-buffer methods (deferred lighting)
+	bool initGBuffer();
+	void shutdownGBuffer();
 
 	// LDR target methods
 	bool initLDRTargets();
@@ -320,6 +368,22 @@ private:
 	vk::Framebuffer m_sceneLuminanceFB;
 	bool m_ldrInitialized = false;
 	bool m_postEffectsApplied = false; // Set per-frame by executePostEffects
+
+public:
+	// Attachment layout: [0]=color, [1]=position, [2]=normal, [3]=specular, [4]=emissive, [5]=composite, [6]=depth
+	static constexpr uint32_t GBUF_COLOR_ATTACHMENT_COUNT = 6;
+
+private:
+	// ---- G-Buffer (deferred lighting) ----
+	RenderTarget m_gbufPosition;   // RGBA16F - view-space position (xyz) + AO (w)
+	RenderTarget m_gbufNormal;     // RGBA16F - view-space normal (xyz) + gloss (w)
+	RenderTarget m_gbufSpecular;   // RGBA8   - specular color (rgb) + fresnel (a)
+	RenderTarget m_gbufEmissive;   // RGBA16F - emissive / pre-lit color
+	RenderTarget m_gbufComposite;  // RGBA16F - light accumulation scratch buffer
+	vk::RenderPass m_gbufRenderPass;      // loadOp=eClear (initial)
+	vk::RenderPass m_gbufRenderPassLoad;  // loadOp=eLoad (resume after mid-pass copy)
+	vk::Framebuffer m_gbufFramebuffer;
+	bool m_gbufInitialized = false;
 
 	// ---- Distortion ping-pong textures (32x32 RGBA8) ----
 	RenderTarget m_distortionTex[2];

@@ -182,6 +182,12 @@ public:
 	bool getCullMode() const { return m_cullEnabled; }
 
 	/**
+	 * @brief Set color attachment count for current render pass
+	 */
+	void setColorAttachmentCount(uint32_t count) { m_colorAttachmentCount = count; }
+	uint32_t getColorAttachmentCount() const { return m_colorAttachmentCount; }
+
+	/**
 	 * @brief Apply pending dynamic state to command buffer
 	 *
 	 * Must be called before every draw command to ensure dirty dynamic state
@@ -230,6 +236,7 @@ private:
 	gr_zbuffer_type m_zbufferMode = ZBUFFER_TYPE_NONE;
 	int m_stencilMode = 0;
 	bool m_cullEnabled = true;
+	uint32_t m_colorAttachmentCount = 1;
 
 	bool m_initialized = false;
 };

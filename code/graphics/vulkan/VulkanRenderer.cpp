@@ -11,6 +11,7 @@
 #include "backends/imgui_impl_vulkan.h"
 #include "def_files/def_files.h"
 #include "graphics/2d.h"
+#include "lighting/lighting.h"
 #include "libs/renderdoc/renderdoc.h"
 #include "mod_table/mod_table.h"
 
@@ -1445,23 +1446,48 @@ void VulkanRenderer::beginSceneRendering()
 	// End the current swap chain render pass
 	m_currentCommandBuffer.endRenderPass();
 
-	// Begin the HDR scene render pass
+	// Use G-buffer render pass when deferred lighting is enabled and G-buffer is ready
+	m_useGbufRenderPass = m_postProcessor->isGbufInitialized() && light_deferred_enabled();
+
+	// Begin the HDR scene render pass (or G-buffer render pass for deferred)
 	vk::RenderPassBeginInfo rpBegin;
-	rpBegin.renderPass = m_postProcessor->getSceneRenderPass();
-	rpBegin.framebuffer = m_postProcessor->getSceneFramebuffer();
 	rpBegin.renderArea.offset = vk::Offset2D(0, 0);
 	rpBegin.renderArea.extent = m_postProcessor->getSceneExtent();
 
-	std::array<vk::ClearValue, 2> clearValues;
-	clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
-	clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
-	rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
-	rpBegin.pClearValues = clearValues.data();
+	if (m_useGbufRenderPass) {
+		rpBegin.renderPass = m_postProcessor->getGbufRenderPass();
+		rpBegin.framebuffer = m_postProcessor->getGbufFramebuffer();
 
-	m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		// 7 clear values: 6 color + depth
+		std::array<vk::ClearValue, 7> clearValues;
+		clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f}); // color
+		clearValues[1].color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f}); // position
+		clearValues[2].color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f}); // normal
+		clearValues[3].color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f}); // specular
+		clearValues[4].color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f}); // emissive
+		clearValues[5].color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f}); // composite
+		clearValues[6].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
 
-	// Update state tracker for the HDR scene pass
-	m_stateTracker->setRenderPass(m_postProcessor->getSceneRenderPass(), 0);
+		m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		m_stateTracker->setRenderPass(m_postProcessor->getGbufRenderPass(), 0);
+		m_stateTracker->setColorAttachmentCount(VulkanPostProcessor::GBUF_COLOR_ATTACHMENT_COUNT);
+	} else {
+		rpBegin.renderPass = m_postProcessor->getSceneRenderPass();
+		rpBegin.framebuffer = m_postProcessor->getSceneFramebuffer();
+
+		std::array<vk::ClearValue, 2> clearValues;
+		clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+		clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+
+		m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		m_stateTracker->setRenderPass(m_postProcessor->getSceneRenderPass(), 0);
+		m_stateTracker->setColorAttachmentCount(1);
+	}
+
 	// Negative viewport height for Y-flip (same as swap chain pass)
 	auto extent = m_postProcessor->getSceneExtent();
 	m_stateTracker->setViewport(0.0f,
@@ -1513,6 +1539,7 @@ void VulkanRenderer::endSceneRendering()
 
 	// Update state tracker for the resumed swap chain pass
 	m_stateTracker->setRenderPass(m_renderPassLoad.get(), 0);
+	m_stateTracker->setColorAttachmentCount(1);
 	// Non-flipped viewport for post-processing blit (HDR texture is already correct orientation)
 	m_stateTracker->setViewport(0.0f, 0.0f,
 		static_cast<float>(m_swapChainExtent.width),
@@ -1528,6 +1555,7 @@ void VulkanRenderer::endSceneRendering()
 		-static_cast<float>(m_swapChainExtent.height));
 
 	m_sceneRendering = false;
+	m_useGbufRenderPass = false;
 }
 
 void VulkanRenderer::copyEffectTexture()
@@ -1538,31 +1566,45 @@ void VulkanRenderer::copyEffectTexture()
 
 	// End the current scene render pass
 	// This transitions scene color to eShaderReadOnlyOptimal (the render pass's finalLayout)
+	// For G-buffer: all 6 color attachments transition to eShaderReadOnlyOptimal
 	m_currentCommandBuffer.endRenderPass();
 
-	// Copy scene color → effect texture (handles all image transitions)
+	// Copy scene color → effect texture (handles scene color transitions)
 	m_postProcessor->copyEffectTexture(m_currentCommandBuffer);
+
+	// If G-buffer is active, transition attachments 1-5 for render pass resume
+	if (m_useGbufRenderPass) {
+		m_postProcessor->transitionGbufForResume(m_currentCommandBuffer);
+	}
 
 	// Resume the scene render pass with loadOp=eLoad to preserve existing content
 	// Scene color is now in eColorAttachmentOptimal (copyEffectTexture transitions it back)
 	// Depth is still in eDepthStencilAttachmentOptimal (untouched by the copy)
 	vk::RenderPassBeginInfo rpBegin;
-	rpBegin.renderPass = m_postProcessor->getSceneRenderPassLoad();
-	rpBegin.framebuffer = m_postProcessor->getSceneFramebuffer();
 	rpBegin.renderArea.offset = vk::Offset2D(0, 0);
 	rpBegin.renderArea.extent = m_postProcessor->getSceneExtent();
 
-	// Clear values are ignored for loadOp=eLoad but array must cover all attachments
-	std::array<vk::ClearValue, 2> clearValues;
-	clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
-	clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
-	rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
-	rpBegin.pClearValues = clearValues.data();
-
-	m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
-
-	// Update state tracker to use the resumed render pass (compatible with original)
-	m_stateTracker->setRenderPass(m_postProcessor->getSceneRenderPassLoad(), 0);
+	if (m_useGbufRenderPass) {
+		rpBegin.renderPass = m_postProcessor->getGbufRenderPassLoad();
+		rpBegin.framebuffer = m_postProcessor->getGbufFramebuffer();
+		// Clear values ignored for eLoad but array must cover all attachments
+		std::array<vk::ClearValue, 7> clearValues{};
+		clearValues[6].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+		m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		m_stateTracker->setRenderPass(m_postProcessor->getGbufRenderPassLoad(), 0);
+	} else {
+		rpBegin.renderPass = m_postProcessor->getSceneRenderPassLoad();
+		rpBegin.framebuffer = m_postProcessor->getSceneFramebuffer();
+		std::array<vk::ClearValue, 2> clearValues;
+		clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+		clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+		m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		m_stateTracker->setRenderPass(m_postProcessor->getSceneRenderPassLoad(), 0);
+	}
 
 	// Restore Y-flipped viewport for scene rendering
 	auto extent = m_postProcessor->getSceneExtent();
@@ -1580,6 +1622,7 @@ void VulkanRenderer::copySceneDepthForParticles()
 
 	// End the current scene render pass
 	// This transitions: color → eShaderReadOnlyOptimal, depth → eDepthStencilAttachmentOptimal
+	// For G-buffer: all 6 color attachments → eShaderReadOnlyOptimal
 	m_currentCommandBuffer.endRenderPass();
 
 	// Copy scene depth → samplable depth copy (handles all depth image transitions)
@@ -1609,23 +1652,36 @@ void VulkanRenderer::copySceneDepthForParticles()
 			{}, {}, {}, barrier);
 	}
 
+	// If G-buffer is active, transition attachments 1-5 for render pass resume
+	if (m_useGbufRenderPass) {
+		m_postProcessor->transitionGbufForResume(m_currentCommandBuffer);
+	}
+
 	// Resume the scene render pass with loadOp=eLoad
 	vk::RenderPassBeginInfo rpBegin;
-	rpBegin.renderPass = m_postProcessor->getSceneRenderPassLoad();
-	rpBegin.framebuffer = m_postProcessor->getSceneFramebuffer();
 	rpBegin.renderArea.offset = vk::Offset2D(0, 0);
 	rpBegin.renderArea.extent = m_postProcessor->getSceneExtent();
 
-	std::array<vk::ClearValue, 2> clearValues;
-	clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
-	clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
-	rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
-	rpBegin.pClearValues = clearValues.data();
-
-	m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
-
-	// Update state tracker
-	m_stateTracker->setRenderPass(m_postProcessor->getSceneRenderPassLoad(), 0);
+	if (m_useGbufRenderPass) {
+		rpBegin.renderPass = m_postProcessor->getGbufRenderPassLoad();
+		rpBegin.framebuffer = m_postProcessor->getGbufFramebuffer();
+		std::array<vk::ClearValue, 7> clearValues{};
+		clearValues[6].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+		m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		m_stateTracker->setRenderPass(m_postProcessor->getGbufRenderPassLoad(), 0);
+	} else {
+		rpBegin.renderPass = m_postProcessor->getSceneRenderPassLoad();
+		rpBegin.framebuffer = m_postProcessor->getSceneFramebuffer();
+		std::array<vk::ClearValue, 2> clearValues;
+		clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+		clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+		m_currentCommandBuffer.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		m_stateTracker->setRenderPass(m_postProcessor->getSceneRenderPassLoad(), 0);
+	}
 
 	// Restore Y-flipped viewport for scene rendering
 	auto extent = m_postProcessor->getSceneExtent();

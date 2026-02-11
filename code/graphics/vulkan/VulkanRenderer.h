@@ -283,6 +283,7 @@ class VulkanRenderer {
 	std::unique_ptr<VulkanPostProcessor> m_postProcessor;
 	bool m_sceneRendering = false;
 	bool m_sceneDepthCopiedThisFrame = false;
+	bool m_useGbufRenderPass = false;  // True when scene uses G-buffer (deferred lighting)
 
 #if SDL_SUPPORTS_VULKAN
 	bool m_debugReportEnabled = false;

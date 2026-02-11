@@ -62,9 +62,10 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 
 	// Create HDR scene color target (RGBA16F)
 	// eTransferSrc needed for copy_effect_texture (mid-scene snapshot)
+	// eTransferDst needed for deferred_lighting_finish (emissive→color copy)
 	if (!createImage(extent.width, extent.height, vk::Format::eR16G16B16A16Sfloat,
 	                 vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
-	                 | vk::ImageUsageFlagBits::eTransferSrc,
+	                 | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
 	                 vk::ImageAspectFlagBits::eColor,
 	                 m_sceneColor.image, m_sceneColor.view, m_sceneColor.allocation)) {
 		mprintf(("VulkanPostProcessor: Failed to create scene color image!\n"));
@@ -431,6 +432,11 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 		}
 	}
 
+	// Initialize G-buffer for deferred lighting (non-fatal)
+	if (!initGBuffer()) {
+		mprintf(("VulkanPostProcessor: G-buffer initialization failed (non-fatal)\n"));
+	}
+
 	m_initialized = true;
 	mprintf(("VulkanPostProcessor: Initialized (%ux%u, RGBA16F scene color)\n",
 		extent.width, extent.height));
@@ -442,6 +448,7 @@ void VulkanPostProcessor::shutdown()
 	if (m_device) {
 		m_device.waitIdle();
 
+		shutdownGBuffer();
 		shutdownLDRTargets();
 		shutdownBloom();
 
@@ -577,6 +584,326 @@ void VulkanPostProcessor::updateTonemappingUBO()
 		mapped->linearOut = 0;  // Apply sRGB conversion (HDR → swap chain)
 		m_memoryManager->unmapMemory(m_tonemapUBOAlloc);
 	}
+}
+
+// ===== G-Buffer (Deferred Lighting) Implementation =====
+
+bool VulkanPostProcessor::initGBuffer()
+{
+	if (m_gbufInitialized) {
+		return true;
+	}
+
+	const uint32_t w = m_extent.width;
+	const uint32_t h = m_extent.height;
+	const vk::ImageUsageFlags gbufUsage =
+		vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
+		| vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
+
+	// Create G-buffer images (position, normal, specular, emissive, composite)
+	struct GbufTarget {
+		RenderTarget* target;
+		vk::Format format;
+		const char* name;
+	};
+
+	GbufTarget targets[] = {
+		{&m_gbufPosition,  vk::Format::eR16G16B16A16Sfloat, "position"},
+		{&m_gbufNormal,    vk::Format::eR16G16B16A16Sfloat, "normal"},
+		{&m_gbufSpecular,  vk::Format::eR8G8B8A8Unorm,      "specular"},
+		{&m_gbufEmissive,  vk::Format::eR16G16B16A16Sfloat, "emissive"},
+		{&m_gbufComposite, vk::Format::eR16G16B16A16Sfloat, "composite"},
+	};
+
+	for (auto& t : targets) {
+		if (!createImage(w, h, t.format, gbufUsage, vk::ImageAspectFlagBits::eColor,
+		                 t.target->image, t.target->view, t.target->allocation)) {
+			mprintf(("VulkanPostProcessor: Failed to create G-buffer %s image!\n", t.name));
+			shutdownGBuffer();
+			return false;
+		}
+		t.target->format = t.format;
+		t.target->width = w;
+		t.target->height = h;
+	}
+
+	// Create G-buffer render pass (eClear) — 6 color + depth
+	// Attachment order: [0]=color, [1]=position, [2]=normal, [3]=specular, [4]=emissive, [5]=composite, [6]=depth
+	{
+		std::array<vk::AttachmentDescription, 7> attachments;
+
+		// Formats for the 6 color attachments
+		vk::Format colorFormats[6] = {
+			vk::Format::eR16G16B16A16Sfloat, // 0: color (scene color)
+			vk::Format::eR16G16B16A16Sfloat, // 1: position
+			vk::Format::eR16G16B16A16Sfloat, // 2: normal
+			vk::Format::eR8G8B8A8Unorm,      // 3: specular
+			vk::Format::eR16G16B16A16Sfloat, // 4: emissive
+			vk::Format::eR16G16B16A16Sfloat, // 5: composite
+		};
+
+		for (uint32_t i = 0; i < 6; ++i) {
+			attachments[i].format = colorFormats[i];
+			attachments[i].samples = vk::SampleCountFlagBits::e1;
+			attachments[i].loadOp = vk::AttachmentLoadOp::eClear;
+			attachments[i].storeOp = vk::AttachmentStoreOp::eStore;
+			attachments[i].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+			attachments[i].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+			attachments[i].initialLayout = vk::ImageLayout::eUndefined;
+			attachments[i].finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		}
+
+		// Depth
+		attachments[6].format = m_depthFormat;
+		attachments[6].samples = vk::SampleCountFlagBits::e1;
+		attachments[6].loadOp = vk::AttachmentLoadOp::eClear;
+		attachments[6].storeOp = vk::AttachmentStoreOp::eStore;
+		attachments[6].stencilLoadOp = vk::AttachmentLoadOp::eClear;
+		attachments[6].stencilStoreOp = vk::AttachmentStoreOp::eStore;
+		attachments[6].initialLayout = vk::ImageLayout::eUndefined;
+		attachments[6].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		std::array<vk::AttachmentReference, 6> colorRefs;
+		for (uint32_t i = 0; i < 6; ++i) {
+			colorRefs[i].attachment = i;
+			colorRefs[i].layout = vk::ImageLayout::eColorAttachmentOptimal;
+		}
+
+		vk::AttachmentReference depthRef;
+		depthRef.attachment = 6;
+		depthRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		vk::SubpassDescription subpass;
+		subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+		subpass.colorAttachmentCount = 6;
+		subpass.pColorAttachments = colorRefs.data();
+		subpass.pDepthStencilAttachment = &depthRef;
+
+		// Dependency matching the scene render pass (for render pass compatibility)
+		vk::SubpassDependency dependency;
+		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependency.dstSubpass = 0;
+		dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests
+		                        | vk::PipelineStageFlagBits::eTransfer;
+		dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+		dependency.srcAccessMask = vk::AccessFlagBits::eTransferRead
+		                         | vk::AccessFlagBits::eTransferWrite;
+		dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentRead;
+
+		vk::RenderPassCreateInfo rpInfo;
+		rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+		rpInfo.pAttachments = attachments.data();
+		rpInfo.subpassCount = 1;
+		rpInfo.pSubpasses = &subpass;
+		rpInfo.dependencyCount = 1;
+		rpInfo.pDependencies = &dependency;
+
+		try {
+			m_gbufRenderPass = m_device.createRenderPass(rpInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create G-buffer render pass: %s\n", e.what()));
+			shutdownGBuffer();
+			return false;
+		}
+	}
+
+	// Create G-buffer render pass (eLoad) — for resuming after mid-pass copies
+	{
+		std::array<vk::AttachmentDescription, 7> attachments;
+
+		vk::Format colorFormats[6] = {
+			vk::Format::eR16G16B16A16Sfloat,
+			vk::Format::eR16G16B16A16Sfloat,
+			vk::Format::eR16G16B16A16Sfloat,
+			vk::Format::eR8G8B8A8Unorm,
+			vk::Format::eR16G16B16A16Sfloat,
+			vk::Format::eR16G16B16A16Sfloat,
+		};
+
+		for (uint32_t i = 0; i < 6; ++i) {
+			attachments[i].format = colorFormats[i];
+			attachments[i].samples = vk::SampleCountFlagBits::e1;
+			attachments[i].loadOp = vk::AttachmentLoadOp::eLoad;
+			attachments[i].storeOp = vk::AttachmentStoreOp::eStore;
+			attachments[i].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+			attachments[i].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+			attachments[i].initialLayout = vk::ImageLayout::eColorAttachmentOptimal;
+			attachments[i].finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		}
+
+		// Depth
+		attachments[6].format = m_depthFormat;
+		attachments[6].samples = vk::SampleCountFlagBits::e1;
+		attachments[6].loadOp = vk::AttachmentLoadOp::eLoad;
+		attachments[6].storeOp = vk::AttachmentStoreOp::eStore;
+		attachments[6].stencilLoadOp = vk::AttachmentLoadOp::eLoad;
+		attachments[6].stencilStoreOp = vk::AttachmentStoreOp::eStore;
+		attachments[6].initialLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+		attachments[6].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		std::array<vk::AttachmentReference, 6> colorRefs;
+		for (uint32_t i = 0; i < 6; ++i) {
+			colorRefs[i].attachment = i;
+			colorRefs[i].layout = vk::ImageLayout::eColorAttachmentOptimal;
+		}
+
+		vk::AttachmentReference depthRef;
+		depthRef.attachment = 6;
+		depthRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		vk::SubpassDescription subpass;
+		subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+		subpass.colorAttachmentCount = 6;
+		subpass.pColorAttachments = colorRefs.data();
+		subpass.pDepthStencilAttachment = &depthRef;
+
+		// Must match eClear pass dependency for compatibility
+		vk::SubpassDependency dependency;
+		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependency.dstSubpass = 0;
+		dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests
+		                        | vk::PipelineStageFlagBits::eTransfer;
+		dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+		dependency.srcAccessMask = vk::AccessFlagBits::eTransferRead
+		                         | vk::AccessFlagBits::eTransferWrite;
+		dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentRead;
+
+		vk::RenderPassCreateInfo rpInfo;
+		rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+		rpInfo.pAttachments = attachments.data();
+		rpInfo.subpassCount = 1;
+		rpInfo.pSubpasses = &subpass;
+		rpInfo.dependencyCount = 1;
+		rpInfo.pDependencies = &dependency;
+
+		try {
+			m_gbufRenderPassLoad = m_device.createRenderPass(rpInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create G-buffer load render pass: %s\n", e.what()));
+			shutdownGBuffer();
+			return false;
+		}
+	}
+
+	// Create G-buffer framebuffer (6 color + depth)
+	{
+		std::array<vk::ImageView, 7> fbAttachments = {
+			m_sceneColor.view,      // 0: color (shared with scene framebuffer)
+			m_gbufPosition.view,    // 1: position
+			m_gbufNormal.view,      // 2: normal
+			m_gbufSpecular.view,    // 3: specular
+			m_gbufEmissive.view,    // 4: emissive
+			m_gbufComposite.view,   // 5: composite
+			m_sceneDepth.view,      // 6: depth (shared with scene framebuffer)
+		};
+
+		vk::FramebufferCreateInfo fbInfo;
+		fbInfo.renderPass = m_gbufRenderPass;
+		fbInfo.attachmentCount = static_cast<uint32_t>(fbAttachments.size());
+		fbInfo.pAttachments = fbAttachments.data();
+		fbInfo.width = w;
+		fbInfo.height = h;
+		fbInfo.layers = 1;
+
+		try {
+			m_gbufFramebuffer = m_device.createFramebuffer(fbInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create G-buffer framebuffer: %s\n", e.what()));
+			shutdownGBuffer();
+			return false;
+		}
+	}
+
+	m_gbufInitialized = true;
+	mprintf(("VulkanPostProcessor: G-buffer initialized (%ux%u, 6 color + depth)\n", w, h));
+	return true;
+}
+
+void VulkanPostProcessor::shutdownGBuffer()
+{
+	if (!m_device) {
+		return;
+	}
+
+	if (m_gbufFramebuffer) {
+		m_device.destroyFramebuffer(m_gbufFramebuffer);
+		m_gbufFramebuffer = nullptr;
+	}
+	if (m_gbufRenderPassLoad) {
+		m_device.destroyRenderPass(m_gbufRenderPassLoad);
+		m_gbufRenderPassLoad = nullptr;
+	}
+	if (m_gbufRenderPass) {
+		m_device.destroyRenderPass(m_gbufRenderPass);
+		m_gbufRenderPass = nullptr;
+	}
+
+	RenderTarget* gbufTargets[] = {
+		&m_gbufPosition, &m_gbufNormal, &m_gbufSpecular,
+		&m_gbufEmissive, &m_gbufComposite,
+	};
+	for (auto* rt : gbufTargets) {
+		if (rt->view) {
+			m_device.destroyImageView(rt->view);
+			rt->view = nullptr;
+		}
+		if (rt->image) {
+			m_device.destroyImage(rt->image);
+			rt->image = nullptr;
+		}
+		if (rt->allocation.memory != VK_NULL_HANDLE) {
+			m_memoryManager->freeAllocation(rt->allocation);
+		}
+	}
+
+	m_gbufInitialized = false;
+}
+
+void VulkanPostProcessor::transitionGbufForResume(vk::CommandBuffer cmd)
+{
+	if (!m_gbufInitialized) {
+		return;
+	}
+
+	// After ending the G-buffer render pass, color attachments 1-5 are in
+	// eShaderReadOnlyOptimal (from finalLayout). The eLoad pass expects
+	// eColorAttachmentOptimal. Transition them in a single barrier batch.
+	vk::Image gbufImages[5] = {
+		m_gbufPosition.image,
+		m_gbufNormal.image,
+		m_gbufSpecular.image,
+		m_gbufEmissive.image,
+		m_gbufComposite.image,
+	};
+
+	std::array<vk::ImageMemoryBarrier, 5> barriers;
+	for (int i = 0; i < 5; ++i) {
+		barriers[i].srcAccessMask = {};
+		barriers[i].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barriers[i].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barriers[i].newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[i].image = gbufImages[i];
+		barriers[i].subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barriers[i].subresourceRange.baseMipLevel = 0;
+		barriers[i].subresourceRange.levelCount = 1;
+		barriers[i].subresourceRange.baseArrayLayer = 0;
+		barriers[i].subresourceRange.layerCount = 1;
+	}
+
+	cmd.pipelineBarrier(
+		vk::PipelineStageFlagBits::eColorAttachmentOutput,
+		vk::PipelineStageFlagBits::eColorAttachmentOutput,
+		{}, nullptr, nullptr, barriers);
 }
 
 // ===== Bloom Pipeline Implementation =====

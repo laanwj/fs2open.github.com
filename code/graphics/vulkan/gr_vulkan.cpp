@@ -22,6 +22,7 @@
 #include "graphics/material.h"
 #include "graphics/post_processing.h"
 #include "graphics/grinternal.h"
+#include "lighting/lighting.h"
 #include "pngutils/pngutils.h"
 
 namespace graphics {
@@ -70,8 +71,7 @@ bool vulkan_is_capable(gr_capability capability)
 	case gr_capability::CAPABILITY_POST_PROCESSING:
 		return Gr_post_processing_enabled;
 	case gr_capability::CAPABILITY_DEFERRED_LIGHTING:
-		// Not yet implemented
-		return false;
+		return light_deferred_enabled();
 	case gr_capability::CAPABILITY_SHADOWS:
 	case gr_capability::CAPABILITY_THICK_OUTLINE:
 		// Requires geometry shaders / shadow map pipeline (not yet implemented)
@@ -353,10 +353,283 @@ void vulkan_post_process_set_defaults()
 }
 // ========== Stub functions (not yet implemented) ==========
 
-void stub_deferred_lighting_begin(bool /*clearNonColorBufs*/) {}
-void stub_deferred_lighting_msaa() {}
-void stub_deferred_lighting_end() {}
-void stub_deferred_lighting_finish() {}
+void vulkan_deferred_lighting_begin(bool clearNonColorBufs)
+{
+	if (!light_deferred_enabled()) {
+		return;
+	}
+
+	auto* pp = getPostProcessor();
+	if (!pp || !pp->isGbufInitialized()) {
+		return;
+	}
+
+	auto* renderer = getRendererInstance();
+	if (!renderer->isSceneRendering()) {
+		return;
+	}
+
+	auto* stateTracker = getStateTracker();
+	vk::CommandBuffer cmd = stateTracker->getCommandBuffer();
+
+	// End the current G-buffer render pass to perform the color→emissive copy.
+	// All 6 color attachments transition to eShaderReadOnlyOptimal (finalLayout).
+	cmd.endRenderPass();
+
+	// Transition scene color (attachment 0): eShaderReadOnlyOptimal → eTransferSrc
+	// Transition emissive (attachment 4): eShaderReadOnlyOptimal → eTransferDst
+	{
+		std::array<vk::ImageMemoryBarrier, 2> barriers;
+
+		// Scene color → transfer source
+		barriers[0].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barriers[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
+		barriers[0].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barriers[0].newLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].image = pp->getSceneColorImage();
+		barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		// Emissive → transfer destination
+		barriers[1].srcAccessMask = {};
+		barriers[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barriers[1].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barriers[1].newLayout = vk::ImageLayout::eTransferDstOptimal;
+		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].image = pp->getGbufEmissiveImage();
+		barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, nullptr, nullptr, barriers);
+	}
+
+	// Copy scene color → emissive (pre-deferred content becomes emissive)
+	{
+		auto extent = pp->getSceneExtent();
+		vk::ImageCopy region;
+		region.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+		region.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+		region.extent = vk::Extent3D(extent.width, extent.height, 1);
+		cmd.copyImage(
+			pp->getSceneColorImage(), vk::ImageLayout::eTransferSrcOptimal,
+			pp->getGbufEmissiveImage(), vk::ImageLayout::eTransferDstOptimal,
+			region);
+	}
+
+	// Transition scene color back to eColorAttachmentOptimal.
+	// Transition emissive to eShaderReadOnlyOptimal (where transitionGbufForResume expects it).
+	{
+		std::array<vk::ImageMemoryBarrier, 2> barriers;
+
+		barriers[0].srcAccessMask = vk::AccessFlagBits::eTransferRead;
+		barriers[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barriers[0].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barriers[0].newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].image = pp->getSceneColorImage();
+		barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		barriers[1].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barriers[1].dstAccessMask = {};
+		barriers[1].oldLayout = vk::ImageLayout::eTransferDstOptimal;
+		barriers[1].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].image = pp->getGbufEmissiveImage();
+		barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			{}, nullptr, nullptr, barriers);
+	}
+
+	// Transition G-buffer attachments 1-5 from eShaderReadOnlyOptimal → eColorAttachmentOptimal
+	pp->transitionGbufForResume(cmd);
+
+	// Resume G-buffer render pass with eLoad
+	{
+		auto extent = pp->getSceneExtent();
+		vk::RenderPassBeginInfo rpBegin;
+		rpBegin.renderPass = pp->getGbufRenderPassLoad();
+		rpBegin.framebuffer = pp->getGbufFramebuffer();
+		rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+		rpBegin.renderArea.extent = extent;
+		std::array<vk::ClearValue, 7> clearValues{};
+		clearValues[6].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+		cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		stateTracker->setRenderPass(pp->getGbufRenderPassLoad(), 0);
+	}
+
+	// Clear color attachment (0) to black inside the render pass
+	// (emissive was just copied, so don't clear it; other G-buffer attachments
+	// were already cleared by the eClear pass at beginSceneRendering)
+	{
+		vk::ClearAttachment clearAtt;
+		clearAtt.aspectMask = vk::ImageAspectFlagBits::eColor;
+		clearAtt.colorAttachment = 0;
+		clearAtt.clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f});
+
+		auto extent = pp->getSceneExtent();
+		vk::ClearRect clearRect;
+		clearRect.rect.offset = vk::Offset2D(0, 0);
+		clearRect.rect.extent = extent;
+		clearRect.baseArrayLayer = 0;
+		clearRect.layerCount = 1;
+		cmd.clearAttachments(clearAtt, clearRect);
+
+		// Optionally clear non-color G-buffer attachments (position, normal, specular, composite)
+		if (clearNonColorBufs) {
+			for (uint32_t att : {1u, 2u, 3u, 5u}) {
+				clearAtt.colorAttachment = att;
+				cmd.clearAttachments(clearAtt, clearRect);
+			}
+		}
+	}
+
+	Deferred_lighting = true;
+}
+
+void vulkan_deferred_lighting_msaa()
+{
+	// No MSAA support in Vulkan deferred yet
+}
+
+void vulkan_deferred_lighting_end()
+{
+	if (!Deferred_lighting) {
+		return;
+	}
+
+	Deferred_lighting = false;
+
+	// After this, rendering goes back to writing only attachment 0.
+	// The pipeline still has 6 blend states (matching the G-buffer render pass)
+	// but the shader only outputs to location 0. Attachments 1-5 are untouched.
+}
+
+void vulkan_deferred_lighting_finish()
+{
+	if (!light_deferred_enabled()) {
+		return;
+	}
+
+	auto* pp = getPostProcessor();
+	if (!pp || !pp->isGbufInitialized()) {
+		return;
+	}
+
+	auto* renderer = getRendererInstance();
+	if (!renderer->isSceneRendering()) {
+		return;
+	}
+
+	auto* stateTracker = getStateTracker();
+	vk::CommandBuffer cmd = stateTracker->getCommandBuffer();
+
+	// Stub implementation for phase 7a: copy emissive → color.
+	// Full light accumulation pass will be implemented in phase 7b.
+	// This makes the scene appear as emissive-only (no dynamic lights).
+
+	// End the G-buffer render pass
+	cmd.endRenderPass();
+
+	// Transition emissive → eTransferSrc, color → eTransferDst
+	{
+		std::array<vk::ImageMemoryBarrier, 2> barriers;
+
+		barriers[0].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barriers[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
+		barriers[0].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barriers[0].newLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].image = pp->getGbufEmissiveImage();
+		barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		barriers[1].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barriers[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barriers[1].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barriers[1].newLayout = vk::ImageLayout::eTransferDstOptimal;
+		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].image = pp->getSceneColorImage();
+		barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, nullptr, nullptr, barriers);
+	}
+
+	// Copy emissive → color
+	{
+		auto extent = pp->getSceneExtent();
+		vk::ImageCopy region;
+		region.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+		region.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+		region.extent = vk::Extent3D(extent.width, extent.height, 1);
+		cmd.copyImage(
+			pp->getGbufEmissiveImage(), vk::ImageLayout::eTransferSrcOptimal,
+			pp->getSceneColorImage(), vk::ImageLayout::eTransferDstOptimal,
+			region);
+	}
+
+	// Transition color → eColorAttachmentOptimal for resumed render pass.
+	// Transition emissive → eShaderReadOnlyOptimal (where transitionGbufForResume expects it).
+	{
+		std::array<vk::ImageMemoryBarrier, 2> barriers;
+
+		barriers[0].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barriers[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barriers[0].oldLayout = vk::ImageLayout::eTransferDstOptimal;
+		barriers[0].newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].image = pp->getSceneColorImage();
+		barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		barriers[1].srcAccessMask = vk::AccessFlagBits::eTransferRead;
+		barriers[1].dstAccessMask = {};
+		barriers[1].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barriers[1].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].image = pp->getGbufEmissiveImage();
+		barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			{}, nullptr, nullptr, barriers);
+	}
+
+	// Transition G-buffer attachments 1-5 from eShaderReadOnlyOptimal → eColorAttachmentOptimal
+	pp->transitionGbufForResume(cmd);
+
+	// Resume G-buffer render pass with eLoad
+	{
+		auto extent = pp->getSceneExtent();
+		vk::RenderPassBeginInfo rpBegin;
+		rpBegin.renderPass = pp->getGbufRenderPassLoad();
+		rpBegin.framebuffer = pp->getGbufFramebuffer();
+		rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+		rpBegin.renderArea.extent = extent;
+		std::array<vk::ClearValue, 7> clearValues{};
+		clearValues[6].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+		cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		stateTracker->setRenderPass(pp->getGbufRenderPassLoad(), 0);
+	}
+}
 void stub_calculate_irrmap() {}
 void stub_dump_envmap(const char* /*filename*/) {}
 void stub_override_fog(bool /*set_override*/) {}
@@ -455,10 +728,10 @@ void init_function_pointers()
 	gr_screen.gf_scene_texture_end = vulkan_scene_texture_end;
 	gr_screen.gf_copy_effect_texture = vulkan_copy_effect_texture;
 
-	gr_screen.gf_deferred_lighting_begin = stub_deferred_lighting_begin;
-	gr_screen.gf_deferred_lighting_msaa = stub_deferred_lighting_msaa;
-	gr_screen.gf_deferred_lighting_end = stub_deferred_lighting_end;
-	gr_screen.gf_deferred_lighting_finish = stub_deferred_lighting_finish;
+	gr_screen.gf_deferred_lighting_begin = vulkan_deferred_lighting_begin;
+	gr_screen.gf_deferred_lighting_msaa = vulkan_deferred_lighting_msaa;
+	gr_screen.gf_deferred_lighting_end = vulkan_deferred_lighting_end;
+	gr_screen.gf_deferred_lighting_finish = vulkan_deferred_lighting_finish;
 
 	gr_screen.gf_calculate_irrmap = stub_calculate_irrmap;
 	gr_screen.gf_dump_envmap = stub_dump_envmap;
