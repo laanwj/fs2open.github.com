@@ -302,6 +302,7 @@ void vulkan_bm_create(bitmap_slot* slot);
 void vulkan_bm_free_data(bitmap_slot* slot, bool release);
 void vulkan_bm_init(bitmap_slot* slot);
 bool vulkan_bm_data(int handle, bitmap* bm);
+void vulkan_bm_page_in_start();
 int vulkan_bm_make_render_target(int handle, int* width, int* height, int* bpp, int* mm_lvl, int flags);
 int vulkan_bm_set_render_target(int handle, int face);
 void vulkan_update_texture(int bitmap_handle, int bpp, const ubyte* data, int width, int height);

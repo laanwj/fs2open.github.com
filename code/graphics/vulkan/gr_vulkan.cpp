@@ -304,7 +304,6 @@ SCP_string vulkan_blob_screen()
 // ========== Stub functions (not yet implemented) ==========
 
 void stub_get_region(int /*front*/, int /*w*/, int /*h*/, ubyte* /*data*/) {}
-void stub_bm_page_in_start() {}
 
 void vulkan_post_process_set_effect(const char* name, int value, const vec3d* rgb)
 {
@@ -415,7 +414,7 @@ void init_function_pointers()
 	gr_screen.gf_bm_free_data = vulkan_bm_free_data;
 	gr_screen.gf_bm_create = vulkan_bm_create;
 	gr_screen.gf_bm_init = vulkan_bm_init;
-	gr_screen.gf_bm_page_in_start = stub_bm_page_in_start;
+	gr_screen.gf_bm_page_in_start = vulkan_bm_page_in_start;
 	gr_screen.gf_bm_data = vulkan_bm_data;
 	gr_screen.gf_bm_make_render_target = vulkan_bm_make_render_target;
 	gr_screen.gf_bm_set_render_target = vulkan_bm_set_render_target;

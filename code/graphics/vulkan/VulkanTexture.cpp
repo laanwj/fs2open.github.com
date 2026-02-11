@@ -1969,6 +1969,13 @@ bool vulkan_bm_data(int handle, bitmap* bm)
 	return texManager->bm_data(handle, bm);
 }
 
+void vulkan_bm_page_in_start()
+{
+	// Intentional no-op. The OpenGL implementation (opengl_preload_init) is also
+	// effectively empty — its only code is commented out. Vulkan textures are
+	// loaded on demand and don't need a page-in session setup.
+}
+
 int vulkan_bm_make_render_target(int handle, int* width, int* height, int* bpp, int* mm_lvl, int flags)
 {
 	auto* texManager = getTextureManager();
