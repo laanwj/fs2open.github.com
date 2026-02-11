@@ -936,6 +936,10 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 	vk::SamplerAddressMode addressMode = convertTextureAddressing(m_textureAddressing);
 	vk::Sampler sampler = texManager->getSampler(
 		vk::Filter::eLinear, vk::Filter::eLinear, addressMode, true, 0.0f, true);
+	// OpenGL skips applying texture addressing for AABITMAP, INTERFACE, and CUBEMAP
+	// types - they always stay clamped. We need a clamp sampler for those cases.
+	vk::Sampler clampSampler = texManager->getSampler(
+		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerAddressMode::eClampToEdge, true, 0.0f, true);
 	vk::ImageView fallbackView = texManager->getFallbackTextureView();
 
 	// Check for movie material - needs special YUV texture handling
@@ -999,18 +1003,26 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 			return;
 		}
 
+		// Determine bitmap type - match OpenGL's gr_opengl_tcache_set logic:
+		// Override material texture type with bitmap's own type if not NORMAL
+		int bitmapType = isBaseMap ? materialTextureType : TCACHE_TYPE_NORMAL;
+		int overrideType = bm_get_tcache_type(textureHandle);
+		if (overrideType != TCACHE_TYPE_NORMAL) {
+			bitmapType = overrideType;
+		}
+
+		// OpenGL skips applying texture addressing for AABITMAP, INTERFACE, and
+		// CUBEMAP types - they always stay clamped (gropengltexture.cpp:1140-1141).
+		// Match that behavior by using a clamp sampler for these types.
+		if (bitmapType == TCACHE_TYPE_AABITMAP || bitmapType == TCACHE_TYPE_INTERFACE
+			|| bitmapType == TCACHE_TYPE_CUBEMAP) {
+			textureInfos[slot].sampler = clampSampler;
+		}
+
 		auto* texSlot = texManager->getTextureSlot(textureHandle);
 
 		// If texture isn't loaded, try to load it on-demand (like OpenGL does)
 		if (!texSlot || !texSlot->imageView) {
-			// Determine bitmap type - match OpenGL's gr_opengl_tcache_set logic:
-			// Override material texture type with bitmap's own type if not NORMAL
-			int bitmapType = isBaseMap ? materialTextureType : TCACHE_TYPE_NORMAL;
-			int overrideType = bm_get_tcache_type(textureHandle);
-			if (overrideType != TCACHE_TYPE_NORMAL) {
-				bitmapType = overrideType;
-			}
-
 			// Determine bpp and flags - matches OpenGL's opengl_determine_bpp_and_flags
 			ushort lockFlags = 0;
 			int bpp = 16;
