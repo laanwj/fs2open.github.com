@@ -219,12 +219,6 @@ public:
 
 private:
 	/**
-	 * @brief Queue a buffer for deferred destruction
-	 * Buffer will be destroyed at the start of the next frame
-	 */
-	void queueDeferredDestruction(vk::Buffer buffer, VulkanAllocation allocation, size_t size);
-
-	/**
 	 * @brief Convert BufferType to Vulkan usage flags
 	 */
 	vk::BufferUsageFlags getVkUsageFlags(BufferType type) const;

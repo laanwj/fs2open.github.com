@@ -333,6 +333,11 @@ bool VulkanBufferManager::createOrResizeBuffer(VulkanBufferObject& bufferObj, si
 
 	// If buffer exists and is large enough, just update span size
 	if (bufferObj.buffer && bufferObj.totalSize >= requiredTotal) {
+		// If this is a streaming buffer, we'd need to synchronize and
+		// move the frames around. However, there's a check in
+		// updateBufferData that makes sure streaming buffers only ever
+		// grow.
+		Assertion(!bufferObj.isStreaming(), "Streaming buffers cannot be shrunk.");
 		bufferObj.spanSize = spanSize;
 		return true;
 	}
@@ -409,12 +414,14 @@ bool VulkanBufferManager::createOrResizeBuffer(VulkanBufferObject& bufferObj, si
 
 	// Queue old buffer for deferred destruction (after copying data)
 	if (oldBuffer) {
-		queueDeferredDestruction(oldBuffer, oldAllocation, oldTotalSize);
+		auto* deletionQueue = getDeletionQueue();
+		deletionQueue->queueBuffer(oldBuffer, oldAllocation);
 		m_totalBufferMemory -= oldTotalSize;
 	}
 
 	bufferObj.spanSize = spanSize;
 	bufferObj.totalSize = requiredTotal;
+	// Add size of new buffer. Size of old buffer is subtracted above.
 	m_totalBufferMemory += requiredTotal;
 
 	return true;
@@ -671,13 +678,6 @@ const VulkanBufferObject* VulkanBufferManager::getBufferObject(gr_buffer_handle 
 		return nullptr;
 	}
 	return &m_buffers[handle.value()];
-}
-
-void VulkanBufferManager::queueDeferredDestruction(vk::Buffer buffer, VulkanAllocation allocation, size_t size)
-{
-	// Use the unified deletion queue for deferred destruction
-	auto* deletionQueue = getDeletionQueue();
-	deletionQueue->queueBuffer(buffer, allocation);
 }
 
 // ========== gr_screen function pointer implementations ==========
