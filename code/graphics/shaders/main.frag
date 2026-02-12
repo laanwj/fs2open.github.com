@@ -117,6 +117,10 @@ layout(location = 6) in float fragFogDist;
 
 // Output
 layout(location = 0) out vec4 fragOut0;
+layout(location = 1) out vec4 fragOut1;
+layout(location = 2) out vec4 fragOut2;
+layout(location = 3) out vec4 fragOut3;
+layout(location = 4) out vec4 fragOut4;
 
 vec3 FresnelLazarovEnv(vec3 specColor, vec3 view, vec3 normal, float gloss)
 {
@@ -373,4 +377,11 @@ void main()
 	}
 
 	fragOut0 = baseColor;
+
+	if ((flags & MODEL_SDR_FLAG_DEFERRED) != 0) {
+		fragOut1 = vec4(fragPosition.xyz, aoFactors.x);
+		fragOut2 = vec4(normal, glossData);
+		fragOut3 = vec4(specColor.rgb, fresnelFactor);
+		fragOut4 = emissiveColor;
+	}
 }

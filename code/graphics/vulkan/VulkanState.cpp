@@ -102,6 +102,13 @@ void VulkanStateTracker::setRenderPass(vk::RenderPass renderPass, uint32_t subpa
 
 	// Pipeline needs to be rebound when render pass changes
 	m_currentPipeline = nullptr;
+
+	// Dynamic state must be re-applied after a render pass change.
+	// Vulkan doesn't preserve dynamic state across render pass instances,
+	// and mid-frame render passes (e.g. light accumulation) may have set
+	// different viewport/scissor values directly on the command buffer.
+	m_viewportDirty = true;
+	m_scissorDirty = true;
 }
 
 void VulkanStateTracker::setViewport(float x, float y, float width, float height, float minDepth, float maxDepth)
