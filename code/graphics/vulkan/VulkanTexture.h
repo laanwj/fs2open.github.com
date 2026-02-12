@@ -41,6 +41,10 @@ public:
 	vk::RenderPass renderPass;  // Render pass compatible with this target
 	bool isRenderTarget = false;
 
+	// 3D texture support
+	bool is3D = false;
+	uint32_t depth = 1;
+
 	// Cubemap support
 	bool isCubemap = false;
 	vk::ImageView cubeFaceViews[6] = {};  // Per-face 2D views for render-to-cubemap
@@ -154,6 +158,11 @@ public:
 	 */
 	vk::ImageView getFallbackCubeView();
 
+	/**
+	 * @brief Get fallback white 3D texture image view for unbound sampler3D slots
+	 */
+	vk::ImageView getFallback3DView();
+
 	// Texture access
 
 	/**
@@ -204,9 +213,10 @@ private:
 	                 vk::Format format, vk::ImageTiling tiling,
 	                 vk::ImageUsageFlags usage, MemoryUsage memUsage,
 	                 vk::Image& image, VulkanAllocation& allocation,
-	                 uint32_t arrayLayers = 1, bool cubemap = false);
+	                 uint32_t arrayLayers = 1, bool cubemap = false,
+	                 uint32_t imageDepth = 1);
 
-	enum class ImageViewType { Array2D, Plain2D, Cube };
+	enum class ImageViewType { Array2D, Plain2D, Cube, Volume3D };
 
 	/**
 	 * @brief Create an image view
@@ -275,6 +285,11 @@ private:
 	 */
 	bool uploadCubemap(int handle, bitmap* bm, int compType);
 
+	/**
+	 * @brief Upload a 3D texture (volumetric data) as a single 3D image
+	 */
+	bool upload3DTexture(int handle, bitmap* bm, int texDepth);
+
 	// Guard flag to prevent recursion when bm_lock calls bm_data during animation upload
 	bool m_uploadingAnimation = false;
 
@@ -305,6 +320,11 @@ private:
 	vk::Image m_fallbackCubeTexture;
 	vk::ImageView m_fallbackCubeView;         // Cube view (for samplerCube)
 	VulkanAllocation m_fallbackCubeAllocation;
+
+	// Fallback 1x1x1 white 3D texture for unbound sampler3D slots
+	vk::Image m_fallback3DTexture;
+	vk::ImageView m_fallback3DView;           // 3D view (for sampler3D)
+	VulkanAllocation m_fallback3DAllocation;
 
 	// Device limits
 	uint32_t m_maxTextureSize = 4096;

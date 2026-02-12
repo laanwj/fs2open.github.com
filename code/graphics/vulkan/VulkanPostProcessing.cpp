@@ -25,6 +25,9 @@
 #include "render/3d.h"
 #include "tracing/tracing.h"
 #include "utils/Random.h"
+#include "nebula/neb.h"
+#include "nebula/volumetrics.h"
+#include "mission/missionparse.h"
 
 extern float Sun_spot;
 extern int Game_subspace_effect;
@@ -458,6 +461,7 @@ void VulkanPostProcessor::shutdown()
 	if (m_device) {
 		m_device.waitIdle();
 
+		shutdownFogPass();
 		shutdownShadowPass();
 		shutdownLightVolumes();
 		shutdownGBuffer();
@@ -4175,6 +4179,961 @@ bool VulkanPostProcessor::createImage(uint32_t width, uint32_t height, vk::Forma
 	}
 
 	return true;
+}
+
+// ========== Fog / Volumetric Nebula ==========
+
+bool VulkanPostProcessor::initFogPass()
+{
+	if (m_fogInitialized) {
+		return true;
+	}
+
+	// Create fog render pass: 1 RGBA16F color attachment, loadOp=eDontCare (writing every pixel),
+	// initialLayout/finalLayout = eColorAttachmentOptimal (scene color stays as render target)
+	{
+		vk::AttachmentDescription att;
+		att.format = vk::Format::eR16G16B16A16Sfloat;
+		att.samples = vk::SampleCountFlagBits::e1;
+		att.loadOp = vk::AttachmentLoadOp::eDontCare;
+		att.storeOp = vk::AttachmentStoreOp::eStore;
+		att.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+		att.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+		att.initialLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		att.finalLayout = vk::ImageLayout::eColorAttachmentOptimal;
+
+		vk::AttachmentReference colorRef;
+		colorRef.attachment = 0;
+		colorRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
+		vk::SubpassDescription subpass;
+		subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &colorRef;
+
+		vk::SubpassDependency dep;
+		dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dep.dstSubpass = 0;
+		dep.srcStageMask = vk::PipelineStageFlagBits::eFragmentShader
+		                  | vk::PipelineStageFlagBits::eColorAttachmentOutput;
+		dep.dstStageMask = vk::PipelineStageFlagBits::eFragmentShader
+		                  | vk::PipelineStageFlagBits::eColorAttachmentOutput;
+		dep.srcAccessMask = vk::AccessFlagBits::eShaderRead
+		                  | vk::AccessFlagBits::eColorAttachmentWrite;
+		dep.dstAccessMask = vk::AccessFlagBits::eShaderRead
+		                  | vk::AccessFlagBits::eColorAttachmentWrite;
+
+		vk::RenderPassCreateInfo rpInfo;
+		rpInfo.attachmentCount = 1;
+		rpInfo.pAttachments = &att;
+		rpInfo.subpassCount = 1;
+		rpInfo.pSubpasses = &subpass;
+		rpInfo.dependencyCount = 1;
+		rpInfo.pDependencies = &dep;
+
+		try {
+			m_fogRenderPass = m_device.createRenderPass(rpInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create fog render pass: %s\n", e.what()));
+			return false;
+		}
+	}
+
+	// Create fog framebuffer (scene color as attachment)
+	{
+		vk::FramebufferCreateInfo fbInfo;
+		fbInfo.renderPass = m_fogRenderPass;
+		fbInfo.attachmentCount = 1;
+		fbInfo.pAttachments = &m_sceneColor.view;
+		fbInfo.width = m_extent.width;
+		fbInfo.height = m_extent.height;
+		fbInfo.layers = 1;
+
+		try {
+			m_fogFramebuffer = m_device.createFramebuffer(fbInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create fog framebuffer: %s\n", e.what()));
+			return false;
+		}
+	}
+
+	m_fogInitialized = true;
+	mprintf(("VulkanPostProcessor: Fog pass initialized\n"));
+	return true;
+}
+
+void VulkanPostProcessor::shutdownFogPass()
+{
+	if (m_emissiveMipmappedFullView) {
+		m_device.destroyImageView(m_emissiveMipmappedFullView);
+		m_emissiveMipmappedFullView = nullptr;
+	}
+	if (m_emissiveMipmapped.view) {
+		m_device.destroyImageView(m_emissiveMipmapped.view);
+		m_emissiveMipmapped.view = nullptr;
+	}
+	if (m_emissiveMipmapped.image) {
+		m_device.destroyImage(m_emissiveMipmapped.image);
+		m_emissiveMipmapped.image = nullptr;
+	}
+	if (m_emissiveMipmapped.allocation.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_emissiveMipmapped.allocation);
+	}
+	m_emissiveMipmappedInitialized = false;
+
+	if (m_fogFramebuffer) {
+		m_device.destroyFramebuffer(m_fogFramebuffer);
+		m_fogFramebuffer = nullptr;
+	}
+	if (m_fogRenderPass) {
+		m_device.destroyRenderPass(m_fogRenderPass);
+		m_fogRenderPass = nullptr;
+	}
+	m_fogInitialized = false;
+}
+
+void VulkanPostProcessor::renderSceneFog(vk::CommandBuffer cmd)
+{
+	GR_DEBUG_SCOPE("Scene Fog");
+
+	if (!m_fogInitialized) {
+		if (!initFogPass()) {
+			return;
+		}
+	}
+
+	auto* pipelineMgr = getPipelineManager();
+	auto* descriptorMgr = getDescriptorManager();
+	auto* bufferMgr = getBufferManager();
+	auto* texMgr = getTextureManager();
+
+	if (!pipelineMgr || !descriptorMgr || !bufferMgr || !texMgr) {
+		return;
+	}
+
+	// Copy scene depth for fog sampling
+	copySceneDepth(cmd);
+
+	// Transition scene color: eShaderReadOnlyOptimal -> eColorAttachmentOptimal
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_sceneColor.image;
+		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTopOfPipe,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			{}, nullptr, nullptr, barrier);
+	}
+
+	// Map bloom UBO for fog UBO data
+	m_bloomUBOMapped = m_memoryManager->mapMemory(m_bloomUBOAlloc);
+	if (!m_bloomUBOMapped) {
+		return;
+	}
+
+	// Fill fog UBO
+	graphics::generic_data::fog_data fogData;
+	{
+		float fog_near, fog_far, fog_density;
+		neb2_get_adjusted_fog_values(&fog_near, &fog_far, &fog_density);
+		unsigned char r, g, b;
+		neb2_get_fog_color(&r, &g, &b);
+
+		fogData.fog_start = fog_near;
+		fogData.fog_density = fog_density;
+		fogData.fog_color.xyz.x = r / 255.f;
+		fogData.fog_color.xyz.y = g / 255.f;
+		fogData.fog_color.xyz.z = b / 255.f;
+		fogData.zNear = Min_draw_distance;
+		fogData.zFar = Max_draw_distance;
+	}
+
+	// Custom descriptor writes to bind depth copy at binding 4
+	PipelineConfig config;
+	config.shaderType = SDR_TYPE_SCENE_FOG;
+	config.vertexLayoutHash = 0;
+	config.primitiveType = PRIM_TYPE_TRIS;
+	config.depthMode = ZBUFFER_TYPE_NONE;
+	config.blendMode = ALPHA_BLEND_NONE;
+	config.cullEnabled = false;
+	config.depthWriteEnabled = false;
+	config.renderPass = m_fogRenderPass;
+
+	vertex_layout emptyLayout;
+	vk::Pipeline pipeline = pipelineMgr->getPipeline(config, emptyLayout);
+	if (!pipeline) {
+		m_memoryManager->unmapMemory(m_bloomUBOAlloc);
+		m_bloomUBOMapped = nullptr;
+		return;
+	}
+
+	vk::PipelineLayout pipelineLayout = pipelineMgr->getPipelineLayout();
+
+	// Begin render pass
+	vk::RenderPassBeginInfo rpBegin;
+	rpBegin.renderPass = m_fogRenderPass;
+	rpBegin.framebuffer = m_fogFramebuffer;
+	rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+	rpBegin.renderArea.extent = m_extent;
+
+	cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+	cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+
+	vk::Viewport viewport;
+	viewport.x = 0.0f;
+	viewport.y = 0.0f;
+	viewport.width = static_cast<float>(m_extent.width);
+	viewport.height = static_cast<float>(m_extent.height);
+	viewport.minDepth = 0.0f;
+	viewport.maxDepth = 1.0f;
+	cmd.setViewport(0, viewport);
+
+	vk::Rect2D scissor;
+	scissor.offset = vk::Offset2D(0, 0);
+	scissor.extent = m_extent;
+	cmd.setScissor(0, scissor);
+
+	// Allocate Material descriptor set (Set 1)
+	vk::DescriptorSet materialSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Material);
+	if (!materialSet) {
+		cmd.endRenderPass();
+		m_memoryManager->unmapMemory(m_bloomUBOAlloc);
+		m_bloomUBOMapped = nullptr;
+		return;
+	}
+
+	{
+		auto fallbackBuf = bufferMgr->getFallbackUniformBuffer();
+		vk::DescriptorBufferInfo fallbackBufInfo;
+		fallbackBufInfo.buffer = fallbackBuf;
+		fallbackBufInfo.offset = 0;
+		fallbackBufInfo.range = 4096;
+
+		vk::Sampler defaultSampler = texMgr->getDefaultSampler();
+		vk::ImageView fallbackView = texMgr->getFallbackTextureView2D();
+
+		// Binding 0: ModelData UBO (fallback)
+		vk::WriteDescriptorSet modelWrite;
+		modelWrite.dstSet = materialSet;
+		modelWrite.dstBinding = 0;
+		modelWrite.dstArrayElement = 0;
+		modelWrite.descriptorCount = 1;
+		modelWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
+		modelWrite.pBufferInfo = &fallbackBufInfo;
+
+		// Binding 1: composite (lit result) at element [0]
+		vk::DescriptorImageInfo compositeInfo;
+		compositeInfo.sampler = m_linearSampler;
+		compositeInfo.imageView = m_gbufComposite.view;
+		compositeInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet texWrite;
+		texWrite.dstSet = materialSet;
+		texWrite.dstBinding = 1;
+		texWrite.dstArrayElement = 0;
+		texWrite.descriptorCount = 1;
+		texWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		texWrite.pImageInfo = &compositeInfo;
+
+		// Fill remaining texture array elements with fallback
+		SCP_vector<vk::DescriptorImageInfo> fallbackImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1);
+		for (auto& fi : fallbackImages) {
+			fi.sampler = defaultSampler;
+			fi.imageView = fallbackView;
+			fi.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		}
+
+		vk::WriteDescriptorSet fallbackTexWrite;
+		fallbackTexWrite.dstSet = materialSet;
+		fallbackTexWrite.dstBinding = 1;
+		fallbackTexWrite.dstArrayElement = 1;
+		fallbackTexWrite.descriptorCount = static_cast<uint32_t>(fallbackImages.size());
+		fallbackTexWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		fallbackTexWrite.pImageInfo = fallbackImages.data();
+
+		// Binding 2: DecalGlobals UBO (fallback)
+		vk::WriteDescriptorSet decalWrite;
+		decalWrite.dstSet = materialSet;
+		decalWrite.dstBinding = 2;
+		decalWrite.dstArrayElement = 0;
+		decalWrite.descriptorCount = 1;
+		decalWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
+		decalWrite.pBufferInfo = &fallbackBufInfo;
+
+		// Binding 3: Transform SSBO (fallback)
+		vk::WriteDescriptorSet ssboWrite;
+		ssboWrite.dstSet = materialSet;
+		ssboWrite.dstBinding = 3;
+		ssboWrite.dstArrayElement = 0;
+		ssboWrite.descriptorCount = 1;
+		ssboWrite.descriptorType = vk::DescriptorType::eStorageBuffer;
+		ssboWrite.pBufferInfo = &fallbackBufInfo;
+
+		// Binding 4: Depth copy (actual depth, not fallback)
+		vk::DescriptorImageInfo depthInfo;
+		depthInfo.sampler = m_linearSampler;
+		depthInfo.imageView = m_sceneDepthCopy.view;
+		depthInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet depthWrite;
+		depthWrite.dstSet = materialSet;
+		depthWrite.dstBinding = 4;
+		depthWrite.dstArrayElement = 0;
+		depthWrite.descriptorCount = 1;
+		depthWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		depthWrite.pImageInfo = &depthInfo;
+
+		// Bindings 5, 6: Fallback texture
+		vk::DescriptorImageInfo sceneColorFallback;
+		sceneColorFallback.sampler = defaultSampler;
+		sceneColorFallback.imageView = fallbackView;
+		sceneColorFallback.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet bind5Write;
+		bind5Write.dstSet = materialSet;
+		bind5Write.dstBinding = 5;
+		bind5Write.dstArrayElement = 0;
+		bind5Write.descriptorCount = 1;
+		bind5Write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		bind5Write.pImageInfo = &sceneColorFallback;
+
+		vk::WriteDescriptorSet bind6Write;
+		bind6Write.dstSet = materialSet;
+		bind6Write.dstBinding = 6;
+		bind6Write.dstArrayElement = 0;
+		bind6Write.descriptorCount = 1;
+		bind6Write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		bind6Write.pImageInfo = &sceneColorFallback;
+
+		std::array<vk::WriteDescriptorSet, 8> writes = {
+			texWrite, modelWrite, decalWrite, fallbackTexWrite,
+			ssboWrite, depthWrite, bind5Write, bind6Write
+		};
+		m_device.updateDescriptorSets(writes, {});
+	}
+
+	// Allocate PerDraw descriptor set (Set 2) with fog UBO
+	vk::DescriptorSet perDrawSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::PerDraw);
+	if (!perDrawSet) {
+		cmd.endRenderPass();
+		m_memoryManager->unmapMemory(m_bloomUBOAlloc);
+		m_bloomUBOMapped = nullptr;
+		return;
+	}
+
+	{
+		Assertion(m_bloomUBOCursor < BLOOM_UBO_MAX_SLOTS, "Fog UBO slot overflow!");
+		uint32_t slotOffset = m_bloomUBOCursor * static_cast<uint32_t>(BLOOM_UBO_SLOT_SIZE);
+		memcpy(static_cast<uint8_t*>(m_bloomUBOMapped) + slotOffset, &fogData, sizeof(fogData));
+		m_bloomUBOCursor++;
+
+		vk::DescriptorBufferInfo uboInfo;
+		uboInfo.buffer = m_bloomUBO;
+		uboInfo.offset = slotOffset;
+		uboInfo.range = BLOOM_UBO_SLOT_SIZE;
+
+		vk::WriteDescriptorSet write;
+		write.dstSet = perDrawSet;
+		write.dstBinding = 0;
+		write.dstArrayElement = 0;
+		write.descriptorCount = 1;
+		write.descriptorType = vk::DescriptorType::eUniformBuffer;
+		write.pBufferInfo = &uboInfo;
+
+		auto fallbackBuf = bufferMgr->getFallbackUniformBuffer();
+		vk::DescriptorBufferInfo fallbackInfo;
+		fallbackInfo.buffer = fallbackBuf;
+		fallbackInfo.offset = 0;
+		fallbackInfo.range = 4096;
+
+		SCP_vector<vk::WriteDescriptorSet> writes;
+		writes.push_back(write);
+		for (uint32_t b = 1; b <= 4; ++b) {
+			vk::WriteDescriptorSet fw;
+			fw.dstSet = perDrawSet;
+			fw.dstBinding = b;
+			fw.dstArrayElement = 0;
+			fw.descriptorCount = 1;
+			fw.descriptorType = vk::DescriptorType::eUniformBuffer;
+			fw.pBufferInfo = &fallbackInfo;
+			writes.push_back(fw);
+		}
+
+		m_device.updateDescriptorSets(writes, {});
+	}
+
+	// Bind descriptor sets and draw
+	cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout,
+		static_cast<uint32_t>(DescriptorSetIndex::Material),
+		{materialSet, perDrawSet}, {});
+
+	cmd.draw(3, 1, 0, 0);
+	cmd.endRenderPass();
+
+	// Scene color is now in eColorAttachmentOptimal (fog render pass finalLayout)
+
+	m_memoryManager->unmapMemory(m_bloomUBOAlloc);
+	m_bloomUBOMapped = nullptr;
+}
+
+void VulkanPostProcessor::copySceneColorToComposite(vk::CommandBuffer cmd)
+{
+	auto extent = m_extent;
+
+	// Transition scene color: eColorAttachmentOptimal -> eTransferSrcOptimal
+	// Transition composite: eShaderReadOnlyOptimal -> eTransferDstOptimal
+	std::array<vk::ImageMemoryBarrier, 2> barriers;
+
+	barriers[0].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+	barriers[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
+	barriers[0].oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
+	barriers[0].newLayout = vk::ImageLayout::eTransferSrcOptimal;
+	barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barriers[0].image = m_sceneColor.image;
+	barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+	barriers[1].srcAccessMask = vk::AccessFlagBits::eShaderRead;
+	barriers[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+	barriers[1].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+	barriers[1].newLayout = vk::ImageLayout::eTransferDstOptimal;
+	barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barriers[1].image = m_gbufComposite.image;
+	barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+	cmd.pipelineBarrier(
+		vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
+		vk::PipelineStageFlagBits::eTransfer,
+		{}, nullptr, nullptr, barriers);
+
+	// Copy scene color -> composite
+	vk::ImageCopy region;
+	region.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+	region.srcOffset = vk::Offset3D(0, 0, 0);
+	region.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+	region.dstOffset = vk::Offset3D(0, 0, 0);
+	region.extent = vk::Extent3D(extent.width, extent.height, 1);
+
+	cmd.copyImage(
+		m_sceneColor.image, vk::ImageLayout::eTransferSrcOptimal,
+		m_gbufComposite.image, vk::ImageLayout::eTransferDstOptimal,
+		region);
+
+	// Transition composite: eTransferDstOptimal -> eShaderReadOnlyOptimal (ready for sampling)
+	// Transition scene color: eTransferSrcOptimal -> eColorAttachmentOptimal (render target again)
+	barriers[0].srcAccessMask = vk::AccessFlagBits::eTransferRead;
+	barriers[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+	barriers[0].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+	barriers[0].newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+	barriers[0].image = m_sceneColor.image;
+
+	barriers[1].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+	barriers[1].dstAccessMask = vk::AccessFlagBits::eShaderRead;
+	barriers[1].oldLayout = vk::ImageLayout::eTransferDstOptimal;
+	barriers[1].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+	barriers[1].image = m_gbufComposite.image;
+
+	cmd.pipelineBarrier(
+		vk::PipelineStageFlagBits::eTransfer,
+		vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
+		{}, nullptr, nullptr, barriers);
+}
+
+void VulkanPostProcessor::renderVolumetricFog(vk::CommandBuffer cmd)
+{
+	GR_DEBUG_SCOPE("Volumetric Nebulae");
+	TRACE_SCOPE(tracing::Volumetrics);
+
+	if (!m_fogInitialized) {
+		if (!initFogPass()) {
+			return;
+		}
+	}
+
+	auto* pipelineMgr = getPipelineManager();
+	auto* descriptorMgr = getDescriptorManager();
+	auto* bufferMgr = getBufferManager();
+	auto* texMgr = getTextureManager();
+
+	if (!pipelineMgr || !descriptorMgr || !bufferMgr || !texMgr) {
+		return;
+	}
+
+	const volumetric_nebula& neb = *The_mission.volumetrics;
+	Assertion(neb.isVolumeBitmapValid(), "Volumetric nebula was not properly initialized!");
+
+	// Get 3D texture handles
+	int volHandle = neb.getVolumeBitmapHandle();
+	auto* volSlot = texMgr->getTextureSlot(volHandle);
+	if (!volSlot || !volSlot->imageView) {
+		mprintf(("VulkanPostProcessor::renderVolumetricFog: Volume texture not available\n"));
+		return;
+	}
+
+	bool noiseActive = neb.getNoiseActive();
+	tcache_slot_vulkan* noiseSlot = nullptr;
+	if (noiseActive) {
+		int noiseHandle = neb.getNoiseVolumeBitmapHandle();
+		noiseSlot = texMgr->getTextureSlot(noiseHandle);
+	}
+
+	// Prepare mipmapped emissive copy for LOD sampling
+	if (!m_emissiveMipmappedInitialized) {
+		m_emissiveMipLevels = 1;
+		uint32_t dim = std::max(m_extent.width, m_extent.height);
+		while (dim > 1) {
+			dim >>= 1;
+			m_emissiveMipLevels++;
+		}
+
+		vk::ImageCreateInfo imgInfo;
+		imgInfo.imageType = vk::ImageType::e2D;
+		imgInfo.format = vk::Format::eR16G16B16A16Sfloat;
+		imgInfo.extent = vk::Extent3D(m_extent.width, m_extent.height, 1);
+		imgInfo.mipLevels = m_emissiveMipLevels;
+		imgInfo.arrayLayers = 1;
+		imgInfo.samples = vk::SampleCountFlagBits::e1;
+		imgInfo.tiling = vk::ImageTiling::eOptimal;
+		imgInfo.usage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst
+		              | vk::ImageUsageFlagBits::eSampled;
+		imgInfo.sharingMode = vk::SharingMode::eExclusive;
+		imgInfo.initialLayout = vk::ImageLayout::eUndefined;
+
+		try {
+			m_emissiveMipmapped.image = m_device.createImage(imgInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create mipmapped emissive: %s\n", e.what()));
+			return;
+		}
+
+		if (!m_memoryManager->allocateImageMemory(m_emissiveMipmapped.image, MemoryUsage::GpuOnly, m_emissiveMipmapped.allocation)) {
+			m_device.destroyImage(m_emissiveMipmapped.image);
+			m_emissiveMipmapped.image = nullptr;
+			return;
+		}
+
+		// Create full-mip-chain view for LOD sampling
+		vk::ImageViewCreateInfo viewInfo;
+		viewInfo.image = m_emissiveMipmapped.image;
+		viewInfo.viewType = vk::ImageViewType::e2D;
+		viewInfo.format = vk::Format::eR16G16B16A16Sfloat;
+		viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		viewInfo.subresourceRange.baseMipLevel = 0;
+		viewInfo.subresourceRange.levelCount = m_emissiveMipLevels;
+		viewInfo.subresourceRange.baseArrayLayer = 0;
+		viewInfo.subresourceRange.layerCount = 1;
+
+		try {
+			m_emissiveMipmappedFullView = m_device.createImageView(viewInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create mipmapped emissive view: %s\n", e.what()));
+			return;
+		}
+
+		m_emissiveMipmapped.format = vk::Format::eR16G16B16A16Sfloat;
+		m_emissiveMipmapped.width = m_extent.width;
+		m_emissiveMipmapped.height = m_extent.height;
+		m_emissiveMipmappedInitialized = true;
+	}
+
+	// Copy G-buffer emissive (mip 0) to mipmapped emissive, then generate mips
+	{
+		// Transition mipmapped emissive: eUndefined -> eTransferDstOptimal (all mips)
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barrier.oldLayout = vk::ImageLayout::eUndefined;
+		barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_emissiveMipmapped.image;
+		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, m_emissiveMipLevels, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTopOfPipe,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, nullptr, nullptr, barrier);
+
+		// Transition G-buffer emissive: eShaderReadOnlyOptimal -> eTransferSrcOptimal
+		barrier.srcAccessMask = vk::AccessFlagBits::eShaderRead;
+		barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barrier.image = m_gbufEmissive.image;
+		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eFragmentShader,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, nullptr, nullptr, barrier);
+
+		// Copy mip 0
+		vk::ImageCopy region;
+		region.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+		region.srcOffset = vk::Offset3D(0, 0, 0);
+		region.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+		region.dstOffset = vk::Offset3D(0, 0, 0);
+		region.extent = vk::Extent3D(m_extent.width, m_extent.height, 1);
+
+		cmd.copyImage(
+			m_gbufEmissive.image, vk::ImageLayout::eTransferSrcOptimal,
+			m_emissiveMipmapped.image, vk::ImageLayout::eTransferDstOptimal,
+			region);
+
+		// Transition G-buffer emissive back to eShaderReadOnlyOptimal
+		barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+		barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.image = m_gbufEmissive.image;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			vk::PipelineStageFlagBits::eFragmentShader,
+			{}, nullptr, nullptr, barrier);
+
+		// Generate mipmaps via blit chain
+		generateMipmaps(cmd, m_emissiveMipmapped.image, m_extent.width, m_extent.height, m_emissiveMipLevels);
+
+		// After generateMipmaps, all mips are in eShaderReadOnlyOptimal (from the final transition in generateMipmaps)
+		// Actually, generateMipmaps transitions the last mip to eShaderReadOnlyOptimal via its final transition.
+		// But the intermediate mips go through eTransferSrcOptimal → we need them all in eShaderReadOnlyOptimal.
+		// generateMipmaps already handles this — mip 0 starts in eTransferDstOptimal but gets transitioned.
+		// Let me check: generateMipmaps transitions each mip from eTransferDstOptimal → eTransferSrcOptimal,
+		// then at the end transitions ALL mips to eShaderReadOnlyOptimal. So after return, all mips are readable.
+	}
+
+	// Copy scene depth (if not already done by renderSceneFog)
+	// copySceneDepth is safe to call multiple times — but it re-transitions the depth buffer.
+	// The fog pass already called it if scene fog ran. For standalone volumetric, we need it.
+	copySceneDepth(cmd);
+
+	// Transition scene color → eColorAttachmentOptimal for the fog render pass.
+	// oldLayout=eUndefined is safe: render pass has loadOp=eDontCare (overwrites every pixel).
+	// Scene color may be in eShaderReadOnlyOptimal (volumetric-only) or
+	// eColorAttachmentOptimal (after scene fog + copySceneColorToComposite).
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.oldLayout = vk::ImageLayout::eUndefined;
+		barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_sceneColor.image;
+		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTopOfPipe,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			{}, nullptr, nullptr, barrier);
+	}
+
+	// Map bloom UBO for volumetric fog UBO data
+	m_bloomUBOMapped = m_memoryManager->mapMemory(m_bloomUBOAlloc);
+	if (!m_bloomUBOMapped) {
+		return;
+	}
+
+	// Fill volumetric fog UBO
+	graphics::generic_data::volumetric_fog_data volData;
+	{
+		gr_set_proj_matrix(Proj_fov, gr_screen.clip_aspect, Min_draw_distance, Max_draw_distance);
+		gr_set_view_matrix(&Eye_position, &Eye_matrix);
+		vm_inverse_matrix4(&volData.p_inv, &gr_projection_matrix);
+		vm_inverse_matrix4(&volData.v_inv, &gr_view_matrix);
+		gr_end_view_matrix();
+		gr_end_proj_matrix();
+
+		volData.zNear = Min_draw_distance;
+		volData.zFar = Max_draw_distance;
+		volData.cameraPos = Eye_position;
+
+		// Find first directional light for global light direction/color
+		vec3d global_light_dir = ZERO_VECTOR;
+		vec3d global_light_diffuse = ZERO_VECTOR;
+		for (const auto& l : Lights) {
+			if (l.type == Light_Type::Directional) {
+				global_light_dir = l.vec;
+				global_light_diffuse.xyz.x = l.r * l.intensity;
+				global_light_diffuse.xyz.y = l.g * l.intensity;
+				global_light_diffuse.xyz.z = l.b * l.intensity;
+				break;
+			}
+		}
+
+		volData.globalLightDirection = global_light_dir;
+		volData.globalLightDiffuse = global_light_diffuse;
+		volData.nebPos = neb.getPos();
+		volData.nebSize = neb.getSize();
+		volData.stepsize = neb.getStepsize();
+		volData.opacitydistance = neb.getOpacityDistance();
+		volData.alphalimit = neb.getAlphaLim();
+		auto nebColor = neb.getNebulaColor();
+		volData.nebColor[0] = std::get<0>(nebColor);
+		volData.nebColor[1] = std::get<1>(nebColor);
+		volData.nebColor[2] = std::get<2>(nebColor);
+		volData.udfScale = neb.getUDFScale();
+		volData.emissiveSpreadFactor = neb.getEmissiveSpread();
+		volData.emissiveIntensity = neb.getEmissiveIntensity();
+		volData.emissiveFalloff = neb.getEmissiveFalloff();
+		volData.henyeyGreensteinCoeff = neb.getHenyeyGreensteinCoeff();
+		volData.directionalLightSampleSteps = neb.getGlobalLightSteps();
+		volData.directionalLightStepSize = neb.getGlobalLightStepsize();
+		auto noiseColor = neb.getNoiseColor();
+		volData.noiseColor[0] = std::get<0>(noiseColor);
+		volData.noiseColor[1] = std::get<1>(noiseColor);
+		volData.noiseColor[2] = std::get<2>(noiseColor);
+		auto noiseScale = neb.getNoiseColorScale();
+		volData.noiseColorScale1 = std::get<0>(noiseScale);
+		volData.noiseColorScale2 = std::get<1>(noiseScale);
+		volData.noiseColorIntensity = neb.getNoiseColorIntensity();
+		volData.aspect = gr_screen.clip_aspect;
+		volData.fov = g3_get_hfov(Proj_fov);
+		volData.doEdgeSmoothing = neb.getEdgeSmoothing() ? 1 : 0;
+		volData.useNoise = noiseActive ? 1 : 0;
+	}
+
+	// We need to use a custom descriptor write because the volumetric shader uses sampler3D
+	// at bindings 5 and 6, which differs from the default drawFullscreenTriangle fallbacks (sampler2D).
+	// So we replicate the drawFullscreenTriangle pattern but customize the material set.
+
+	PipelineConfig config;
+	config.shaderType = SDR_TYPE_VOLUMETRIC_FOG;
+	config.vertexLayoutHash = 0;
+	config.primitiveType = PRIM_TYPE_TRIS;
+	config.depthMode = ZBUFFER_TYPE_NONE;
+	config.blendMode = ALPHA_BLEND_NONE;
+	config.cullEnabled = false;
+	config.depthWriteEnabled = false;
+	config.renderPass = m_fogRenderPass;
+
+	vertex_layout emptyLayout;
+	vk::Pipeline pipeline = pipelineMgr->getPipeline(config, emptyLayout);
+	if (!pipeline) {
+		m_memoryManager->unmapMemory(m_bloomUBOAlloc);
+		m_bloomUBOMapped = nullptr;
+		return;
+	}
+
+	vk::PipelineLayout pipelineLayout = pipelineMgr->getPipelineLayout();
+
+	// Begin render pass
+	vk::RenderPassBeginInfo rpBegin;
+	rpBegin.renderPass = m_fogRenderPass;
+	rpBegin.framebuffer = m_fogFramebuffer;
+	rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+	rpBegin.renderArea.extent = m_extent;
+
+	cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+	cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+
+	vk::Viewport viewport;
+	viewport.x = 0.0f;
+	viewport.y = 0.0f;
+	viewport.width = static_cast<float>(m_extent.width);
+	viewport.height = static_cast<float>(m_extent.height);
+	viewport.minDepth = 0.0f;
+	viewport.maxDepth = 1.0f;
+	cmd.setViewport(0, viewport);
+
+	vk::Rect2D scissor;
+	scissor.offset = vk::Offset2D(0, 0);
+	scissor.extent = m_extent;
+	cmd.setScissor(0, scissor);
+
+	// Allocate Material descriptor set (Set 1)
+	vk::DescriptorSet materialSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Material);
+	if (!materialSet) {
+		cmd.endRenderPass();
+		m_memoryManager->unmapMemory(m_bloomUBOAlloc);
+		m_bloomUBOMapped = nullptr;
+		return;
+	}
+
+	{
+		auto fallbackBuf = bufferMgr->getFallbackUniformBuffer();
+		vk::DescriptorBufferInfo fallbackBufInfo;
+		fallbackBufInfo.buffer = fallbackBuf;
+		fallbackBufInfo.offset = 0;
+		fallbackBufInfo.range = 4096;
+
+		vk::Sampler defaultSampler = texMgr->getDefaultSampler();
+		vk::ImageView fallbackView = texMgr->getFallbackTextureView2D();
+		vk::ImageView fallback3DView = texMgr->getFallback3DView();
+
+		// Binding 0: ModelData UBO (fallback)
+		vk::WriteDescriptorSet modelWrite;
+		modelWrite.dstSet = materialSet;
+		modelWrite.dstBinding = 0;
+		modelWrite.dstArrayElement = 0;
+		modelWrite.descriptorCount = 1;
+		modelWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
+		modelWrite.pBufferInfo = &fallbackBufInfo;
+
+		// Binding 1: Texture array — [0]=composite, [1]=emissive, rest=fallback
+		SCP_vector<vk::DescriptorImageInfo> texArrayInfos(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS);
+		texArrayInfos[0].sampler = m_linearSampler;
+		texArrayInfos[0].imageView = m_gbufComposite.view;
+		texArrayInfos[0].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		texArrayInfos[1].sampler = m_mipmapSampler;
+		texArrayInfos[1].imageView = m_emissiveMipmappedFullView;
+		texArrayInfos[1].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		for (size_t i = 2; i < texArrayInfos.size(); i++) {
+			texArrayInfos[i].sampler = defaultSampler;
+			texArrayInfos[i].imageView = fallbackView;
+			texArrayInfos[i].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		}
+
+		vk::WriteDescriptorSet texWrite;
+		texWrite.dstSet = materialSet;
+		texWrite.dstBinding = 1;
+		texWrite.dstArrayElement = 0;
+		texWrite.descriptorCount = static_cast<uint32_t>(texArrayInfos.size());
+		texWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		texWrite.pImageInfo = texArrayInfos.data();
+
+		// Binding 2: DecalGlobals UBO (fallback)
+		vk::WriteDescriptorSet decalWrite;
+		decalWrite.dstSet = materialSet;
+		decalWrite.dstBinding = 2;
+		decalWrite.dstArrayElement = 0;
+		decalWrite.descriptorCount = 1;
+		decalWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
+		decalWrite.pBufferInfo = &fallbackBufInfo;
+
+		// Binding 3: Transform SSBO (fallback)
+		vk::WriteDescriptorSet ssboWrite;
+		ssboWrite.dstSet = materialSet;
+		ssboWrite.dstBinding = 3;
+		ssboWrite.dstArrayElement = 0;
+		ssboWrite.descriptorCount = 1;
+		ssboWrite.descriptorType = vk::DescriptorType::eStorageBuffer;
+		ssboWrite.pBufferInfo = &fallbackBufInfo;
+
+		// Binding 4: Depth copy
+		vk::DescriptorImageInfo depthInfo;
+		depthInfo.sampler = m_linearSampler;
+		depthInfo.imageView = m_sceneDepthCopy.view;
+		depthInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet depthWrite;
+		depthWrite.dstSet = materialSet;
+		depthWrite.dstBinding = 4;
+		depthWrite.dstArrayElement = 0;
+		depthWrite.descriptorCount = 1;
+		depthWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		depthWrite.pImageInfo = &depthInfo;
+
+		// Binding 5: 3D volume texture
+		vk::DescriptorImageInfo volumeInfo;
+		volumeInfo.sampler = m_linearSampler;
+		volumeInfo.imageView = volSlot->imageView;
+		volumeInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet volumeWrite;
+		volumeWrite.dstSet = materialSet;
+		volumeWrite.dstBinding = 5;
+		volumeWrite.dstArrayElement = 0;
+		volumeWrite.descriptorCount = 1;
+		volumeWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		volumeWrite.pImageInfo = &volumeInfo;
+
+		// Binding 6: 3D noise texture (or fallback 3D if noise inactive)
+		vk::DescriptorImageInfo noiseInfo;
+		noiseInfo.sampler = m_linearSampler;
+		if (noiseSlot && noiseSlot->imageView) {
+			noiseInfo.imageView = noiseSlot->imageView;
+		} else {
+			noiseInfo.imageView = fallback3DView;
+		}
+		noiseInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		vk::WriteDescriptorSet noiseWrite;
+		noiseWrite.dstSet = materialSet;
+		noiseWrite.dstBinding = 6;
+		noiseWrite.dstArrayElement = 0;
+		noiseWrite.descriptorCount = 1;
+		noiseWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		noiseWrite.pImageInfo = &noiseInfo;
+
+		std::array<vk::WriteDescriptorSet, 7> writes = {
+			modelWrite, texWrite, decalWrite, ssboWrite,
+			depthWrite, volumeWrite, noiseWrite
+		};
+		m_device.updateDescriptorSets(writes, {});
+	}
+
+	// Allocate PerDraw descriptor set (Set 2) with volumetric fog UBO
+	vk::DescriptorSet perDrawSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::PerDraw);
+	if (!perDrawSet) {
+		cmd.endRenderPass();
+		m_memoryManager->unmapMemory(m_bloomUBOAlloc);
+		m_bloomUBOMapped = nullptr;
+		return;
+	}
+
+	{
+		Assertion(m_bloomUBOCursor < BLOOM_UBO_MAX_SLOTS, "Fog UBO slot overflow!");
+		uint32_t slotOffset = m_bloomUBOCursor * static_cast<uint32_t>(BLOOM_UBO_SLOT_SIZE);
+		memcpy(static_cast<uint8_t*>(m_bloomUBOMapped) + slotOffset, &volData, sizeof(volData));
+		m_bloomUBOCursor++;
+
+		vk::DescriptorBufferInfo uboInfo;
+		uboInfo.buffer = m_bloomUBO;
+		uboInfo.offset = slotOffset;
+		uboInfo.range = BLOOM_UBO_SLOT_SIZE;
+
+		vk::WriteDescriptorSet write;
+		write.dstSet = perDrawSet;
+		write.dstBinding = 0;
+		write.dstArrayElement = 0;
+		write.descriptorCount = 1;
+		write.descriptorType = vk::DescriptorType::eUniformBuffer;
+		write.pBufferInfo = &uboInfo;
+
+		auto fallbackBuf = bufferMgr->getFallbackUniformBuffer();
+		vk::DescriptorBufferInfo fallbackInfo;
+		fallbackInfo.buffer = fallbackBuf;
+		fallbackInfo.offset = 0;
+		fallbackInfo.range = 4096;
+
+		SCP_vector<vk::WriteDescriptorSet> writes;
+		writes.push_back(write);
+		for (uint32_t b = 1; b <= 4; ++b) {
+			vk::WriteDescriptorSet fw;
+			fw.dstSet = perDrawSet;
+			fw.dstBinding = b;
+			fw.dstArrayElement = 0;
+			fw.descriptorCount = 1;
+			fw.descriptorType = vk::DescriptorType::eUniformBuffer;
+			fw.pBufferInfo = &fallbackInfo;
+			writes.push_back(fw);
+		}
+
+		m_device.updateDescriptorSets(writes, {});
+	}
+
+	// Bind descriptor sets and draw
+	cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout,
+		static_cast<uint32_t>(DescriptorSetIndex::Material),
+		{materialSet, perDrawSet}, {});
+
+	cmd.draw(3, 1, 0, 0);
+	cmd.endRenderPass();
+
+	// Scene color is now in eColorAttachmentOptimal (fog render pass finalLayout)
+
+	m_memoryManager->unmapMemory(m_bloomUBOAlloc);
+	m_bloomUBOMapped = nullptr;
 }
 
 // No-op: In OpenGL, begin/end push/pop an FBO and run the post-processing

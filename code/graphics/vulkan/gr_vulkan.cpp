@@ -24,12 +24,17 @@
 #include "graphics/grinternal.h"
 #include "graphics/shadows.h"
 #include "lighting/lighting.h"
+#include "mission/missionparse.h"
+#include "nebula/neb.h"
+#include "nebula/volumetrics.h"
 #include "pngutils/pngutils.h"
 
 namespace graphics {
 namespace vulkan {
 
 namespace {
+
+static bool s_vulkanOverrideFog = false;
 
 std::unique_ptr<VulkanRenderer> renderer_instance;
 
@@ -601,8 +606,32 @@ void vulkan_deferred_lighting_finish()
 	// After this, composite is in eShaderReadOnlyOptimal
 	pp->renderDeferredLights(cmd);
 
-	// 4. Copy composite → scene color (the lit result becomes the scene color for forward rendering)
-	{
+	// 4. Fog rendering (between light accumulation and forward rendering)
+	// Matches OpenGL flow in opengl_deferred_lighting_finish()
+	bool bDrawFullNeb = The_mission.flags[Mission::Mission_Flags::Fullneb]
+		&& Neb2_render_mode != NEB2_RENDER_NONE && !s_vulkanOverrideFog;
+	bool bDrawNebVolumetrics = The_mission.volumetrics
+		&& The_mission.volumetrics->get_enabled() && !s_vulkanOverrideFog;
+
+	bool fogRendered = false;
+	if (bDrawFullNeb) {
+		// Scene fog reads composite + depth → writes scene color
+		pp->renderSceneFog(cmd);
+		fogRendered = true;
+
+		if (bDrawNebVolumetrics) {
+			// Copy scene color → composite so volumetric reads the fogged result
+			pp->copySceneColorToComposite(cmd);
+		}
+	}
+	if (bDrawNebVolumetrics) {
+		// Volumetric fog reads composite + emissive + depth + 3D volumes → writes scene color
+		pp->renderVolumetricFog(cmd);
+		fogRendered = true;
+	}
+
+	if (!fogRendered) {
+		// No fog — copy composite → scene color (existing behavior)
 		auto extent = pp->getSceneExtent();
 
 		// Transition composite: eShaderReadOnlyOptimal → eTransferSrcOptimal
@@ -644,7 +673,7 @@ void vulkan_deferred_lighting_finish()
 			pp->getSceneColorImage(), vk::ImageLayout::eTransferDstOptimal,
 			region);
 
-		// Transition scene color: eTransferDstOptimal → eColorAttachmentOptimal (for scene render pass resume)
+		// Transition scene color: eTransferDstOptimal → eColorAttachmentOptimal
 		vk::ImageMemoryBarrier sceneBarrier;
 		sceneBarrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
 		sceneBarrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
@@ -688,7 +717,10 @@ void vulkan_deferred_lighting_finish()
 }
 
 void stub_dump_envmap(const char* /*filename*/) {}
-void stub_override_fog(bool /*set_override*/) {}
+
+void vulkan_override_fog(bool set_override) {
+	s_vulkanOverrideFog = set_override;
+}
 
 } // close anonymous namespace temporarily for shadow externs
 
@@ -1237,7 +1269,7 @@ void init_function_pointers()
 
 	gr_screen.gf_calculate_irrmap = vulkan_calculate_irrmap;
 	gr_screen.gf_dump_envmap = stub_dump_envmap;
-	gr_screen.gf_override_fog = stub_override_fog;
+	gr_screen.gf_override_fog = vulkan_override_fog;
 
 	gr_screen.gf_imgui_new_frame = vulkan_imgui_new_frame;
 	gr_screen.gf_imgui_render_draw_data = vulkan_imgui_render_draw_data;

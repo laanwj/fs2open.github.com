@@ -366,6 +366,42 @@ public:
 	 */
 	vk::Sampler getShadowSampler() const { return m_linearSampler; }
 
+	// ========== Fog / Volumetric Nebula ==========
+
+	/**
+	 * @brief Render scene fog into scene color
+	 *
+	 * Reads composite (lit result) + depth copy -> writes scene color.
+	 * Must be called outside a render pass. After return, scene color
+	 * is in eColorAttachmentOptimal.
+	 *
+	 * @param cmd Active command buffer (must be outside a render pass)
+	 */
+	void renderSceneFog(vk::CommandBuffer cmd);
+
+	/**
+	 * @brief Render volumetric nebula fog into scene color
+	 *
+	 * Reads composite + mipmapped emissive + depth copy + 3D volume textures
+	 * -> writes scene color. Must be called outside a render pass.
+	 * After return, scene color is in eColorAttachmentOptimal.
+	 *
+	 * @param cmd Active command buffer (must be outside a render pass)
+	 */
+	void renderVolumetricFog(vk::CommandBuffer cmd);
+
+	/**
+	 * @brief Copy scene color to composite buffer (reverse of normal flow)
+	 *
+	 * Used between scene fog and volumetric fog so volumetric can read
+	 * the fogged result from composite.
+	 * After return, composite is in eShaderReadOnlyOptimal,
+	 * scene color is in eColorAttachmentOptimal.
+	 *
+	 * @param cmd Active command buffer (must be outside a render pass)
+	 */
+	void copySceneColorToComposite(vk::CommandBuffer cmd);
+
 private:
 	void updateTonemappingUBO();
 
@@ -512,6 +548,19 @@ private:
 	vk::Framebuffer m_shadowFramebuffer;
 	int m_shadowTextureSize = 0;
 	bool m_shadowInitialized = false;
+
+	// ---- Fog resources ----
+	vk::RenderPass m_fogRenderPass;           // Color-only RGBA16F, loadOp=eDontCare, finalLayout=eColorAttachmentOptimal
+	vk::Framebuffer m_fogFramebuffer;         // Scene color as color attachment
+	bool m_fogInitialized = false;
+	bool initFogPass();
+	void shutdownFogPass();
+
+	// Mipmapped emissive copy for volumetric fog LOD sampling
+	RenderTarget m_emissiveMipmapped;         // RGBA16F with full mip chain
+	uint32_t m_emissiveMipLevels = 0;
+	vk::ImageView m_emissiveMipmappedFullView;  // View with all mip levels
+	bool m_emissiveMipmappedInitialized = false;
 
 	// ---- Distortion ping-pong textures (32x32 RGBA8) ----
 	RenderTarget m_distortionTex[2];

@@ -334,7 +334,8 @@ struct volumetric_fog_data {
 	
 	float aspect;
 	float fov;
-	float pad[2];
+	int doEdgeSmoothing;
+	int useNoise;
 };
 
 struct msaa_data {

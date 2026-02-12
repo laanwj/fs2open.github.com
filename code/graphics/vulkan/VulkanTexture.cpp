@@ -45,6 +45,8 @@ void tcache_slot_vulkan::reset()
 	framebufferView = nullptr;
 	renderPass = nullptr;
 	isRenderTarget = false;
+	is3D = false;
+	depth = 1;
 	isCubemap = false;
 	for (auto& v : cubeFaceViews) v = nullptr;
 	for (auto& fb : cubeFaceFramebuffers) fb = nullptr;
@@ -253,6 +255,67 @@ bool VulkanTextureManager::init(vk::Device device, vk::PhysicalDevice physicalDe
 
 	mprintf(("Created fallback cubemap\n"));
 
+	// Create fallback 1x1x1 white 3D texture for unbound sampler3D slots
+	if (!createImage(1, 1, 1, vk::Format::eR8G8B8A8Unorm, vk::ImageTiling::eOptimal,
+	                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+	                 MemoryUsage::GpuOnly, m_fallback3DTexture, m_fallback3DAllocation,
+	                 1, false, 1)) {
+		mprintf(("Failed to create fallback 3D texture!\n"));
+		return false;
+	}
+
+	m_fallback3DView = createImageView(m_fallback3DTexture, vk::Format::eR8G8B8A8Unorm,
+	                                    vk::ImageAspectFlagBits::eColor, 1, ImageViewType::Volume3D);
+	if (!m_fallback3DView) {
+		mprintf(("Failed to create fallback 3D texture view!\n"));
+		return false;
+	}
+
+	// Upload white pixel to fallback 3D texture
+	{
+		uint32_t whitePixel = 0xFFFFFFFF;
+		vk::DeviceSize bufSize3D = 4;
+
+		vk::BufferCreateInfo bufInfo3D;
+		bufInfo3D.size = bufSize3D;
+		bufInfo3D.usage = vk::BufferUsageFlagBits::eTransferSrc;
+		bufInfo3D.sharingMode = vk::SharingMode::eExclusive;
+
+		vk::Buffer stagingBuf3D = m_device.createBuffer(bufInfo3D);
+		VulkanAllocation stagingAlloc3D;
+		m_memoryManager->allocateBufferMemory(stagingBuf3D, MemoryUsage::CpuToGpu, stagingAlloc3D);
+
+		void* mapped3D = m_device.mapMemory(stagingAlloc3D.memory, stagingAlloc3D.offset, bufSize3D);
+		memcpy(mapped3D, &whitePixel, sizeof(whitePixel));
+		m_device.unmapMemory(stagingAlloc3D.memory);
+
+		transitionImageLayout(m_fallback3DTexture, vk::Format::eR8G8B8A8Unorm,
+		                      vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, 1);
+
+		// Copy buffer to 3D image (extent depth=1 for 1x1x1)
+		vk::CommandBuffer cmd3D = beginSingleTimeCommands();
+		vk::BufferImageCopy region3D;
+		region3D.bufferOffset = 0;
+		region3D.bufferRowLength = 0;
+		region3D.bufferImageHeight = 0;
+		region3D.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+		region3D.imageSubresource.mipLevel = 0;
+		region3D.imageSubresource.baseArrayLayer = 0;
+		region3D.imageSubresource.layerCount = 1;
+		region3D.imageOffset = vk::Offset3D(0, 0, 0);
+		region3D.imageExtent = vk::Extent3D(1, 1, 1);
+		cmd3D.copyBufferToImage(stagingBuf3D, m_fallback3DTexture, vk::ImageLayout::eTransferDstOptimal, region3D);
+		endSingleTimeCommands(cmd3D);
+
+		transitionImageLayout(m_fallback3DTexture, vk::Format::eR8G8B8A8Unorm,
+		                      vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, 1);
+
+		m_device.destroyBuffer(stagingBuf3D);
+		m_memoryManager->freeAllocation(stagingAlloc3D);
+	}
+
+	mprintf(("Created fallback 3D texture\n"));
+
 	m_initialized = true;
 	return true;
 }
@@ -261,6 +324,19 @@ void VulkanTextureManager::shutdown()
 {
 	if (!m_initialized) {
 		return;
+	}
+
+	// Destroy fallback 3D texture
+	if (m_fallback3DView) {
+		m_device.destroyImageView(m_fallback3DView);
+		m_fallback3DView = nullptr;
+	}
+	if (m_fallback3DTexture) {
+		m_device.destroyImage(m_fallback3DTexture);
+		m_fallback3DTexture = nullptr;
+	}
+	if (m_fallback3DAllocation.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_fallback3DAllocation);
 	}
 
 	// Destroy fallback cubemap
@@ -959,6 +1035,152 @@ bool VulkanTextureManager::uploadCubemap(int handle, bitmap* bm, int compType)
 	return true;
 }
 
+bool VulkanTextureManager::upload3DTexture(int handle, bitmap* bm, int texDepth)
+{
+	auto* slot = bm_get_slot(handle, true);
+	if (!slot) {
+		return false;
+	}
+
+	if (!slot->gr_info) {
+		bm_init(slot);
+	}
+
+	auto* ts = static_cast<tcache_slot_vulkan*>(slot->gr_info);
+
+	uint32_t width = static_cast<uint32_t>(bm->w);
+	uint32_t height = static_cast<uint32_t>(bm->h);
+	uint32_t depth3D = static_cast<uint32_t>(texDepth);
+
+	// 3D textures are always 32bpp RGBA uncompressed, single mip
+	vk::Format format = vk::Format::eR8G8B8A8Unorm;
+	size_t dataSize = width * height * depth3D * 4;
+
+	// Defer destruction of existing resources
+	if (ts->image) {
+		auto* deletionQueue = getDeletionQueue();
+		if (ts->imageView) {
+			deletionQueue->queueImageView(ts->imageView);
+			ts->imageView = nullptr;
+		}
+		deletionQueue->queueImage(ts->image, ts->allocation);
+		ts->image = nullptr;
+		ts->allocation = VulkanAllocation{};
+	}
+
+	// Create 3D image
+	if (!createImage(width, height, 1, format, vk::ImageTiling::eOptimal,
+	                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+	                 MemoryUsage::GpuOnly, ts->image, ts->allocation,
+	                 1, false, depth3D)) {
+		mprintf(("Failed to create 3D texture image!\n"));
+		return false;
+	}
+
+	// Create 3D image view
+	ts->imageView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, 1, ImageViewType::Volume3D);
+	if (!ts->imageView) {
+		mprintf(("Failed to create 3D texture image view!\n"));
+		m_device.destroyImage(ts->image);
+		ts->image = nullptr;
+		m_memoryManager->freeAllocation(ts->allocation);
+		return false;
+	}
+
+	// Create staging buffer
+	vk::BufferCreateInfo bufferInfo;
+	bufferInfo.size = dataSize;
+	bufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+	vk::Buffer stagingBuffer;
+	VulkanAllocation stagingAllocation;
+
+	try {
+		stagingBuffer = m_device.createBuffer(bufferInfo);
+	} catch (const vk::SystemError& e) {
+		mprintf(("Failed to create staging buffer for 3D texture: %s\n", e.what()));
+		return false;
+	}
+
+	if (!m_memoryManager->allocateBufferMemory(stagingBuffer, MemoryUsage::CpuOnly, stagingAllocation)) {
+		m_device.destroyBuffer(stagingBuffer);
+		return false;
+	}
+
+	// Copy data to staging buffer
+	void* mapped = m_memoryManager->mapMemory(stagingAllocation);
+	if (mapped) {
+		memcpy(mapped, reinterpret_cast<const void*>(bm->data), dataSize);
+		m_memoryManager->flushMemory(stagingAllocation, 0, dataSize);
+		m_memoryManager->unmapMemory(stagingAllocation);
+	}
+
+	// Record transitions + copy and submit
+	vk::CommandBuffer cmd = beginSingleTimeCommands();
+
+	// Transition: eUndefined → eTransferDstOptimal
+	vk::ImageMemoryBarrier barrier;
+	barrier.srcAccessMask = {};
+	barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+	barrier.oldLayout = vk::ImageLayout::eUndefined;
+	barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
+	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.image = ts->image;
+	barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+	cmd.pipelineBarrier(
+		vk::PipelineStageFlagBits::eTopOfPipe,
+		vk::PipelineStageFlagBits::eTransfer,
+		{}, nullptr, nullptr, barrier);
+
+	// Copy buffer to 3D image
+	vk::BufferImageCopy region;
+	region.bufferOffset = 0;
+	region.bufferRowLength = 0;
+	region.bufferImageHeight = 0;
+	region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+	region.imageSubresource.mipLevel = 0;
+	region.imageSubresource.baseArrayLayer = 0;
+	region.imageSubresource.layerCount = 1;
+	region.imageOffset = vk::Offset3D(0, 0, 0);
+	region.imageExtent = vk::Extent3D(width, height, depth3D);
+
+	cmd.copyBufferToImage(stagingBuffer, ts->image, vk::ImageLayout::eTransferDstOptimal, region);
+
+	// Transition: eTransferDstOptimal → eShaderReadOnlyOptimal
+	barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+	barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+	barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+	barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+	cmd.pipelineBarrier(
+		vk::PipelineStageFlagBits::eTransfer,
+		vk::PipelineStageFlagBits::eFragmentShader,
+		{}, nullptr, nullptr, barrier);
+
+	submitUploadAsync(cmd, stagingBuffer, stagingAllocation);
+
+	// Update slot info
+	ts->width = width;
+	ts->height = height;
+	ts->depth = depth3D;
+	ts->is3D = true;
+	ts->format = format;
+	ts->mipLevels = 1;
+	ts->bpp = 32;
+	ts->bitmapHandle = handle;
+	ts->currentLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+	ts->used = true;
+	ts->uScale = 1.0f;
+	ts->vScale = 1.0f;
+
+	mprintf(("VulkanTexture: 3D texture uploaded: %ux%ux%u, format=%d\n",
+		width, height, depth3D, static_cast<int>(format)));
+	return true;
+}
+
 bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 {
 	static int callCount = 0;
@@ -1028,6 +1250,11 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 
 	if (isCubemapUpload) {
 		return uploadCubemap(handle, bm, compType);
+	}
+
+	// Detect 3D textures (volumetric data)
+	if (bm->d > 1) {
+		return upload3DTexture(handle, bm, bm->d);
 	}
 
 	auto* slot = bm_get_slot(handle, true);
@@ -1671,6 +1898,11 @@ vk::ImageView VulkanTextureManager::getFallbackCubeView()
 	return m_fallbackCubeView;
 }
 
+vk::ImageView VulkanTextureManager::getFallback3DView()
+{
+	return m_fallback3DView;
+}
+
 tcache_slot_vulkan* VulkanTextureManager::getTextureSlot(int handle)
 {
 	auto* slot = bm_get_slot(handle, true);
@@ -1935,13 +2167,14 @@ bool VulkanTextureManager::createImage(uint32_t width, uint32_t height, uint32_t
                                         vk::Format format, vk::ImageTiling tiling,
                                         vk::ImageUsageFlags usage, MemoryUsage memUsage,
                                         vk::Image& image, VulkanAllocation& allocation,
-                                        uint32_t arrayLayers, bool cubemap)
+                                        uint32_t arrayLayers, bool cubemap,
+                                        uint32_t imageDepth)
 {
 	vk::ImageCreateInfo imageInfo;
-	imageInfo.imageType = vk::ImageType::e2D;
+	imageInfo.imageType = (imageDepth > 1) ? vk::ImageType::e3D : vk::ImageType::e2D;
 	imageInfo.extent.width = width;
 	imageInfo.extent.height = height;
-	imageInfo.extent.depth = 1;
+	imageInfo.extent.depth = imageDepth;
 	imageInfo.mipLevels = mipLevels;
 	imageInfo.arrayLayers = arrayLayers;
 	imageInfo.format = format;
@@ -1987,6 +2220,9 @@ vk::ImageView VulkanTextureManager::createImageView(vk::Image image, vk::Format 
 		break;
 	case ImageViewType::Array2D:
 		viewInfo.viewType = vk::ImageViewType::e2DArray;
+		break;
+	case ImageViewType::Volume3D:
+		viewInfo.viewType = vk::ImageViewType::e3D;
 		break;
 	case ImageViewType::Plain2D:
 	default:
