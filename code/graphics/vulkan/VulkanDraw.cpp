@@ -703,10 +703,13 @@ void VulkanDrawManager::renderModel(model_material* material_info, indexed_verte
 	// Flush any dirty dynamic state before draw
 	stateTracker->applyDynamicState();
 
+	// Shadow map rendering uses 4 instances (one per cascade), routed via gl_InstanceIndex → gl_Layer
+	uint32_t instanceCount = Rendering_to_shadow_map ? 4 : 1;
+
 	auto cmdBuffer = stateTracker->getCommandBuffer();
 	cmdBuffer.drawIndexed(
 		static_cast<uint32_t>(datap->n_verts),  // index count
-		1,                                       // instance count
+		instanceCount,                           // instance count
 		firstIndex,                              // first index
 		baseVertex,                              // vertex offset
 		0                                        // first instance
@@ -887,9 +890,14 @@ PipelineConfig VulkanDrawManager::buildPipelineConfig(material* mat, primitive_t
 	// Cull mode
 	config.cullEnabled = mat->get_cull_mode();
 
+	// Override shader for shadow map rendering
+	if (Rendering_to_shadow_map && config.shaderType == SDR_TYPE_MODEL) {
+		config.shaderType = SDR_TYPE_SHADOW_MAP;
+	}
+
 	// Front face winding: match OpenGL which defaults to CCW and only switches to CW
 	// for model rendering (opengl_tnl_set_model_material sets GL_CW).
-	config.frontFaceCW = (config.shaderType == SDR_TYPE_MODEL);
+	config.frontFaceCW = (config.shaderType == SDR_TYPE_MODEL || config.shaderType == SDR_TYPE_SHADOW_MAP);
 
 	// Depth write
 	config.depthWriteEnabled = (config.depthMode == ZBUFFER_TYPE_FULL ||

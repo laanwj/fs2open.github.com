@@ -22,6 +22,7 @@
 #include "graphics/material.h"
 #include "graphics/post_processing.h"
 #include "graphics/grinternal.h"
+#include "graphics/shadows.h"
 #include "lighting/lighting.h"
 #include "pngutils/pngutils.h"
 
@@ -73,8 +74,8 @@ bool vulkan_is_capable(gr_capability capability)
 	case gr_capability::CAPABILITY_DEFERRED_LIGHTING:
 		return light_deferred_enabled();
 	case gr_capability::CAPABILITY_SHADOWS:
+		return getRendererInstance()->supportsShaderViewportLayerOutput();
 	case gr_capability::CAPABILITY_THICK_OUTLINE:
-		// Requires geometry shaders / shadow map pipeline (not yet implemented)
 		return false;
 	case gr_capability::CAPABILITY_BATCHED_SUBMODELS:
 		return true;
@@ -694,8 +695,175 @@ void vulkan_deferred_lighting_finish()
 void stub_calculate_irrmap() {}
 void stub_dump_envmap(const char* /*filename*/) {}
 void stub_override_fog(bool /*set_override*/) {}
-void stub_shadow_map_start(matrix4* /*shadow_view_matrix*/, const matrix* /*light_matrix*/, vec3d* /*eye_pos*/) {}
-void stub_shadow_map_end() {}
+
+} // close anonymous namespace temporarily for shadow externs
+
+} // close namespace vulkan
+} // close namespace graphics
+
+extern bool Glowpoint_override;
+extern bool gr_htl_projection_matrix_set;
+
+namespace graphics {
+namespace vulkan {
+
+namespace {
+
+// Saved state for shadow map rendering
+static bool Glowpoint_override_save = false;
+
+void vulkan_shadow_map_start(matrix4* shadow_view_matrix, const matrix* light_matrix, vec3d* eye_pos)
+{
+	if (Shadow_quality == ShadowQuality::Disabled || !getRendererInstance()->supportsShaderViewportLayerOutput()) {
+		return;
+	}
+
+	auto* pp = getPostProcessor();
+	if (!pp) {
+		return;
+	}
+
+	// Lazy-init shadow resources
+	if (!pp->isShadowInitialized()) {
+		if (!pp->initShadowPass()) {
+			return;
+		}
+	}
+
+	auto* stateTracker = getStateTracker();
+	vk::CommandBuffer cmd = stateTracker->getCommandBuffer();
+
+	// End the current G-buffer render pass
+	cmd.endRenderPass();
+
+	// Begin shadow render pass (eClear for both color and depth)
+	{
+		int shadowSize = pp->getShadowTextureSize();
+		vk::RenderPassBeginInfo rpBegin;
+		rpBegin.renderPass = pp->getShadowRenderPass();
+		rpBegin.framebuffer = pp->getShadowFramebuffer();
+		rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+		rpBegin.renderArea.extent = vk::Extent2D(static_cast<uint32_t>(shadowSize), static_cast<uint32_t>(shadowSize));
+
+		std::array<vk::ClearValue, 2> clearValues;
+		clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+		clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+
+		cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		stateTracker->setRenderPass(pp->getShadowRenderPass(), 0);
+		stateTracker->setColorAttachmentCount(1);
+	}
+
+	// Set viewport and scissor to shadow texture size
+	{
+		int shadowSize = pp->getShadowTextureSize();
+		vk::Viewport viewport;
+		viewport.x = 0.0f;
+		viewport.y = 0.0f;
+		viewport.width = static_cast<float>(shadowSize);
+		viewport.height = static_cast<float>(shadowSize);
+		viewport.minDepth = 0.0f;
+		viewport.maxDepth = 1.0f;
+		cmd.setViewport(0, viewport);
+
+		vk::Rect2D scissor;
+		scissor.offset = vk::Offset2D(0, 0);
+		scissor.extent = vk::Extent2D(static_cast<uint32_t>(shadowSize), static_cast<uint32_t>(shadowSize));
+		cmd.setScissor(0, scissor);
+	}
+
+	Rendering_to_shadow_map = true;
+	Glowpoint_override_save = Glowpoint_override;
+	Glowpoint_override = true;
+
+	gr_htl_projection_matrix_set = true;
+
+	gr_set_view_matrix(eye_pos, light_matrix);
+
+	*shadow_view_matrix = gr_view_matrix;
+}
+
+void vulkan_shadow_map_end()
+{
+	if (!Rendering_to_shadow_map) {
+		return;
+	}
+
+	auto* pp = getPostProcessor();
+	auto* stateTracker = getStateTracker();
+	vk::CommandBuffer cmd = stateTracker->getCommandBuffer();
+
+	gr_end_view_matrix();
+	Rendering_to_shadow_map = false;
+
+	gr_zbuffer_set(ZBUFFER_TYPE_FULL);
+
+	Glowpoint_override = Glowpoint_override_save;
+	gr_htl_projection_matrix_set = false;
+
+	// End shadow render pass (color transitions to eShaderReadOnlyOptimal via finalLayout)
+	cmd.endRenderPass();
+
+	// Transition scene color: eShaderReadOnlyOptimal → eColorAttachmentOptimal
+	// (Scene color was in eShaderReadOnlyOptimal from ending G-buffer pass before shadow start)
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = pp->getSceneColorImage();
+		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTopOfPipe,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			{}, nullptr, nullptr, barrier);
+	}
+
+	// Transition G-buffer attachments 1-5 for resume
+	pp->transitionGbufForResume(cmd);
+
+	// Resume G-buffer render pass with eLoad
+	{
+		auto extent = pp->getSceneExtent();
+		vk::RenderPassBeginInfo rpBegin;
+		rpBegin.renderPass = pp->getGbufRenderPassLoad();
+		rpBegin.framebuffer = pp->getGbufFramebuffer();
+		rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+		rpBegin.renderArea.extent = extent;
+
+		std::array<vk::ClearValue, 7> clearValues{};
+		clearValues[6].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+
+		cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		stateTracker->setRenderPass(pp->getGbufRenderPassLoad(), 0);
+		stateTracker->setColorAttachmentCount(VulkanPostProcessor::GBUF_COLOR_ATTACHMENT_COUNT);
+	}
+
+	// Restore viewport and scissor to scene size
+	{
+		vk::Viewport viewport;
+		viewport.x = static_cast<float>(gr_screen.offset_x);
+		viewport.y = static_cast<float>(gr_screen.offset_y);
+		viewport.width = static_cast<float>(gr_screen.clip_width);
+		viewport.height = static_cast<float>(gr_screen.clip_height);
+		viewport.minDepth = 0.0f;
+		viewport.maxDepth = 1.0f;
+		cmd.setViewport(0, viewport);
+
+		vk::Rect2D scissor;
+		scissor.offset = vk::Offset2D(gr_screen.offset_x, gr_screen.offset_y);
+		scissor.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.clip_width), static_cast<uint32_t>(gr_screen.clip_height));
+		cmd.setScissor(0, scissor);
+	}
+}
 void stub_start_decal_pass() {}
 void stub_stop_decal_pass() {}
 void stub_render_decals(decal_material* /*material_info*/,
@@ -805,8 +973,8 @@ void init_function_pointers()
 
 	gr_screen.gf_sphere = vulkan_draw_sphere;
 
-	gr_screen.gf_shadow_map_start = stub_shadow_map_start;
-	gr_screen.gf_shadow_map_end = stub_shadow_map_end;
+	gr_screen.gf_shadow_map_start = vulkan_shadow_map_start;
+	gr_screen.gf_shadow_map_end = vulkan_shadow_map_end;
 
 	gr_screen.gf_start_decal_pass = stub_start_decal_pass;
 	gr_screen.gf_stop_decal_pass = stub_stop_decal_pass;

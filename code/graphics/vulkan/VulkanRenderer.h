@@ -133,6 +133,11 @@ class VulkanRenderer {
 	bool isTextureCompressionBCSupported() const;
 
 	/**
+	 * @brief Check if vertex shader layer output is supported (for shadow cascades)
+	 */
+	bool supportsShaderViewportLayerOutput() const { return m_supportsShaderViewportLayerOutput; }
+
+	/**
 	 * @brief Switch from swap chain pass to HDR scene pass
 	 *
 	 * Called by vulkan_scene_texture_begin(). Ends the current swap chain
@@ -292,6 +297,8 @@ class VulkanRenderer {
 	bool m_sceneRendering = false;
 	bool m_sceneDepthCopiedThisFrame = false;
 	bool m_useGbufRenderPass = false;  // True when scene uses G-buffer (deferred lighting)
+
+	bool m_supportsShaderViewportLayerOutput = false;  // VK_EXT_shader_viewport_index_layer
 
 #if SDL_SUPPORTS_VULKAN
 	bool m_debugReportEnabled = false;

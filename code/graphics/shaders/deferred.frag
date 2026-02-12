@@ -50,10 +50,124 @@ layout(set = 0, binding = 1, std140) uniform globalDeferredData {
 	float globalPad;
 };
 
+layout(set = 0, binding = 2) uniform sampler2DArray shadowMap;
+
 layout(set = 2, binding = 1, std140) uniform matrixData {
 	mat4 modelViewMatrix;
 	mat4 projMatrix;
 };
+
+// ===== Variance Shadow Mapping (ported from shadows.sdr) =====
+
+const float VARIANCE_SHADOW_SCALE = 1000000.0;
+
+vec2 sampleShadowMap(vec2 uv, vec2 offset_uv, int cascade, float shadowMapSizeInv)
+{
+	return texture(shadowMap, vec3(uv + offset_uv * shadowMapSizeInv, float(cascade))).xy;
+}
+
+float computeShadowFactor(float shadowDepth, vec2 moments, float bias)
+{
+	float shadow = 1.0;
+	if((moments.x - bias) > shadowDepth)
+	{
+		float variance = moments.y * VARIANCE_SHADOW_SCALE - moments.x * moments.x;
+		float mD = moments.x - bias - shadowDepth;
+		shadow = variance / (variance + mD * mD);
+		shadow = clamp(shadow, 0.0, 1.0);
+	}
+	return shadow;
+}
+
+float samplePoissonPCF(float shadowDepth, int cascade, vec4 shadowUV[4], bool use_simple_pass)
+{
+	if(cascade > 3 || cascade < 0) return 1.0;
+
+	vec2 poissonDisc[16] = vec2[](
+		vec2(-0.76275, -0.3432573),
+		vec2(-0.5226235, -0.8277544),
+		vec2(-0.3780261, 0.01528688),
+		vec2(-0.7742821, 0.4245702),
+		vec2(0.04196143, -0.02622231),
+		vec2(-0.2974772, -0.4722782),
+		vec2(-0.516093, 0.71495),
+		vec2(-0.3257416, 0.3910343),
+		vec2(0.2705966, 0.6670476),
+		vec2(0.4918377, 0.1853267),
+		vec2(0.4428544, -0.6251478),
+		vec2(-0.09204347, 0.9267113),
+		vec2(0.391505, -0.2558275),
+		vec2(0.05605913, -0.7570801),
+		vec2(0.81772, -0.02475523),
+		vec2(0.6890262, 0.5191521)
+	);
+
+	float maxUVOffset[4];
+	maxUVOffset[0] = 1.0/300.0;
+	maxUVOffset[1] = 1.0/250.0;
+	maxUVOffset[2] = 1.0/200.0;
+	maxUVOffset[3] = 1.0/200.0;
+
+	if (use_simple_pass) {
+		float visibility = 1.0f;
+		for (int i=0; i<16; i++) {
+			vec2 shadow_sample = sampleShadowMap(shadowUV[cascade].xy, poissonDisc[i], cascade, maxUVOffset[cascade]);
+			if( ((shadow_sample.x - 0.002f) > shadowDepth) ) {
+				visibility -= (1.0f/16.0f);
+			}
+		}
+		return visibility;
+	} else {
+		vec2 sum = vec2(0.0f);
+		for (int i=0; i<16; i++) {
+			sum += sampleShadowMap(shadowUV[cascade].xy, poissonDisc[i], cascade, maxUVOffset[cascade]);
+		}
+		return computeShadowFactor(shadowDepth, sum*(1.0f/16.0f), 0.1f);
+	}
+}
+
+float getShadowValue(float depth, float shadowDepth, vec4 shadowUV[4])
+{
+	int cascade = 4;
+	cascade -= int(step(depth, fardist));
+	cascade -= int(step(depth, middist));
+	cascade -= int(step(depth, neardist));
+	cascade -= int(step(depth, veryneardist));
+	float cascade_start_dist[5];
+	cascade_start_dist[0] = 0.0;
+	cascade_start_dist[1] = veryneardist;
+	cascade_start_dist[2] = neardist;
+	cascade_start_dist[3] = middist;
+	cascade_start_dist[4] = fardist;
+	if(cascade > 3 || cascade < 0) return 1.0;
+
+	bool use_simple_pass;
+	if (fardist < 50.0f) {
+		use_simple_pass = true;
+	} else {
+		use_simple_pass = false;
+	}
+
+	float dist_threshold = (cascade_start_dist[cascade+1] - cascade_start_dist[cascade])*0.2;
+	if(cascade_start_dist[cascade+1] - dist_threshold > depth)
+		return samplePoissonPCF(shadowDepth, cascade, shadowUV, use_simple_pass);
+	return mix(samplePoissonPCF(shadowDepth, cascade, shadowUV, use_simple_pass),
+		samplePoissonPCF(shadowDepth, cascade+1, shadowUV, use_simple_pass),
+		smoothstep(cascade_start_dist[cascade+1] - dist_threshold, cascade_start_dist[cascade+1], depth));
+}
+
+vec4 transformToShadowMap(mat4 proj, int i, vec4 pos)
+{
+	vec4 shadow_proj = proj * pos;
+	// Vulkan shadow projection maps to [0,1] depth, but XY is still [-1,1]
+	// Transform XY from [-1,1] to [0,1]
+	shadow_proj.xy = shadow_proj.xy * 0.5 + 0.5;
+	shadow_proj.w = shadow_proj.z;  // depth for shadow comparison
+	shadow_proj.z = float(i);       // cascade index for array layer
+	return shadow_proj;
+}
+
+// ===== Light calculations =====
 
 // Nearest point sphere and tube light calculations taken from
 // "Real Shading in Unreal Engine 4" by Brian Karis, Epic Games
@@ -173,6 +287,17 @@ void main()
 		float attenuation;
 		float area_normalisation;
 		GetLightInfo(position, alpha, reflectDir, lightDirCalc, attenuation, area_normalisation);
+
+		// Shadow attenuation for directional lights
+		if (enable_shadows != 0 && lightType == LT_DIRECTIONAL) {
+			vec4 fragShadowPos = shadow_mv_matrix * inv_view_matrix * vec4(position, 1.0);
+			vec4 fragShadowUV[4];
+			for (int i = 0; i < 4; i++) {
+				fragShadowUV[i] = transformToShadowMap(shadow_proj_matrix[i], i, fragShadowPos);
+			}
+			float shadowVal = getShadowValue(-position.z, fragShadowPos.z, fragShadowUV);
+			attenuation *= shadowVal;
+		}
 
 		vec3 halfVec = normalize(lightDirCalc + eyeDir);
 		float NdotL = clamp(dot(normal, lightDirCalc), 0.0, 1.0);

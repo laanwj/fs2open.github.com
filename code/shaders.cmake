@@ -35,6 +35,8 @@ set(SHADERS
 	${SHADER_DIR}/effect-distort.frag
 	${SHADER_DIR}/deferred.vert
 	${SHADER_DIR}/deferred.frag
+	${SHADER_DIR}/shadow.vert
+	${SHADER_DIR}/shadow.frag
 )
 
 # Shaders that have complex uniform blocks with vec3 members that cause struct generation issues
@@ -58,6 +60,8 @@ set(SHADERS_SKIP_STRUCT_GEN
 	${SHADER_DIR}/effect-distort.frag
 	${SHADER_DIR}/deferred.vert
 	${SHADER_DIR}/deferred.frag
+	${SHADER_DIR}/shadow.vert
+	${SHADER_DIR}/shadow.frag
 )
 
 target_sources(code PRIVATE ${SHADERS})

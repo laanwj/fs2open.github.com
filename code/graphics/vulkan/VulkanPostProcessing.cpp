@@ -14,6 +14,7 @@
 #include "graphics/grinternal.h"
 #include "graphics/light.h"
 #include "graphics/matrix.h"
+#include "graphics/shadows.h"
 #include "graphics/2d.h"
 #include "io/timer.h"
 #include "lighting/lighting_profiles.h"
@@ -456,6 +457,7 @@ void VulkanPostProcessor::shutdown()
 	if (m_device) {
 		m_device.waitIdle();
 
+		shutdownShadowPass();
 		shutdownLightVolumes();
 		shutdownGBuffer();
 		shutdownLDRTargets();
@@ -1306,6 +1308,18 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 		header->invScreenWidth = 1.0f / gr_screen.max_w;
 		header->invScreenHeight = 1.0f / gr_screen.max_h;
 		header->nearPlane = gr_near_plane;
+
+		if (m_shadowInitialized && Shadow_quality != ShadowQuality::Disabled) {
+			header->shadow_mv_matrix = Shadow_view_matrix_light;
+			for (size_t i = 0; i < MAX_SHADOW_CASCADES; ++i) {
+				header->shadow_proj_matrix[i] = Shadow_proj_matrix[i];
+			}
+			header->veryneardist = Shadow_cascade_distances[0];
+			header->neardist = Shadow_cascade_distances[1];
+			header->middist = Shadow_cascade_distances[2];
+			header->fardist = Shadow_cascade_distances[3];
+			vm_inverse_matrix4(&header->inv_view_matrix, &Shadow_view_matrix_render);
+		}
 	}
 
 	// Pack per-light data
@@ -1316,6 +1330,10 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 		auto* ld = prepare_light_uniforms(l, uboMapped + lightDataOffset + lightIdx * lightDataSize, lp);
 
 		if (l.type == Light_Type::Directional) {
+			if (m_shadowInitialized && Shadow_quality != ShadowQuality::Disabled) {
+				ld->enable_shadows = first_directional ? 1 : 0;
+			}
+
 			if (first_directional) {
 				first_directional = false;
 			}
@@ -1489,14 +1507,23 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 		globalBufInfo.offset = 0;
 		globalBufInfo.range = sizeof(graphics::deferred_global_data);
 
-		// Shadow map at binding 2 (fallback for now)
-		vk::DescriptorImageInfo shadowFallback;
-		shadowFallback.sampler = defaultSampler;
-		shadowFallback.imageView = fallbackView;
-		shadowFallback.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		// Shadow map at binding 2
+		vk::DescriptorImageInfo shadowTexInfo;
+		if (m_shadowInitialized && m_shadowColor.view) {
+			shadowTexInfo.sampler = m_linearSampler;
+			shadowTexInfo.imageView = m_shadowColor.view;
+			shadowTexInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		} else {
+			shadowTexInfo.sampler = defaultSampler;
+			shadowTexInfo.imageView = fallbackView;
+			shadowTexInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		}
 
 		// Env map at binding 3 (fallback)
-		vk::DescriptorImageInfo envFallback = shadowFallback;
+		vk::DescriptorImageInfo envFallback;
+		envFallback.sampler = defaultSampler;
+		envFallback.imageView = fallbackView;
+		envFallback.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
 		std::array<vk::WriteDescriptorSet, 4> globalWrites;
 		globalWrites[0].dstSet = globalSet;
@@ -1518,7 +1545,7 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 		globalWrites[2].dstArrayElement = 0;
 		globalWrites[2].descriptorCount = 1;
 		globalWrites[2].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-		globalWrites[2].pImageInfo = &shadowFallback;
+		globalWrites[2].pImageInfo = &shadowTexInfo;
 
 		globalWrites[3].dstSet = globalSet;
 		globalWrites[3].dstBinding = 3;
@@ -3655,6 +3682,263 @@ void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 
 	// Draw fullscreen triangle (3 vertices from gl_VertexIndex, no vertex buffer)
 	cmd.draw(3, 1, 0, 0);
+}
+
+// ===== Shadow Map Implementation =====
+
+bool VulkanPostProcessor::initShadowPass()
+{
+	if (m_shadowInitialized) {
+		return true;
+	}
+
+	if (Shadow_quality == ShadowQuality::Disabled) {
+		return false;
+	}
+
+	int size;
+	switch (Shadow_quality) {
+	case ShadowQuality::Low:    size = 512; break;
+	case ShadowQuality::Medium: size = 1024; break;
+	case ShadowQuality::High:   size = 2048; break;
+	case ShadowQuality::Ultra:  size = 4096; break;
+	default:                    size = 512; break;
+	}
+
+	mprintf(("VulkanPostProcessor: Creating %dx%d shadow map (4 cascades)\n", size, size));
+
+	const uint32_t layers = 4;
+
+	// Create shadow color image (RGBA16F, 2D array, 4 layers)
+	{
+		vk::ImageCreateInfo imageInfo;
+		imageInfo.imageType = vk::ImageType::e2D;
+		imageInfo.format = vk::Format::eR16G16B16A16Sfloat;
+		imageInfo.extent = vk::Extent3D(static_cast<uint32_t>(size), static_cast<uint32_t>(size), 1);
+		imageInfo.mipLevels = 1;
+		imageInfo.arrayLayers = layers;
+		imageInfo.samples = vk::SampleCountFlagBits::e1;
+		imageInfo.tiling = vk::ImageTiling::eOptimal;
+		imageInfo.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+		imageInfo.sharingMode = vk::SharingMode::eExclusive;
+		imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+
+		try {
+			m_shadowColor.image = m_device.createImage(imageInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create shadow color image: %s\n", e.what()));
+			return false;
+		}
+
+		if (!m_memoryManager->allocateImageMemory(m_shadowColor.image, MemoryUsage::GpuOnly, m_shadowColor.allocation)) {
+			m_device.destroyImage(m_shadowColor.image);
+			m_shadowColor.image = nullptr;
+			return false;
+		}
+
+		vk::ImageViewCreateInfo viewInfo;
+		viewInfo.image = m_shadowColor.image;
+		viewInfo.viewType = vk::ImageViewType::e2DArray;
+		viewInfo.format = vk::Format::eR16G16B16A16Sfloat;
+		viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		viewInfo.subresourceRange.baseMipLevel = 0;
+		viewInfo.subresourceRange.levelCount = 1;
+		viewInfo.subresourceRange.baseArrayLayer = 0;
+		viewInfo.subresourceRange.layerCount = layers;
+
+		try {
+			m_shadowColor.view = m_device.createImageView(viewInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create shadow color view: %s\n", e.what()));
+			return false;
+		}
+
+		m_shadowColor.format = vk::Format::eR16G16B16A16Sfloat;
+		m_shadowColor.width = static_cast<uint32_t>(size);
+		m_shadowColor.height = static_cast<uint32_t>(size);
+	}
+
+	// Create shadow depth image (D32F, 2D array, 4 layers)
+	{
+		vk::ImageCreateInfo imageInfo;
+		imageInfo.imageType = vk::ImageType::e2D;
+		imageInfo.format = vk::Format::eD32Sfloat;
+		imageInfo.extent = vk::Extent3D(static_cast<uint32_t>(size), static_cast<uint32_t>(size), 1);
+		imageInfo.mipLevels = 1;
+		imageInfo.arrayLayers = layers;
+		imageInfo.samples = vk::SampleCountFlagBits::e1;
+		imageInfo.tiling = vk::ImageTiling::eOptimal;
+		imageInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
+		imageInfo.sharingMode = vk::SharingMode::eExclusive;
+		imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+
+		try {
+			m_shadowDepth.image = m_device.createImage(imageInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create shadow depth image: %s\n", e.what()));
+			return false;
+		}
+
+		if (!m_memoryManager->allocateImageMemory(m_shadowDepth.image, MemoryUsage::GpuOnly, m_shadowDepth.allocation)) {
+			m_device.destroyImage(m_shadowDepth.image);
+			m_shadowDepth.image = nullptr;
+			return false;
+		}
+
+		vk::ImageViewCreateInfo viewInfo;
+		viewInfo.image = m_shadowDepth.image;
+		viewInfo.viewType = vk::ImageViewType::e2DArray;
+		viewInfo.format = vk::Format::eD32Sfloat;
+		viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+		viewInfo.subresourceRange.baseMipLevel = 0;
+		viewInfo.subresourceRange.levelCount = 1;
+		viewInfo.subresourceRange.baseArrayLayer = 0;
+		viewInfo.subresourceRange.layerCount = layers;
+
+		try {
+			m_shadowDepth.view = m_device.createImageView(viewInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create shadow depth view: %s\n", e.what()));
+			return false;
+		}
+
+		m_shadowDepth.format = vk::Format::eD32Sfloat;
+		m_shadowDepth.width = static_cast<uint32_t>(size);
+		m_shadowDepth.height = static_cast<uint32_t>(size);
+	}
+
+	// Create shadow render pass: 1 color (RGBA16F) + 1 depth (D32F), both eClear
+	{
+		std::array<vk::AttachmentDescription, 2> attachments;
+
+		// Color attachment (RGBA16F) — stores VSM depth variance
+		attachments[0].format = vk::Format::eR16G16B16A16Sfloat;
+		attachments[0].samples = vk::SampleCountFlagBits::e1;
+		attachments[0].loadOp = vk::AttachmentLoadOp::eClear;
+		attachments[0].storeOp = vk::AttachmentStoreOp::eStore;
+		attachments[0].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+		attachments[0].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+		attachments[0].initialLayout = vk::ImageLayout::eUndefined;
+		attachments[0].finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+		// Depth attachment (D32F)
+		attachments[1].format = vk::Format::eD32Sfloat;
+		attachments[1].samples = vk::SampleCountFlagBits::e1;
+		attachments[1].loadOp = vk::AttachmentLoadOp::eClear;
+		attachments[1].storeOp = vk::AttachmentStoreOp::eDontCare;
+		attachments[1].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+		attachments[1].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+		attachments[1].initialLayout = vk::ImageLayout::eUndefined;
+		attachments[1].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		vk::AttachmentReference colorRef;
+		colorRef.attachment = 0;
+		colorRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
+		vk::AttachmentReference depthRef;
+		depthRef.attachment = 1;
+		depthRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		vk::SubpassDescription subpass;
+		subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &colorRef;
+		subpass.pDepthStencilAttachment = &depthRef;
+
+		vk::SubpassDependency dep;
+		dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dep.dstSubpass = 0;
+		dep.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+		dep.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+		dep.srcAccessMask = {};
+		dep.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+
+		vk::RenderPassCreateInfo rpInfo;
+		rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+		rpInfo.pAttachments = attachments.data();
+		rpInfo.subpassCount = 1;
+		rpInfo.pSubpasses = &subpass;
+		rpInfo.dependencyCount = 1;
+		rpInfo.pDependencies = &dep;
+
+		try {
+			m_shadowRenderPass = m_device.createRenderPass(rpInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create shadow render pass: %s\n", e.what()));
+			return false;
+		}
+	}
+
+	// Create layered framebuffer (all 4 layers at once)
+	{
+		std::array<vk::ImageView, 2> fbAttachments = {
+			m_shadowColor.view,
+			m_shadowDepth.view,
+		};
+
+		vk::FramebufferCreateInfo fbInfo;
+		fbInfo.renderPass = m_shadowRenderPass;
+		fbInfo.attachmentCount = static_cast<uint32_t>(fbAttachments.size());
+		fbInfo.pAttachments = fbAttachments.data();
+		fbInfo.width = static_cast<uint32_t>(size);
+		fbInfo.height = static_cast<uint32_t>(size);
+		fbInfo.layers = layers;
+
+		try {
+			m_shadowFramebuffer = m_device.createFramebuffer(fbInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create shadow framebuffer: %s\n", e.what()));
+			return false;
+		}
+	}
+
+	m_shadowTextureSize = size;
+	m_shadowInitialized = true;
+	mprintf(("VulkanPostProcessor: Shadow map initialized (%dx%d, 4 cascades)\n", size, size));
+	return true;
+}
+
+void VulkanPostProcessor::shutdownShadowPass()
+{
+	if (!m_shadowInitialized) {
+		return;
+	}
+
+	if (m_shadowFramebuffer) {
+		m_device.destroyFramebuffer(m_shadowFramebuffer);
+		m_shadowFramebuffer = nullptr;
+	}
+	if (m_shadowRenderPass) {
+		m_device.destroyRenderPass(m_shadowRenderPass);
+		m_shadowRenderPass = nullptr;
+	}
+
+	if (m_shadowColor.view) {
+		m_device.destroyImageView(m_shadowColor.view);
+		m_shadowColor.view = nullptr;
+	}
+	if (m_shadowColor.image) {
+		m_device.destroyImage(m_shadowColor.image);
+		m_shadowColor.image = nullptr;
+	}
+	if (m_shadowColor.allocation.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_shadowColor.allocation);
+	}
+
+	if (m_shadowDepth.view) {
+		m_device.destroyImageView(m_shadowDepth.view);
+		m_shadowDepth.view = nullptr;
+	}
+	if (m_shadowDepth.image) {
+		m_device.destroyImage(m_shadowDepth.image);
+		m_shadowDepth.image = nullptr;
+	}
+	if (m_shadowDepth.allocation.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_shadowDepth.allocation);
+	}
+
+	m_shadowTextureSize = 0;
+	m_shadowInitialized = false;
 }
 
 bool VulkanPostProcessor::createImage(uint32_t width, uint32_t height, vk::Format format,

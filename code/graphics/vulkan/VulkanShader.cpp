@@ -79,6 +79,7 @@ const VulkanShaderTypeInfo VULKAN_SHADER_TYPES[] = {
 	{ SDR_TYPE_POST_PROCESS_SMAA_NEIGHBORHOOD_BLENDING, "smaa-neighbor", "smaa-neighbor", nullptr,      "SMAA neighborhood blending",   VTX_NONE },
 	{ SDR_TYPE_ENVMAP_SPHERE_WARP,                 "envmap-warp",    "envmap-warp",    nullptr,         "Environment map warp",         VTX_NONE },
 	{ SDR_TYPE_IRRADIANCE_MAP_GEN,                 "irradiance",     "irradiance",     nullptr,         "Irradiance map generation",    VTX_NONE },
+	{ SDR_TYPE_SHADOW_MAP,                         "shadow",         "shadow",         nullptr,         "Shadow map generation",        VTX_POSITION | VTX_MODELID },
 };
 
 const size_t VULKAN_SHADER_TYPES_COUNT = sizeof(VULKAN_SHADER_TYPES) / sizeof(VULKAN_SHADER_TYPES[0]);

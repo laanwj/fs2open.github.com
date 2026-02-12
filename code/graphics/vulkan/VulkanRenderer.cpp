@@ -675,13 +675,27 @@ bool VulkanRenderer::createLogicalDevice(const PhysicalDeviceValues& deviceValue
 		queueInfos.emplace_back(vk::DeviceQueueCreateFlags(), index, 1, &queuePriority);
 	}
 
+	// Build extension list: required + optional
+	SCP_vector<const char*> enabledExtensions(RequiredDeviceExtensions.begin(), RequiredDeviceExtensions.end());
+
+	// Check for VK_EXT_shader_viewport_index_layer (needed for shadow cascade routing)
+	m_supportsShaderViewportLayerOutput = false;
+	for (const auto& ext : deviceValues.extensions) {
+		if (strcmp(ext.extensionName, VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME) == 0) {
+			m_supportsShaderViewportLayerOutput = true;
+			enabledExtensions.push_back(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);
+			mprintf(("Vulkan: Enabling %s (shadow cascade support)\n", VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME));
+			break;
+		}
+	}
+
 	vk::DeviceCreateInfo deviceCreate;
 	deviceCreate.pQueueCreateInfos = queueInfos.data();
 	deviceCreate.queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size());
 	deviceCreate.pEnabledFeatures = &deviceValues.features;
 
-	deviceCreate.ppEnabledExtensionNames = RequiredDeviceExtensions.data();
-	deviceCreate.enabledExtensionCount = static_cast<uint32_t>(RequiredDeviceExtensions.size());
+	deviceCreate.ppEnabledExtensionNames = enabledExtensions.data();
+	deviceCreate.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
 
 	m_device = deviceValues.device.createDeviceUnique(deviceCreate);
 

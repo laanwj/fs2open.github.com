@@ -298,6 +298,59 @@ public:
 	 */
 	vk::Framebuffer getLightAccumFramebuffer() const { return m_lightAccumFramebuffer; }
 
+	// ========== Shadow Map ==========
+
+	/**
+	 * @brief Initialize shadow map resources (lazy, called on first use)
+	 * @return true on success
+	 */
+	bool initShadowPass();
+
+	/**
+	 * @brief Shutdown shadow map resources
+	 */
+	void shutdownShadowPass();
+
+	/**
+	 * @brief Check if shadow map resources are initialized
+	 */
+	bool isShadowInitialized() const { return m_shadowInitialized; }
+
+	/**
+	 * @brief Get shadow map texture size (square)
+	 */
+	int getShadowTextureSize() const { return m_shadowTextureSize; }
+
+	/**
+	 * @brief Get shadow color image view (2D array, 4 layers) for descriptor binding
+	 */
+	vk::ImageView getShadowColorView() const { return m_shadowColor.view; }
+
+	/**
+	 * @brief Get shadow color image (for layout transitions)
+	 */
+	vk::Image getShadowColorImage() const { return m_shadowColor.image; }
+
+	/**
+	 * @brief Get shadow depth image (for layout transitions)
+	 */
+	vk::Image getShadowDepthImage() const { return m_shadowDepth.image; }
+
+	/**
+	 * @brief Get shadow render pass
+	 */
+	vk::RenderPass getShadowRenderPass() const { return m_shadowRenderPass; }
+
+	/**
+	 * @brief Get shadow framebuffer
+	 */
+	vk::Framebuffer getShadowFramebuffer() const { return m_shadowFramebuffer; }
+
+	/**
+	 * @brief Get shadow map sampler (linear, clamp-to-edge)
+	 */
+	vk::Sampler getShadowSampler() const { return m_linearSampler; }
+
 private:
 	void updateTonemappingUBO();
 
@@ -435,6 +488,14 @@ private:
 	static constexpr uint32_t DEFERRED_UBO_SIZE = 256 * 1024;  // 256KB for light data
 
 	bool m_lightVolumesInitialized = false;
+
+	// ---- Shadow map (cascaded VSM) ----
+	RenderTarget m_shadowColor;       // RGBA16F, 2D array (4 layers)
+	RenderTarget m_shadowDepth;       // D32F, 2D array (4 layers)
+	vk::RenderPass m_shadowRenderPass;
+	vk::Framebuffer m_shadowFramebuffer;
+	int m_shadowTextureSize = 0;
+	bool m_shadowInitialized = false;
 
 	// ---- Distortion ping-pong textures (32x32 RGBA8) ----
 	RenderTarget m_distortionTex[2];
