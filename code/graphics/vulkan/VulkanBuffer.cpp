@@ -335,9 +335,8 @@ bool VulkanBufferManager::createOrResizeBuffer(VulkanBufferObject& bufferObj, si
 	if (bufferObj.buffer && bufferObj.totalSize >= requiredTotal) {
 		// If this is a streaming buffer, we'd need to synchronize and
 		// move the frames around. However, there's a check in
-		// updateBufferData that makes sure streaming buffers only ever
+		// updateBufferData that makes sure streaming buffers with data only ever
 		// grow.
-		Assertion(!bufferObj.isStreaming(), "Streaming buffers cannot be shrunk.");
 		bufferObj.spanSize = spanSize;
 		return true;
 	}

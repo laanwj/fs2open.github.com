@@ -1,4 +1,6 @@
 #include "VulkanShader.h"
+#include "VulkanVertexFormat.h"
+
 #include "def_files/def_files.h"
 
 namespace graphics {
@@ -33,17 +35,18 @@ void vulkan_recompile_all_shaders(const std::function<void(size_t, size_t)>& pro
 }
 
 // Shader type definitions - maps shader_type to SPIR-V filenames
-// Vertex input location bits — must match VertexAttributeLocation in VulkanVertexFormat.h.
+// Vertex input location bits
 // Values reflect what actually survives SPIR-V dead-code elimination, not just what's
 // declared in GLSL. Used to filter out fallback vertex attributes the shader doesn't consume.
-static constexpr uint32_t VTX_POSITION = 1u << 0;
-static constexpr uint32_t VTX_COLOR    = 1u << 1;
-static constexpr uint32_t VTX_TEXCOORD = 1u << 2;
-static constexpr uint32_t VTX_NORMAL   = 1u << 3;
-static constexpr uint32_t VTX_TANGENT  = 1u << 4;
-static constexpr uint32_t VTX_MODELID  = 1u << 5;
-static constexpr uint32_t VTX_RADIUS   = 1u << 6;
-static constexpr uint32_t VTX_MATRIX   = (1u << 8) | (1u << 9) | (1u << 10) | (1u << 11);  // mat4 at locations 8-11
+static constexpr uint32_t VTX_POSITION = 1u << static_cast<uint32_t>(VertexAttributeLocation::Position);
+static constexpr uint32_t VTX_COLOR    = 1u << static_cast<uint32_t>(VertexAttributeLocation::Color);
+static constexpr uint32_t VTX_TEXCOORD = 1u << static_cast<uint32_t>(VertexAttributeLocation::TexCoord);
+static constexpr uint32_t VTX_NORMAL   = 1u << static_cast<uint32_t>(VertexAttributeLocation::Normal);
+static constexpr uint32_t VTX_TANGENT  = 1u << static_cast<uint32_t>(VertexAttributeLocation::Tangent);
+static constexpr uint32_t VTX_MODELID  = 1u << static_cast<uint32_t>(VertexAttributeLocation::ModelId);
+static constexpr uint32_t VTX_RADIUS   = 1u << static_cast<uint32_t>(VertexAttributeLocation::Radius);
+static constexpr uint32_t VTX_UVEC     = 1u << static_cast<uint32_t>(VertexAttributeLocation::Uvec);
+static constexpr uint32_t VTX_MATRIX   = (15u << static_cast<uint32_t>(VertexAttributeLocation::ModelMatrix)); // Four consecutive locations
 static constexpr uint32_t VTX_NONE     = 0;
 
 // Based on GL_shader_types in gropenglshader.cpp
