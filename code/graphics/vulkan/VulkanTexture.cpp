@@ -2153,11 +2153,6 @@ void VulkanTextureManager::generateMipmaps(int handle)
 	ts->currentLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 }
 
-void VulkanTextureManager::flushCache()
-{
-	// TODO: Implement cache flushing
-}
-
 void VulkanTextureManager::frameStart()
 {
 	processPendingCommandBuffers();

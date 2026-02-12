@@ -194,10 +194,6 @@ public:
 	 */
 	void generateMipmaps(int handle);
 
-	/**
-	 * @brief Flush texture cache
-	 */
-	void flushCache();
 
 	/**
 	 * @brief Called at start of frame
