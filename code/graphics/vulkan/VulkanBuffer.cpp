@@ -31,6 +31,43 @@ VulkanBufferManager::~VulkanBufferManager()
 	}
 }
 
+bool VulkanBufferManager::createOneShotBuffer(vk::Flags<vk::BufferUsageFlagBits> usage, const void* data, size_t size, vk::Buffer& buf, VulkanAllocation& alloc) const
+{
+	vk::BufferCreateInfo bufferInfo;
+	bufferInfo.size = size;
+	bufferInfo.usage = usage;
+	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+	try {
+		buf = m_device.createBuffer(bufferInfo);
+	} catch (const vk::SystemError& e) {
+		mprintf(("Failed to create buffer: %s\n", e.what()));
+		return false;
+	}
+
+	if (!m_memoryManager->allocateBufferMemory(buf, MemoryUsage::CpuToGpu, alloc)) {
+		m_device.destroyBuffer(buf);
+		buf = nullptr;
+		mprintf(("Failed to allocate buffer memory!\n"));
+		return false;
+	}
+
+	void* mapped = m_memoryManager->mapMemory(alloc);
+	if (mapped) {
+		memcpy(mapped, data, size);
+		m_memoryManager->flushMemory(alloc, 0, size);
+		m_memoryManager->unmapMemory(alloc);
+	} else {
+		m_memoryManager->freeAllocation(alloc);
+		m_device.destroyBuffer(buf);
+		buf = nullptr;
+
+		mprintf(("Failed to map buffer memory!\n"));
+		return false;
+	}
+	return true;
+}
+
 bool VulkanBufferManager::init(vk::Device device,
                                VulkanMemoryManager* memoryManager,
                                uint32_t graphicsQueueFamily,
@@ -53,103 +90,25 @@ bool VulkanBufferManager::init(vk::Device device,
 	m_currentFrame = 0;
 
 	// Create fallback color buffer with white (1,1,1,1) for shaders expecting vertColor
-	{
-		vk::BufferCreateInfo bufferInfo;
-		bufferInfo.size = 16;  // vec4 = 16 bytes
-		bufferInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
-		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
-
-		try {
-			m_fallbackColorBuffer = m_device.createBuffer(bufferInfo);
-		} catch (const vk::SystemError& e) {
-			mprintf(("Failed to create fallback color buffer: %s\n", e.what()));
-			return false;
-		}
-
-		if (!m_memoryManager->allocateBufferMemory(m_fallbackColorBuffer, MemoryUsage::CpuToGpu, m_fallbackColorAllocation)) {
-			m_device.destroyBuffer(m_fallbackColorBuffer);
-			m_fallbackColorBuffer = nullptr;
-			mprintf(("Failed to allocate fallback color buffer memory!\n"));
-			return false;
-		}
-
-		// Write white color (1.0, 1.0, 1.0, 1.0) to the buffer
-		float whiteColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-		void* mapped = m_memoryManager->mapMemory(m_fallbackColorAllocation);
-		if (mapped) {
-			memcpy(mapped, whiteColor, sizeof(whiteColor));
-			m_memoryManager->flushMemory(m_fallbackColorAllocation, 0, sizeof(whiteColor));
-			m_memoryManager->unmapMemory(m_fallbackColorAllocation);
-		}
-
-		mprintf(("Created fallback white color buffer\n"));
+	float whiteColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	if (!createOneShotBuffer(vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, whiteColor, sizeof(whiteColor), m_fallbackColorBuffer, m_fallbackColorAllocation)) {
+		mprintf(("VulkanBufferManager::init could not create fallback color buffer\n"));
+		return false;
 	}
 
-	// Create fallback texcoord buffer with zeros (0,0,0,0) for shaders expecting vertTexCoord
-	{
-		vk::BufferCreateInfo bufferInfo;
-		bufferInfo.size = 16;  // vec4 = 16 bytes
-		bufferInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
-		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
-
-		try {
-			m_fallbackTexCoordBuffer = m_device.createBuffer(bufferInfo);
-		} catch (const vk::SystemError& e) {
-			mprintf(("Failed to create fallback texcoord buffer: %s\n", e.what()));
-			return false;
-		}
-
-		if (!m_memoryManager->allocateBufferMemory(m_fallbackTexCoordBuffer, MemoryUsage::CpuToGpu, m_fallbackTexCoordAllocation)) {
-			m_device.destroyBuffer(m_fallbackTexCoordBuffer);
-			m_fallbackTexCoordBuffer = nullptr;
-			mprintf(("Failed to allocate fallback texcoord buffer memory!\n"));
-			return false;
-		}
-
-		// Write zero texcoord (0.0, 0.0, 0.0, 0.0) to the buffer
-		float zeroTexCoord[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-		void* mapped = m_memoryManager->mapMemory(m_fallbackTexCoordAllocation);
-		if (mapped) {
-			memcpy(mapped, zeroTexCoord, sizeof(zeroTexCoord));
-			m_memoryManager->flushMemory(m_fallbackTexCoordAllocation, 0, sizeof(zeroTexCoord));
-			m_memoryManager->unmapMemory(m_fallbackTexCoordAllocation);
-		}
-
-		mprintf(("Created fallback zero texcoord buffer\n"));
+	float zeroTexCoord[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	if (!createOneShotBuffer(vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, zeroTexCoord, sizeof(zeroTexCoord), m_fallbackTexCoordBuffer, m_fallbackTexCoordAllocation)) {
+		mprintf(("VulkanBufferManager::init could not create fallback texcoord buffer\n"));
+		return false;
 	}
 
 	// Create fallback uniform buffer (zeros) for uninitialized descriptor set bindings
 	// Without this, descriptor set UBO bindings left unwritten after pool reset
 	// contain undefined data, causing intermittent rendering failures
-	{
-		vk::BufferCreateInfo bufferInfo;
-		bufferInfo.size = FALLBACK_UNIFORM_BUFFER_SIZE;
-		bufferInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eStorageBuffer;
-		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
-
-		try {
-			m_fallbackUniformBuffer = m_device.createBuffer(bufferInfo);
-		} catch (const vk::SystemError& e) {
-			mprintf(("Failed to create fallback uniform buffer: %s\n", e.what()));
-			return false;
-		}
-
-		if (!m_memoryManager->allocateBufferMemory(m_fallbackUniformBuffer, MemoryUsage::CpuToGpu, m_fallbackUniformAllocation)) {
-			m_device.destroyBuffer(m_fallbackUniformBuffer);
-			m_fallbackUniformBuffer = nullptr;
-			mprintf(("Failed to allocate fallback uniform buffer memory!\n"));
-			return false;
-		}
-
-		// Zero-fill the buffer
-		void* mapped = m_memoryManager->mapMemory(m_fallbackUniformAllocation);
-		if (mapped) {
-			memset(mapped, 0, FALLBACK_UNIFORM_BUFFER_SIZE);
-			m_memoryManager->flushMemory(m_fallbackUniformAllocation, 0, FALLBACK_UNIFORM_BUFFER_SIZE);
-			m_memoryManager->unmapMemory(m_fallbackUniformAllocation);
-		}
-
-		mprintf(("Created fallback uniform buffer (%zu bytes)\n", FALLBACK_UNIFORM_BUFFER_SIZE));
+	float dummy_ubo[FALLBACK_UNIFORM_BUFFER_SIZE] = {};
+	if (!createOneShotBuffer(vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eStorageBuffer, dummy_ubo, sizeof(dummy_ubo), m_fallbackUniformBuffer, m_fallbackUniformAllocation)) {
+		mprintf(("VulkanBufferManager::init could not create fallback texcoord buffer\n"));
+		return false;
 	}
 
 	m_initialized = true;

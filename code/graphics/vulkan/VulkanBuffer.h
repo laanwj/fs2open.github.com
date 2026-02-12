@@ -219,6 +219,11 @@ public:
 
 private:
 	/**
+	 * @brief Create a one-shot buffer (used in initialization only).
+	 */
+	bool createOneShotBuffer(vk::Flags<vk::BufferUsageFlagBits> usage, const void* data, size_t size, vk::Buffer& buf, VulkanAllocation& alloc) const;
+
+	/**
 	 * @brief Convert BufferType to Vulkan usage flags
 	 */
 	vk::BufferUsageFlags getVkUsageFlags(BufferType type) const;
