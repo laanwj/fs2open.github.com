@@ -638,6 +638,21 @@ bool VulkanPostProcessor::initGBuffer()
 		t.target->height = h;
 	}
 
+	// Create samplable copy of G-buffer normal (for decal angle rejection)
+	{
+		vk::ImageUsageFlags copyUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
+		if (!createImage(w, h, vk::Format::eR16G16B16A16Sfloat, copyUsage,
+		                 vk::ImageAspectFlagBits::eColor,
+		                 m_gbufNormalCopy.image, m_gbufNormalCopy.view, m_gbufNormalCopy.allocation)) {
+			mprintf(("VulkanPostProcessor: Failed to create G-buffer normal copy!\n"));
+			shutdownGBuffer();
+			return false;
+		}
+		m_gbufNormalCopy.format = vk::Format::eR16G16B16A16Sfloat;
+		m_gbufNormalCopy.width = w;
+		m_gbufNormalCopy.height = h;
+	}
+
 	// Create G-buffer render pass (eClear) — 6 color + depth
 	// Attachment order: [0]=color, [1]=position, [2]=normal, [3]=specular, [4]=emissive, [5]=composite, [6]=depth
 	{
@@ -859,7 +874,7 @@ void VulkanPostProcessor::shutdownGBuffer()
 
 	RenderTarget* gbufTargets[] = {
 		&m_gbufPosition, &m_gbufNormal, &m_gbufSpecular,
-		&m_gbufEmissive, &m_gbufComposite,
+		&m_gbufEmissive, &m_gbufComposite, &m_gbufNormalCopy,
 	};
 	for (auto* rt : gbufTargets) {
 		if (rt->view) {
@@ -3235,6 +3250,123 @@ void VulkanPostProcessor::copySceneDepth(vk::CommandBuffer cmd)
 		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		barrier.image = m_sceneDepthCopy.image;
 		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			vk::PipelineStageFlagBits::eFragmentShader,
+			{}, {}, {}, barrier);
+	}
+}
+
+void VulkanPostProcessor::copyGbufNormal(vk::CommandBuffer cmd)
+{
+	// Called mid-scene, outside a render pass.
+	// Copies G-buffer normal → normal copy so decal shader can sample it for angle rejection.
+	// G-buffer normal is in eShaderReadOnlyOptimal (from the ended G-buffer render pass).
+
+	// Transition G-buffer normal: eShaderReadOnlyOptimal → eTransferSrcOptimal
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_gbufNormal.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, {}, {}, barrier);
+	}
+
+	// Transition normal copy: eUndefined → eTransferDstOptimal
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barrier.oldLayout = vk::ImageLayout::eUndefined;
+		barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_gbufNormalCopy.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTopOfPipe,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, {}, {}, barrier);
+	}
+
+	// Copy G-buffer normal → normal copy
+	{
+		vk::ImageCopy region;
+		region.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+		region.srcSubresource.mipLevel = 0;
+		region.srcSubresource.baseArrayLayer = 0;
+		region.srcSubresource.layerCount = 1;
+		region.srcOffset = vk::Offset3D(0, 0, 0);
+		region.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+		region.dstSubresource.mipLevel = 0;
+		region.dstSubresource.baseArrayLayer = 0;
+		region.dstSubresource.layerCount = 1;
+		region.dstOffset = vk::Offset3D(0, 0, 0);
+		region.extent = vk::Extent3D(m_extent.width, m_extent.height, 1);
+
+		cmd.copyImage(
+			m_gbufNormal.image, vk::ImageLayout::eTransferSrcOptimal,
+			m_gbufNormalCopy.image, vk::ImageLayout::eTransferDstOptimal,
+			region);
+	}
+
+	// Transition G-buffer normal back: eTransferSrcOptimal → eShaderReadOnlyOptimal
+	// (transitionGbufForResume will later transition it to eColorAttachmentOptimal)
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+		barrier.dstAccessMask = {};
+		barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_gbufNormal.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			vk::PipelineStageFlagBits::eFragmentShader,
+			{}, {}, {}, barrier);
+	}
+
+	// Transition normal copy: eTransferDstOptimal → eShaderReadOnlyOptimal
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+		barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_gbufNormalCopy.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
 		barrier.subresourceRange.baseMipLevel = 0;
 		barrier.subresourceRange.levelCount = 1;
 		barrier.subresourceRange.baseArrayLayer = 0;

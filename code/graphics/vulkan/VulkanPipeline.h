@@ -57,6 +57,15 @@ struct PipelineConfig {
 	// Color attachment count (for multiple render targets)
 	uint32_t colorAttachmentCount = 1;
 
+	// Per-attachment blend (used by decal rendering to write-mask unused G-buffer attachments)
+	bool perAttachmentBlendEnabled = false;
+	struct AttachmentBlend {
+		gr_alpha_blend blendMode = ALPHA_BLEND_NONE;
+		bvec4 writeMask = {true, true, true, true};
+	};
+	static constexpr uint32_t MAX_COLOR_ATTACHMENTS = 8;
+	AttachmentBlend attachmentBlends[MAX_COLOR_ATTACHMENTS];
+
 	bool operator==(const PipelineConfig& other) const;
 	size_t hash() const;
 };

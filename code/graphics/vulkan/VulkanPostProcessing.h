@@ -176,6 +176,17 @@ public:
 	void copyEffectTexture(vk::CommandBuffer cmd);
 
 	/**
+	 * @brief Copy G-buffer normal to samplable copy for decal angle rejection
+	 *
+	 * Must be called outside a render pass. Transitions G-buffer normal through
+	 * eTransferSrcOptimal and back to eShaderReadOnlyOptimal. Transitions
+	 * normal copy to eShaderReadOnlyOptimal for fragment shader sampling.
+	 *
+	 * @param cmd Active command buffer (must be outside a render pass)
+	 */
+	void copyGbufNormal(vk::CommandBuffer cmd);
+
+	/**
 	 * @brief Copy scene depth to samplable depth copy for soft particle rendering
 	 *
 	 * Must be called outside a render pass. Transitions scene depth through
@@ -263,6 +274,10 @@ public:
 	// G-buffer images (for copy operations)
 	vk::Image getGbufEmissiveImage() const { return m_gbufEmissive.image; }
 	vk::Image getGbufCompositeImage() const { return m_gbufComposite.image; }
+	vk::Image getGbufNormalImage() const { return m_gbufNormal.image; }
+
+	// G-buffer normal copy (for decal angle rejection sampling)
+	vk::ImageView getGbufNormalCopyView() const { return m_gbufNormalCopy.view; }
 
 	/**
 	 * @brief Transition G-buffer color attachments 1-5 for render pass resume
@@ -458,6 +473,7 @@ private:
 	// ---- G-Buffer (deferred lighting) ----
 	RenderTarget m_gbufPosition;   // RGBA16F - view-space position (xyz) + AO (w)
 	RenderTarget m_gbufNormal;     // RGBA16F - view-space normal (xyz) + gloss (w)
+	RenderTarget m_gbufNormalCopy; // RGBA16F - samplable copy of G-buffer normal (for decals)
 	RenderTarget m_gbufSpecular;   // RGBA8   - specular color (rgb) + fresnel (a)
 	RenderTarget m_gbufEmissive;   // RGBA16F - emissive / pre-lit color
 	RenderTarget m_gbufComposite;  // RGBA16F - light accumulation scratch buffer

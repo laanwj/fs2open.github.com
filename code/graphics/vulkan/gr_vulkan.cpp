@@ -96,8 +96,7 @@ bool vulkan_is_capable(gr_capability capability)
 		// are handled via fallback descriptors, so there's no driver issue.
 		return true;
 	case gr_capability::CAPABILITY_INSTANCED_RENDERING:
-		// Gates the decal system which requires render_decals (not yet implemented)
-		return false;
+		return true;
 	case gr_capability::CAPABILITY_QUERIES_REUSABLE:
 		// Vulkan queries require explicit reset between read and write.
 		// The backend manages this lifecycle internally via deleteQueryObject.
@@ -864,15 +863,289 @@ void vulkan_shadow_map_end()
 		cmd.setScissor(0, scissor);
 	}
 }
-void stub_start_decal_pass() {}
-void stub_stop_decal_pass() {}
-void stub_render_decals(decal_material* /*material_info*/,
-                       primitive_type /*prim_type*/,
-                       vertex_layout* /*layout*/,
-                       int /*num_elements*/,
-                       const indexed_vertex_source& /*buffers*/,
-                       const gr_buffer_handle& /*instance_buffer*/,
-                       int /*num_instances*/) {}
+void vulkan_start_decal_pass()
+{
+	auto* renderer = getRendererInstance();
+	auto* pp = getPostProcessor();
+	auto* stateTracker = getStateTracker();
+
+	if (!renderer->isSceneRendering() || !pp || !pp->isGbufInitialized()) {
+		return;
+	}
+
+	vk::CommandBuffer cmd = stateTracker->getCommandBuffer();
+
+	// End the G-buffer render pass (transitions all color attachments to eShaderReadOnlyOptimal)
+	cmd.endRenderPass();
+
+	// Copy scene depth → samplable depth copy (for fragment depth reconstruction)
+	pp->copySceneDepth(cmd);
+
+	// Copy G-buffer normal → samplable normal copy (for angle rejection)
+	pp->copyGbufNormal(cmd);
+
+	// Transition scene color: eShaderReadOnlyOptimal → eColorAttachmentOptimal
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = pp->getSceneColorImage();
+		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTopOfPipe,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			{}, nullptr, nullptr, barrier);
+	}
+
+	// Transition G-buffer attachments 1-5 for render pass resume
+	pp->transitionGbufForResume(cmd);
+
+	// Resume G-buffer render pass with eLoad
+	{
+		auto extent = pp->getSceneExtent();
+		vk::RenderPassBeginInfo rpBegin;
+		rpBegin.renderPass = pp->getGbufRenderPassLoad();
+		rpBegin.framebuffer = pp->getGbufFramebuffer();
+		rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+		rpBegin.renderArea.extent = extent;
+
+		std::array<vk::ClearValue, 7> clearValues{};
+		clearValues[6].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+
+		cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		stateTracker->setRenderPass(pp->getGbufRenderPassLoad(), 0);
+		stateTracker->setColorAttachmentCount(VulkanPostProcessor::GBUF_COLOR_ATTACHMENT_COUNT);
+	}
+
+	// Restore viewport (Y-flipped for Vulkan scene rendering)
+	auto extent = pp->getSceneExtent();
+	stateTracker->setViewport(0.0f,
+		static_cast<float>(extent.height),
+		static_cast<float>(extent.width),
+		-static_cast<float>(extent.height));
+}
+
+void vulkan_stop_decal_pass()
+{
+	// No-op — decals draw within the resumed G-buffer render pass
+}
+
+void vulkan_render_decals(decal_material* material_info,
+                          primitive_type prim_type,
+                          vertex_layout* layout,
+                          int num_elements,
+                          const indexed_vertex_source& buffers,
+                          const gr_buffer_handle& instance_buffer,
+                          int num_instances)
+{
+	if (!material_info || !layout || num_instances <= 0) {
+		return;
+	}
+
+	auto* stateTracker = getStateTracker();
+	auto* pipelineManager = getPipelineManager();
+	auto* descManager = getDescriptorManager();
+	auto* bufferManager = getBufferManager();
+	auto* drawManager = getDrawManager();
+	auto* texManager = getTextureManager();
+	auto* pp = getPostProcessor();
+
+	// Set up matrices
+	gr_matrix_set_uniforms();
+
+	// Build pipeline config for decal rendering
+	PipelineConfig config;
+	config.shaderType = SDR_TYPE_DECAL;
+	config.primitiveType = prim_type;
+	config.depthMode = material_info->get_depth_mode();
+	config.depthWriteEnabled = false;
+	config.cullEnabled = false;
+	config.frontFaceCW = false;
+	config.blendMode = material_info->get_blend_mode();
+	config.renderPass = stateTracker->getCurrentRenderPass();
+	config.colorAttachmentCount = stateTracker->getColorAttachmentCount();
+
+	// Per-attachment blend: active attachments (0=color, 2=normal, 4=emissive) get
+	// the material's blend mode with RGB-only write mask. Inactive attachments get
+	// write mask = 0 to avoid corrupting G-buffer data.
+	config.perAttachmentBlendEnabled = true;
+	for (uint32_t i = 0; i < config.colorAttachmentCount; ++i) {
+		config.attachmentBlends[i].blendMode = ALPHA_BLEND_NONE;
+		config.attachmentBlends[i].writeMask = {false, false, false, false};
+	}
+	// Attachment 0: color/diffuse — use material blend mode 0
+	config.attachmentBlends[0].blendMode = material_info->get_blend_mode(0);
+	config.attachmentBlends[0].writeMask = {true, true, true, false};
+	// Attachment 2: normal — always additive
+	config.attachmentBlends[2].blendMode = ALPHA_BLEND_ADDITIVE;
+	config.attachmentBlends[2].writeMask = {true, true, true, false};
+	// Attachment 4: emissive — use material blend mode 2
+	config.attachmentBlends[4].blendMode = material_info->get_blend_mode(2);
+	config.attachmentBlends[4].writeMask = {true, true, true, false};
+
+	// Get or create pipeline
+	vk::Pipeline pipeline = pipelineManager->getPipeline(config, *layout);
+	if (!pipeline) {
+		mprintf(("vulkan_render_decals: Failed to get pipeline!\n"));
+		return;
+	}
+
+	stateTracker->bindPipeline(pipeline, pipelineManager->getPipelineLayout());
+
+	// Get fallback resources
+	vk::Buffer fallbackUBO = bufferManager->getFallbackUniformBuffer();
+	vk::DeviceSize fallbackUBOSize = static_cast<vk::DeviceSize>(bufferManager->getFallbackUniformBufferSize());
+	vk::Sampler fallbackSampler = texManager->getDefaultSampler();
+	vk::ImageView fallbackView = texManager->getFallbackTextureView();
+	vk::ImageView fallbackView2D = texManager->getFallbackTextureView2D();
+
+	// Set 0: Global
+	vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
+	if (globalSet) {
+		if (fallbackUBO) {
+			descManager->updateUniformBuffer(globalSet, 0, fallbackUBO, 0, fallbackUBOSize);
+			descManager->updateUniformBuffer(globalSet, 1, fallbackUBO, 0, fallbackUBOSize);
+		}
+		if (fallbackSampler && fallbackView) {
+			descManager->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
+			descManager->updateTexture(globalSet, 3, fallbackView, fallbackSampler);
+		}
+		stateTracker->bindDescriptorSet(DescriptorSetIndex::Global, globalSet);
+	}
+
+	// Set 1: Material
+	vk::DescriptorSet materialSet = descManager->allocateFrameSet(DescriptorSetIndex::Material);
+	if (materialSet) {
+		// Binding 0: ModelData UBO (fallback)
+		if (fallbackUBO) {
+			descManager->updateUniformBuffer(materialSet, 0, fallbackUBO, 0, fallbackUBOSize);
+			descManager->updateStorageBuffer(materialSet, 3, fallbackUBO, 0, fallbackUBOSize);
+		}
+
+		// Binding 1: decal textures (diffuse, glow, normal as texture array)
+		drawManager->bindMaterialTextures(material_info, materialSet);
+
+		// Binding 2: DecalGlobals UBO
+		{
+			size_t idx = static_cast<size_t>(uniform_block_type::DecalGlobals);
+			const auto& binding = drawManager->getPendingUniformBinding(idx);
+			if (binding.valid) {
+				descManager->updateUniformBuffer(materialSet, 2,
+					bufferManager->getVkBuffer(binding.bufferHandle),
+					binding.offset, binding.size);
+			} else if (fallbackUBO) {
+				descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
+			}
+		}
+
+		// Binding 4: scene depth copy (for fragment depth reconstruction)
+		{
+			vk::Sampler nearestSampler = texManager->getSampler(
+				vk::Filter::eNearest, vk::Filter::eNearest,
+				vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false);
+			vk::ImageView depthView = pp->getSceneDepthCopyView();
+			if (depthView && nearestSampler) {
+				descManager->updateTexture(materialSet, 4, depthView, nearestSampler);
+			} else if (fallbackView2D && fallbackSampler) {
+				descManager->updateTexture(materialSet, 4, fallbackView2D, fallbackSampler);
+			}
+		}
+
+		// Binding 5: scene color (fallback — not used by decals)
+		if (fallbackView2D && fallbackSampler) {
+			descManager->updateTexture(materialSet, 5, fallbackView2D, fallbackSampler);
+		}
+
+		// Binding 6: G-buffer normal copy (for angle rejection)
+		{
+			vk::Sampler nearestSampler = texManager->getSampler(
+				vk::Filter::eNearest, vk::Filter::eNearest,
+				vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false);
+			vk::ImageView normalView = pp->getGbufNormalCopyView();
+			if (normalView && nearestSampler) {
+				descManager->updateTexture(materialSet, 6, normalView, nearestSampler);
+			} else if (fallbackView2D && fallbackSampler) {
+				descManager->updateTexture(materialSet, 6, fallbackView2D, fallbackSampler);
+			}
+		}
+
+		stateTracker->bindDescriptorSet(DescriptorSetIndex::Material, materialSet);
+	}
+
+	// Set 2: PerDraw
+	vk::DescriptorSet perDrawSet = descManager->allocateFrameSet(DescriptorSetIndex::PerDraw);
+	if (perDrawSet) {
+		// Pre-initialize all bindings with fallback
+		if (fallbackUBO) {
+			descManager->updateUniformBuffer(perDrawSet, 0, fallbackUBO, 0, fallbackUBOSize);
+			descManager->updateUniformBuffer(perDrawSet, 1, fallbackUBO, 0, fallbackUBOSize);
+			descManager->updateUniformBuffer(perDrawSet, 2, fallbackUBO, 0, fallbackUBOSize);
+			descManager->updateUniformBuffer(perDrawSet, 3, fallbackUBO, 0, fallbackUBOSize);
+			descManager->updateUniformBuffer(perDrawSet, 4, fallbackUBO, 0, fallbackUBOSize);
+		}
+
+		// Binding 1: Matrices UBO
+		{
+			size_t idx = static_cast<size_t>(uniform_block_type::Matrices);
+			const auto& binding = drawManager->getPendingUniformBinding(idx);
+			if (binding.valid) {
+				descManager->updateUniformBuffer(perDrawSet, 1,
+					bufferManager->getVkBuffer(binding.bufferHandle),
+					binding.offset, binding.size);
+			}
+		}
+
+		// Binding 3: DecalInfo UBO
+		{
+			size_t idx = static_cast<size_t>(uniform_block_type::DecalInfo);
+			const auto& binding = drawManager->getPendingUniformBinding(idx);
+			if (binding.valid) {
+				descManager->updateUniformBuffer(perDrawSet, 3,
+					bufferManager->getVkBuffer(binding.bufferHandle),
+					binding.offset, binding.size);
+			}
+		}
+
+		stateTracker->bindDescriptorSet(DescriptorSetIndex::PerDraw, perDrawSet);
+	}
+
+	// Bind vertex buffers: binding 0 = box VBO, binding 1 = instance buffer
+	vk::Buffer boxVBO = bufferManager->getVkBuffer(buffers.Vbuffer_handle);
+	vk::Buffer boxIBO = bufferManager->getVkBuffer(buffers.Ibuffer_handle);
+	vk::Buffer instBuf = bufferManager->getVkBuffer(instance_buffer);
+
+	if (!boxVBO || !boxIBO || !instBuf) {
+		mprintf(("vulkan_render_decals: Missing buffer(s)!\n"));
+		return;
+	}
+
+	stateTracker->bindVertexBuffer(0, boxVBO, 0);
+
+	// Instance buffer needs frame base offset for streaming buffers
+	size_t instFrameOffset = bufferManager->getFrameBaseOffset(instance_buffer);
+	stateTracker->bindVertexBuffer(1, instBuf, static_cast<vk::DeviceSize>(instFrameOffset));
+
+	stateTracker->bindIndexBuffer(boxIBO, 0, vk::IndexType::eUint32);
+
+	// Flush dynamic state and draw
+	stateTracker->applyDynamicState();
+
+	auto cmdBuffer = stateTracker->getCommandBuffer();
+	cmdBuffer.drawIndexed(
+		static_cast<uint32_t>(num_elements),  // index count
+		static_cast<uint32_t>(num_instances), // instance count
+		0,                                     // first index
+		0,                                     // vertex offset
+		0                                      // first instance
+	);
+}
 std::unique_ptr<os::Viewport> stub_create_viewport(const os::ViewPortProperties& /*props*/)
 {
 	return std::unique_ptr<os::Viewport>();
@@ -976,9 +1249,9 @@ void init_function_pointers()
 	gr_screen.gf_shadow_map_start = vulkan_shadow_map_start;
 	gr_screen.gf_shadow_map_end = vulkan_shadow_map_end;
 
-	gr_screen.gf_start_decal_pass = stub_start_decal_pass;
-	gr_screen.gf_stop_decal_pass = stub_stop_decal_pass;
-	gr_screen.gf_render_decals = stub_render_decals;
+	gr_screen.gf_start_decal_pass = vulkan_start_decal_pass;
+	gr_screen.gf_stop_decal_pass = vulkan_stop_decal_pass;
+	gr_screen.gf_render_decals = vulkan_render_decals;
 
 	gr_screen.gf_render_shield_impact = vulkan_render_shield_impact;
 

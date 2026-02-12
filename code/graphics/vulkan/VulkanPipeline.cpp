@@ -47,7 +47,20 @@ bool PipelineConfig::operator==(const PipelineConfig& other) const
 	       depthBiasEnabled == other.depthBiasEnabled &&
 	       renderPass == other.renderPass &&
 	       subpass == other.subpass &&
-	       colorAttachmentCount == other.colorAttachmentCount;
+	       colorAttachmentCount == other.colorAttachmentCount &&
+	       perAttachmentBlendEnabled == other.perAttachmentBlendEnabled &&
+	       [&]() {
+	           if (!perAttachmentBlendEnabled) return true;
+	           for (uint32_t i = 0; i < colorAttachmentCount; ++i) {
+	               if (attachmentBlends[i].blendMode != other.attachmentBlends[i].blendMode ||
+	                   attachmentBlends[i].writeMask.x != other.attachmentBlends[i].writeMask.x ||
+	                   attachmentBlends[i].writeMask.y != other.attachmentBlends[i].writeMask.y ||
+	                   attachmentBlends[i].writeMask.z != other.attachmentBlends[i].writeMask.z ||
+	                   attachmentBlends[i].writeMask.w != other.attachmentBlends[i].writeMask.w)
+	                   return false;
+	           }
+	           return true;
+	       }();
 }
 
 size_t PipelineConfig::hash() const
@@ -79,6 +92,16 @@ size_t PipelineConfig::hash() const
 	h ^= std::hash<uint64_t>()(reinterpret_cast<uint64_t>(static_cast<VkRenderPass>(renderPass))) << 47;
 	h ^= std::hash<uint32_t>()(subpass) << 51;
 	h ^= std::hash<uint32_t>()(colorAttachmentCount) << 55;
+	h ^= std::hash<bool>()(perAttachmentBlendEnabled) << 57;
+	if (perAttachmentBlendEnabled) {
+		for (uint32_t i = 0; i < colorAttachmentCount; ++i) {
+			h ^= std::hash<int>()(static_cast<int>(attachmentBlends[i].blendMode)) << (i * 3 + 2);
+			h ^= std::hash<int>()((attachmentBlends[i].writeMask.x ? 1 : 0) |
+			                      (attachmentBlends[i].writeMask.y ? 2 : 0) |
+			                      (attachmentBlends[i].writeMask.z ? 4 : 0) |
+			                      (attachmentBlends[i].writeMask.w ? 8 : 0)) << (i * 3 + 5);
+		}
+	}
 
 	return h;
 }
@@ -392,7 +415,12 @@ vk::UniquePipeline VulkanPipelineManager::createPipeline(const PipelineConfig& c
 	// Color blend state
 	SCP_vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments;
 	for (uint32_t i = 0; i < config.colorAttachmentCount; ++i) {
-		colorBlendAttachments.push_back(createColorBlendAttachment(config.blendMode, config.colorWriteMask));
+		if (config.perAttachmentBlendEnabled) {
+			colorBlendAttachments.push_back(createColorBlendAttachment(
+				config.attachmentBlends[i].blendMode, config.attachmentBlends[i].writeMask));
+		} else {
+			colorBlendAttachments.push_back(createColorBlendAttachment(config.blendMode, config.colorWriteMask));
+		}
 	}
 
 	vk::PipelineColorBlendStateCreateInfo colorBlending;

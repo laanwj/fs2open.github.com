@@ -259,6 +259,19 @@ public:
 	void clearPendingUniformBindings();
 
 	/**
+	 * @brief Get a pending uniform binding by block type index
+	 */
+	const PendingUniformBinding& getPendingUniformBinding(size_t index) const {
+		Assertion(index < NUM_UNIFORM_BLOCK_TYPES, "getPendingUniformBinding: index %zu out of range!", index);
+		return m_pendingUniformBindings[index];
+	}
+
+	/**
+	 * @brief Bind material textures to descriptor set (public for decal rendering)
+	 */
+	bool bindMaterialTextures(material* mat, vk::DescriptorSet materialSet);
+
+	/**
 	 * @brief Reset per-frame diagnostic counters (called at start of frame)
 	 */
 	void resetFrameStats();
@@ -279,11 +292,6 @@ private:
 	 * @brief Build pipeline config from material
 	 */
 	PipelineConfig buildPipelineConfig(material* mat, primitive_type prim_type);
-
-	/**
-	 * @brief Bind material textures to descriptor set
-	 */
-	bool bindMaterialTextures(material* mat, vk::DescriptorSet materialSet);
 
 	/**
 	 * @brief Bind vertex buffer from handle

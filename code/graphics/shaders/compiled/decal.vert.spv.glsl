@@ -1,28 +1,38 @@
 #version 150
 
-layout(std140) uniform genericData
+layout(std140) uniform decalGlobalData
 {
-    mat4 modelMatrix;
-    vec4 color;
-    vec4 clipEquation;
-    int baseMapIndex;
-    int alphaTexture;
-    int noTexturing;
-    int srgb;
-    float intensity;
-    float alphaThreshold;
-    int clipEnabled;
-} _19;
+    mat4 viewMatrix;
+    mat4 projMatrix;
+    mat4 invViewMatrix;
+    mat4 invProjMatrix;
+    vec2 viewportSize;
+} _76;
 
-out vec4 fragTexCoord;
-in vec4 vertTexCoord;
-out vec4 fragColor;
+in vec4 vertModelMatrix0;
+in vec4 vertModelMatrix1;
+in vec4 vertModelMatrix2;
+in vec4 vertModelMatrix3;
+flat out float normal_angle_cutoff;
+flat out float angle_fade_start;
+flat out float alpha_scale;
+flat out mat4 invModelMatrix;
+flat out vec3 decalDirection;
 in vec4 vertPosition;
 
 void main()
 {
-    fragTexCoord = vertTexCoord;
-    fragColor = _19.color;
-    gl_Position = vec4(((vertPosition.xy * vec2(0.0005208333604969084262847900390625, 0.000925925909541547298431396484375)) * 2.0) - vec2(1.0), 0.0, 1.0);
+    normal_angle_cutoff = vertModelMatrix0.w;
+    angle_fade_start = vertModelMatrix1.w;
+    alpha_scale = vertModelMatrix2.w;
+    mat4 _117 = mat4(vertModelMatrix0, vertModelMatrix1, vertModelMatrix2, vertModelMatrix3);
+    _117[0].w = 0.0;
+    mat4 _119 = _117;
+    _119[1].w = 0.0;
+    mat4 _121 = _119;
+    _121[2].w = 0.0;
+    invModelMatrix = inverse(_121);
+    decalDirection = mat3(_76.viewMatrix[0].xyz, _76.viewMatrix[1].xyz, _76.viewMatrix[2].xyz) * _121[2].xyz;
+    gl_Position = ((_76.projMatrix * _76.viewMatrix) * _121) * vertPosition;
 }
 

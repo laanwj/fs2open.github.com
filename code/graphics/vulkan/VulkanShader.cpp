@@ -43,6 +43,7 @@ static constexpr uint32_t VTX_NORMAL   = 1u << 3;
 static constexpr uint32_t VTX_TANGENT  = 1u << 4;
 static constexpr uint32_t VTX_MODELID  = 1u << 5;
 static constexpr uint32_t VTX_RADIUS   = 1u << 6;
+static constexpr uint32_t VTX_MATRIX   = (1u << 8) | (1u << 9) | (1u << 10) | (1u << 11);  // mat4 at locations 8-11
 static constexpr uint32_t VTX_NONE     = 0;
 
 // Based on GL_shader_types in gropenglshader.cpp
@@ -67,7 +68,7 @@ const VulkanShaderTypeInfo VULKAN_SHADER_TYPES[] = {
 	{ SDR_TYPE_BATCHED_BITMAP,                     "batched",        "batched",        nullptr,         "Batched bitmaps",              VTX_POSITION | VTX_COLOR | VTX_TEXCOORD },
 	{ SDR_TYPE_DEFAULT_MATERIAL,                   "default-material", "default-material", nullptr,     "Default material",             VTX_POSITION | VTX_COLOR | VTX_TEXCOORD },
 	{ SDR_TYPE_NANOVG,                             "nanovg",         "nanovg",         nullptr,         "NanoVG UI",                    VTX_POSITION | VTX_TEXCOORD },
-	{ SDR_TYPE_DECAL,                              "decal",          "decal",          nullptr,         "Decals",                       VTX_POSITION | VTX_TEXCOORD },
+	{ SDR_TYPE_DECAL,                              "decal",          "decal",          nullptr,         "Decals",                       VTX_POSITION | VTX_MATRIX },
 	{ SDR_TYPE_SCENE_FOG,                          "fog",            "fog",            nullptr,         "Scene fog",                    VTX_NONE },
 	{ SDR_TYPE_VOLUMETRIC_FOG,                     "volumetric-fog", "volumetric-fog", nullptr,         "Volumetric fog",               VTX_NONE },
 	{ SDR_TYPE_ROCKET_UI,                          "rocketui",       "rocketui",       nullptr,         "Rocket UI",                    VTX_POSITION | VTX_COLOR | VTX_TEXCOORD },
