@@ -133,18 +133,14 @@ public:
 	size_t getPipelineCount() const { return m_pipelines.size(); }
 
 	/**
-	 * @brief Check if a vertex layout needs the fallback color buffer
+	 * @brief Check if a draw needs a fallback buffer for a given vertex attribute
 	 * @param vertexLayout The vertex layout to check
-	 * @return true if the layout doesn't have color and needs fallback
+	 * @param shaderType The shader being used (checked against vertexInputMask)
+	 * @param location The vertex attribute location to check
+	 * @return true if the layout doesn't provide this attribute AND the shader consumes it
 	 */
-	bool needsFallbackColor(const vertex_layout& vertexLayout);
-
-	/**
-	 * @brief Check if a vertex layout needs the fallback texcoord buffer
-	 * @param vertexLayout The vertex layout to check
-	 * @return true if the layout doesn't have texcoord and needs fallback
-	 */
-	bool needsFallbackTexCoord(const vertex_layout& vertexLayout);
+	bool needsFallbackAttribute(const vertex_layout& vertexLayout, shader_type shaderType,
+	                             VertexAttributeLocation location);
 
 	/**
 	 * @brief Clear all cached pipelines

@@ -56,11 +56,10 @@ struct VertexInputConfig {
 	SCP_vector<vk::VertexInputAttributeDescription> attributes;
 	vk::PipelineVertexInputStateCreateInfo createInfo;
 
-	// True if this config uses the fallback color buffer (no color in vertex data)
-	bool needsFallbackColor = false;
-
-	// True if this config uses the fallback texcoord buffer (no texcoord in vertex data)
-	bool needsFallbackTexCoord = false;
+	// Bitmask of vertex input locations natively provided by the layout (bit N = location N).
+	// Does NOT include fallback attributes. Compare with shader's vertexInputMask to
+	// determine which fallbacks are actually needed: shaderMask & ~providedInputMask.
+	uint32_t providedInputMask = 0;
 
 	// Update createInfo pointers after vector modifications
 	void updatePointers();

@@ -76,13 +76,9 @@ void VulkanVertexFormatCache::clear()
 VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_layout& layout)
 {
 	VertexInputConfig config;
-	config.needsFallbackColor = false;
-	config.needsFallbackTexCoord = false;
 
 	// Track which bindings we've already added
 	SCP_unordered_map<size_t, uint32_t> bufferBindings; // buffer_number -> binding index
-	bool hasColorAttribute = false;
-	bool hasTexCoordAttribute = false;
 
 	size_t numComponents = layout.get_num_vertex_components();
 
@@ -95,13 +91,9 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 			continue;
 		}
 
-		// Track if we have a color attribute
-		if (mapping->location == VertexAttributeLocation::Color) {
-			hasColorAttribute = true;
-		}
-		if (mapping->location == VertexAttributeLocation::TexCoord) {
-			hasTexCoordAttribute = true;
-		}
+		// Track which locations the layout natively provides
+		uint32_t loc = static_cast<uint32_t>(mapping->location);
+		config.providedInputMask |= (1u << loc);
 
 		// Get or create binding for this buffer
 		uint32_t bindingIndex;
@@ -131,6 +123,8 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 				attr.offset = static_cast<uint32_t>(component->offset) + (row * 16);
 				config.attributes.push_back(attr);
 			}
+			// Mark all 4 matrix locations as provided
+			config.providedInputMask |= (1u << (loc + 1)) | (1u << (loc + 2)) | (1u << (loc + 3));
 		} else {
 			vk::VertexInputAttributeDescription attr;
 			attr.location = static_cast<uint32_t>(mapping->location);
@@ -144,9 +138,8 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 	// Only add fallback bindings when the layout has actual vertex components.
 	// Empty layouts (e.g. fullscreen triangles) generate vertices in the shader
 	// and don't need any vertex input bindings.
-	if (!hasColorAttribute && numComponents > 0) {
-		config.needsFallbackColor = true;
-
+	uint32_t colorBit = 1u << static_cast<uint32_t>(VertexAttributeLocation::Color);
+	if (!(config.providedInputMask & colorBit) && numComponents > 0) {
 		// Add binding for fallback color buffer (instanced so one value applies to all vertices)
 		vk::VertexInputBindingDescription colorBinding;
 		colorBinding.binding = FALLBACK_COLOR_BINDING;
@@ -165,9 +158,8 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 
 	// If no texcoord attribute, add a fallback providing (0,0,0,0)
 	// In OpenGL, missing vertex attributes default to (0,0,0,1); Vulkan requires explicit input
-	if (!hasTexCoordAttribute && numComponents > 0) {
-		config.needsFallbackTexCoord = true;
-
+	uint32_t texCoordBit = 1u << static_cast<uint32_t>(VertexAttributeLocation::TexCoord);
+	if (!(config.providedInputMask & texCoordBit) && numComponents > 0) {
 		vk::VertexInputBindingDescription texCoordBinding;
 		texCoordBinding.binding = FALLBACK_TEXCOORD_BINDING;
 		texCoordBinding.stride = 16;  // vec4 = 16 bytes

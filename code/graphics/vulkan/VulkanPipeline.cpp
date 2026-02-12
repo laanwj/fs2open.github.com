@@ -232,16 +232,24 @@ void VulkanPipelineManager::clearPipelineCache()
 	m_vertexFormatCache.clear();
 }
 
-bool VulkanPipelineManager::needsFallbackColor(const vertex_layout& vertexLayout)
+bool VulkanPipelineManager::needsFallbackAttribute(const vertex_layout& vertexLayout, shader_type shaderType,
+                                                     VertexAttributeLocation location)
 {
-	const VertexInputConfig& config = m_vertexFormatCache.getVertexInputConfig(vertexLayout);
-	return config.needsFallbackColor;
-}
+	// Empty layouts (fullscreen triangle etc.) don't use fallbacks
+	if (vertexLayout.get_num_vertex_components() == 0) return false;
 
-bool VulkanPipelineManager::needsFallbackTexCoord(const vertex_layout& vertexLayout)
-{
 	const VertexInputConfig& config = m_vertexFormatCache.getVertexInputConfig(vertexLayout);
-	return config.needsFallbackTexCoord;
+	uint32_t bit = 1u << static_cast<uint32_t>(location);
+
+	// Layout natively provides this attribute — no fallback needed
+	if (config.providedInputMask & bit) return false;
+
+	// Fallback needed only if the shader actually consumes this attribute
+	const VulkanShaderModule* shader = m_shaderManager->getShaderByType(shaderType);
+	if (shader && shader->vertexInputMask != 0) {
+		return (shader->vertexInputMask & bit) != 0;
+	}
+	return true;
 }
 
 void VulkanPipelineManager::createPipelineLayout()
@@ -342,12 +350,6 @@ vk::UniquePipeline VulkanPipelineManager::createPipeline(const PipelineConfig& c
 			[&usedBindings](const vk::VertexInputBindingDescription& b) {
 				return usedBindings.count(b.binding) == 0;
 			}), binds.end());
-
-		// Update needsFallback flags
-		vertexInputConfig.needsFallbackColor =
-			vertexInputConfig.needsFallbackColor && usedBindings.count(FALLBACK_COLOR_BINDING) > 0;
-		vertexInputConfig.needsFallbackTexCoord =
-			vertexInputConfig.needsFallbackTexCoord && usedBindings.count(FALLBACK_TEXCOORD_BINDING) > 0;
 
 		vertexInputConfig.updatePointers();
 	}

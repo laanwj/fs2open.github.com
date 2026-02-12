@@ -1182,16 +1182,14 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 	// Bind pipeline with layout
 	stateTracker->bindPipeline(pipeline, pipelineManager->getPipelineLayout());
 
-	// Bind fallback color buffer if vertex data doesn't have color
-	if (pipelineManager->needsFallbackColor(*layout)) {
+	// Bind fallback vertex buffers for attributes the layout doesn't provide but the shader needs
+	if (pipelineManager->needsFallbackAttribute(*layout, config.shaderType, VertexAttributeLocation::Color)) {
 		vk::Buffer fallbackColor = bufferManager->getFallbackColorBuffer();
 		if (fallbackColor) {
 			stateTracker->bindVertexBuffer(FALLBACK_COLOR_BINDING, fallbackColor, 0);
 		}
 	}
-
-	// Bind fallback texcoord buffer if vertex data doesn't have texcoords
-	if (pipelineManager->needsFallbackTexCoord(*layout)) {
+	if (pipelineManager->needsFallbackAttribute(*layout, config.shaderType, VertexAttributeLocation::TexCoord)) {
 		vk::Buffer fallbackTexCoord = bufferManager->getFallbackTexCoordBuffer();
 		if (fallbackTexCoord) {
 			stateTracker->bindVertexBuffer(FALLBACK_TEXCOORD_BINDING, fallbackTexCoord, 0);
