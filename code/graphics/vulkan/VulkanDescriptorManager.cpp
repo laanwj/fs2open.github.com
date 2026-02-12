@@ -376,7 +376,7 @@ void VulkanDescriptorManager::createSetLayouts()
 
 			// Binding 1: Matrices UBO
 			{ 1, vk::DescriptorType::eUniformBuffer, 1,
-			  vk::ShaderStageFlagBits::eVertex },
+			  vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment },
 
 			// Binding 2: NanoVGData UBO
 			{ 2, vk::DescriptorType::eUniformBuffer, 1,

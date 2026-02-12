@@ -26,6 +26,11 @@ struct VulkanShaderModule {
 	SCP_string description;
 	bool valid = false;
 
+	// Bitmask of vertex input locations this shader declares (bit N = location N).
+	// Used at pipeline creation to filter out fallback attributes the shader
+	// doesn't consume. Copied from VulkanShaderTypeInfo at load time.
+	uint32_t vertexInputMask = 0;
+
 	// Check if this shader uses geometry shader
 	bool hasGeometryShader() const { return static_cast<bool>(geometryModule); }
 };
@@ -41,6 +46,7 @@ struct VulkanShaderTypeInfo {
 	const char* fragmentFile;    // Fragment shader SPIR-V filename
 	const char* geometryFile;    // Geometry shader filename (may be null)
 	const char* description;
+	uint32_t vertexInputMask;    // Bitmask of vertex input locations (bit N = location N)
 };
 
 /**

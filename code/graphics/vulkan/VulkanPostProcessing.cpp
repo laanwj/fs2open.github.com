@@ -1398,32 +1398,25 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 
 	m_memoryManager->unmapMemory(m_deferredUBOAlloc);
 
-	// Get/create pipeline for deferred lighting (fullscreen — no vertex input)
-	PipelineConfig fsConfig;
-	fsConfig.shaderType = SDR_TYPE_DEFERRED_LIGHTING;
-	fsConfig.vertexLayoutHash = 0;
-	fsConfig.primitiveType = PRIM_TYPE_TRIS;
-	fsConfig.depthMode = ZBUFFER_TYPE_NONE;
-	fsConfig.blendMode = ALPHA_BLEND_ADDITIVE;
-	fsConfig.cullEnabled = false;
-	fsConfig.depthWriteEnabled = false;
-	fsConfig.renderPass = m_lightAccumRenderPass;
-
-	vertex_layout emptyLayout;
-	vk::Pipeline fsPipeline = pipelineMgr->getPipeline(fsConfig, emptyLayout);
-	if (!fsPipeline) {
-		return;
-	}
-
-	// Get/create pipeline for volume lights (POSITION3 vertex input)
+	// Both fullscreen and volume lights use the same vertex layout (POSITION3).
+	// For fullscreen lights the shader ignores vertex data and generates positions
+	// from gl_VertexIndex, but Vulkan requires all declared vertex inputs to have
+	// matching pipeline attributes and bound buffers.
 	vertex_layout volLayout;
 	volLayout.add_vertex_component(vertex_format_data::POSITION3, sizeof(float) * 3, 0);
 
-	PipelineConfig volConfig = fsConfig;
-	volConfig.vertexLayoutHash = volLayout.hash();
+	PipelineConfig lightConfig;
+	lightConfig.shaderType = SDR_TYPE_DEFERRED_LIGHTING;
+	lightConfig.vertexLayoutHash = volLayout.hash();
+	lightConfig.primitiveType = PRIM_TYPE_TRIS;
+	lightConfig.depthMode = ZBUFFER_TYPE_NONE;
+	lightConfig.blendMode = ALPHA_BLEND_ADDITIVE;
+	lightConfig.cullEnabled = false;
+	lightConfig.depthWriteEnabled = false;
+	lightConfig.renderPass = m_lightAccumRenderPass;
 
-	vk::Pipeline volPipeline = pipelineMgr->getPipeline(volConfig, volLayout);
-	if (!volPipeline) {
+	vk::Pipeline lightPipeline = pipelineMgr->getPipeline(lightConfig, volLayout);
+	if (!lightPipeline) {
 		return;
 	}
 
@@ -1663,10 +1656,13 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 		return true;
 	};
 
+	cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, lightPipeline);
+
 	// Draw full-frame lights (directional + ambient)
+	// Bind sphere VBO as dummy — shader ignores vertex data for these light types.
 	lightIdx = 0;
 	if (!full_frame_lights.empty()) {
-		cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, fsPipeline);
+		cmd.bindVertexBuffers(0, m_sphereMesh.vbo, vk::DeviceSize(0));
 		for (size_t i = 0; i < full_frame_lights.size(); ++i) {
 			if (bindLightDescriptors(lightIdx)) {
 				cmd.draw(3, 1, 0, 0);
@@ -1677,7 +1673,6 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 
 	// Draw sphere lights (point + cone)
 	if (!sphere_lights.empty()) {
-		cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, volPipeline);
 		cmd.bindVertexBuffers(0, m_sphereMesh.vbo, vk::DeviceSize(0));
 		cmd.bindIndexBuffer(m_sphereMesh.ibo, 0, vk::IndexType::eUint16);
 		for (size_t i = 0; i < sphere_lights.size(); ++i) {
@@ -1690,7 +1685,6 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 
 	// Draw cylinder lights (tube)
 	if (!cylinder_lights.empty()) {
-		cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, volPipeline);
 		cmd.bindVertexBuffers(0, m_cylinderMesh.vbo, vk::DeviceSize(0));
 		cmd.bindIndexBuffer(m_cylinderMesh.ibo, 0, vk::IndexType::eUint16);
 		for (size_t i = 0; i < cylinder_lights.size(); ++i) {

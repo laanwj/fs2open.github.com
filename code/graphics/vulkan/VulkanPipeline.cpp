@@ -315,8 +315,42 @@ vk::UniquePipeline VulkanPipelineManager::createPipeline(const PipelineConfig& c
 		shaderStages.push_back(geomStage);
 	}
 
-	// Vertex input state
-	const VertexInputConfig& vertexInputConfig = m_vertexFormatCache.getVertexInputConfig(vertexLayout);
+	// Vertex input state — filter out attributes the shader doesn't consume.
+	// The vertex format cache may add fallback color/texcoord attributes that
+	// shaders like NanoVG don't declare; the SPIR-V compiler strips unused
+	// inputs, so we must match the pipeline to the actual shader inputs.
+	VertexInputConfig vertexInputConfig = m_vertexFormatCache.getVertexInputConfig(vertexLayout);
+	if (shader->vertexInputMask != 0) {
+		uint32_t mask = shader->vertexInputMask;
+		auto& attrs = vertexInputConfig.attributes;
+		SCP_unordered_set<uint32_t> usedBindings;
+
+		// Remove attributes at locations the shader doesn't use
+		attrs.erase(std::remove_if(attrs.begin(), attrs.end(),
+			[mask](const vk::VertexInputAttributeDescription& a) {
+				return (mask & (1u << a.location)) == 0;
+			}), attrs.end());
+
+		// Collect bindings still referenced by remaining attributes
+		for (auto& a : attrs) {
+			usedBindings.insert(a.binding);
+		}
+
+		// Remove orphaned bindings
+		auto& binds = vertexInputConfig.bindings;
+		binds.erase(std::remove_if(binds.begin(), binds.end(),
+			[&usedBindings](const vk::VertexInputBindingDescription& b) {
+				return usedBindings.count(b.binding) == 0;
+			}), binds.end());
+
+		// Update needsFallback flags
+		vertexInputConfig.needsFallbackColor =
+			vertexInputConfig.needsFallbackColor && usedBindings.count(FALLBACK_COLOR_BINDING) > 0;
+		vertexInputConfig.needsFallbackTexCoord =
+			vertexInputConfig.needsFallbackTexCoord && usedBindings.count(FALLBACK_TEXCOORD_BINDING) > 0;
+
+		vertexInputConfig.updatePointers();
+	}
 
 	// Input assembly
 	vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
