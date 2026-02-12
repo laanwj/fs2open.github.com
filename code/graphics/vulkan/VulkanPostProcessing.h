@@ -275,6 +275,29 @@ public:
 	 */
 	void transitionGbufForResume(vk::CommandBuffer cmd);
 
+	// ========== Deferred Light Accumulation ==========
+
+	/**
+	 * @brief Render deferred lights into the composite buffer
+	 *
+	 * Reads G-buffer textures, renders light volumes (fullscreen, sphere, cylinder)
+	 * with additive blending into the composite attachment. Manages its own render
+	 * pass internally.
+	 *
+	 * @param cmd Active command buffer (must be outside a render pass)
+	 */
+	void renderDeferredLights(vk::CommandBuffer cmd);
+
+	/**
+	 * @brief Get the light accumulation render pass
+	 */
+	vk::RenderPass getLightAccumRenderPass() const { return m_lightAccumRenderPass; }
+
+	/**
+	 * @brief Get the light accumulation framebuffer
+	 */
+	vk::Framebuffer getLightAccumFramebuffer() const { return m_lightAccumFramebuffer; }
+
 private:
 	void updateTonemappingUBO();
 
@@ -286,6 +309,11 @@ private:
 	// G-buffer methods (deferred lighting)
 	bool initGBuffer();
 	void shutdownGBuffer();
+
+	// Light volume methods (deferred lighting)
+	bool initLightVolumes();
+	void shutdownLightVolumes();
+	bool initLightAccumPass();
 
 	// LDR target methods
 	bool initLDRTargets();
@@ -384,6 +412,29 @@ private:
 	vk::RenderPass m_gbufRenderPassLoad;  // loadOp=eLoad (resume after mid-pass copy)
 	vk::Framebuffer m_gbufFramebuffer;
 	bool m_gbufInitialized = false;
+
+	// ---- Light accumulation (deferred lighting) ----
+	vk::RenderPass m_lightAccumRenderPass;    // Single RGBA16F color, loadOp=eLoad, additive blend
+	vk::Framebuffer m_lightAccumFramebuffer;  // Composite image as attachment 0
+
+	// Light volume meshes (sphere + cylinder for positional lights)
+	struct LightVolumeMesh {
+		vk::Buffer vbo;
+		VulkanAllocation vboAlloc;
+		vk::Buffer ibo;
+		VulkanAllocation iboAlloc;
+		uint32_t vertexCount = 0;
+		uint32_t indexCount = 0;
+	};
+	LightVolumeMesh m_sphereMesh;
+	LightVolumeMesh m_cylinderMesh;
+
+	// Per-frame UBO for deferred light data (lights + globals + matrices)
+	vk::Buffer m_deferredUBO;
+	VulkanAllocation m_deferredUBOAlloc;
+	static constexpr uint32_t DEFERRED_UBO_SIZE = 256 * 1024;  // 256KB for light data
+
+	bool m_lightVolumesInitialized = false;
 
 	// ---- Distortion ping-pong textures (32x32 RGBA8) ----
 	RenderTarget m_distortionTex[2];

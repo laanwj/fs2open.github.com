@@ -176,6 +176,14 @@ class VulkanRenderer {
 	 */
 	bool isSceneRendering() const { return m_sceneRendering; }
 
+	/**
+	 * @brief Set whether the G-buffer render pass is active
+	 *
+	 * Called by deferred_lighting_finish() to switch from G-buffer to
+	 * scene render pass mid-frame for forward transparent rendering.
+	 */
+	void setUseGbufRenderPass(bool use) { m_useGbufRenderPass = use; }
+
   private:
 	bool initDisplayDevice() const;
 
