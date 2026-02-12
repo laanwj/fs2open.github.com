@@ -41,6 +41,12 @@ public:
 	vk::RenderPass renderPass;  // Render pass compatible with this target
 	bool isRenderTarget = false;
 
+	// Cubemap support
+	bool isCubemap = false;
+	vk::ImageView cubeFaceViews[6] = {};  // Per-face 2D views for render-to-cubemap
+	vk::Framebuffer cubeFaceFramebuffers[6] = {};  // Per-face framebuffers for render-to-cubemap
+	vk::ImageView cubeImageView;  // Cube view for sampling (viewType=eCube, layerCount=6)
+
 	// Texture scaling (for non-power-of-two handling)
 	float uScale = 1.0f;
 	float vScale = 1.0f;
@@ -143,6 +149,11 @@ public:
 	 */
 	vk::ImageView getFallbackTextureView2D();
 
+	/**
+	 * @brief Get fallback white cubemap image view (Cube) for unbound samplerCube slots
+	 */
+	vk::ImageView getFallbackCubeView();
+
 	// Texture access
 
 	/**
@@ -187,22 +198,26 @@ public:
 private:
 	/**
 	 * @brief Create a Vulkan image
+	 * @param cubemap If true, sets eCubeCompatible flag (requires arrayLayers=6)
 	 */
 	bool createImage(uint32_t width, uint32_t height, uint32_t mipLevels,
 	                 vk::Format format, vk::ImageTiling tiling,
 	                 vk::ImageUsageFlags usage, MemoryUsage memUsage,
 	                 vk::Image& image, VulkanAllocation& allocation,
-	                 uint32_t arrayLayers = 1);
+	                 uint32_t arrayLayers = 1, bool cubemap = false);
+
+	enum class ImageViewType { Array2D, Plain2D, Cube };
 
 	/**
 	 * @brief Create an image view
-	 * @param asArray If true, creates a 2DArray view for shader compatibility
+	 * @param viewType Controls view type: Array2D=sampler2DArray, Plain2D=sampler2D, Cube=samplerCube
 	 */
 	vk::ImageView createImageView(vk::Image image, vk::Format format,
 	                               vk::ImageAspectFlags aspectFlags,
 	                               uint32_t mipLevels,
-	                               bool asArray = false,
-	                               uint32_t layerCount = 1);
+	                               ImageViewType viewType = ImageViewType::Array2D,
+	                               uint32_t layerCount = 1,
+	                               uint32_t baseArrayLayer = 0);
 
 	/**
 	 * @brief Copy buffer data to image
@@ -255,6 +270,11 @@ private:
 	bool uploadAnimationFrames(int handle, bitmap* bm, int compType,
 	                           int baseFrame, int numFrames);
 
+	/**
+	 * @brief Upload a cubemap DDS texture (6 faces) as a single cubemap image
+	 */
+	bool uploadCubemap(int handle, bitmap* bm, int compType);
+
 	// Guard flag to prevent recursion when bm_lock calls bm_data during animation upload
 	bool m_uploadingAnimation = false;
 
@@ -280,6 +300,11 @@ private:
 	vk::ImageView m_fallbackTextureView;      // 2D_ARRAY view (for material texture arrays)
 	vk::ImageView m_fallbackTextureView2D;    // 2D view (for post-processing sampler2D)
 	VulkanAllocation m_fallbackTextureAllocation;
+
+	// Fallback 1x1x6 white cubemap for unbound samplerCube slots
+	vk::Image m_fallbackCubeTexture;
+	vk::ImageView m_fallbackCubeView;         // Cube view (for samplerCube)
+	VulkanAllocation m_fallbackCubeAllocation;
 
 	// Device limits
 	uint32_t m_maxTextureSize = 4096;

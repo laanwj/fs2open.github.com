@@ -16,6 +16,7 @@
 #include "graphics/matrix.h"
 #include "graphics/shadows.h"
 #include "graphics/2d.h"
+#include "bmpman/bmpman.h"
 #include "io/timer.h"
 #include "lighting/lighting_profiles.h"
 #include "lighting/lighting.h"
@@ -1317,12 +1318,30 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 
 	// Pack global header
 	auto lp = ltp::current();
+	// Determine if environment maps are available
+	bool envMapAvailable = (ENVMAP > 0);
+	tcache_slot_vulkan* envMapSlot = nullptr;
+	tcache_slot_vulkan* irrMapSlot = nullptr;
+	if (envMapAvailable) {
+		envMapSlot = texMgr->getTextureSlot(ENVMAP);
+		if (!envMapSlot || !envMapSlot->imageView || !envMapSlot->isCubemap) {
+			envMapAvailable = false;
+		}
+	}
+	if (envMapAvailable && IRRMAP > 0) {
+		irrMapSlot = texMgr->getTextureSlot(IRRMAP);
+		if (!irrMapSlot || !irrMapSlot->imageView || !irrMapSlot->isCubemap) {
+			irrMapSlot = nullptr;  // Fall back to fallback cube for irrmap
+		}
+	}
+
 	{
 		auto* header = reinterpret_cast<graphics::deferred_global_data*>(uboMapped);
 		memset(header, 0, sizeof(graphics::deferred_global_data));
 		header->invScreenWidth = 1.0f / gr_screen.max_w;
 		header->invScreenHeight = 1.0f / gr_screen.max_h;
 		header->nearPlane = gr_near_plane;
+		header->use_env_map = envMapAvailable ? 1 : 0;
 
 		if (m_shadowInitialized && Shadow_quality != ShadowQuality::Disabled) {
 			header->shadow_mv_matrix = Shadow_view_matrix_light;
@@ -1534,13 +1553,32 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 			shadowTexInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 		}
 
-		// Env map at binding 3 (fallback)
-		vk::DescriptorImageInfo envFallback;
-		envFallback.sampler = defaultSampler;
-		envFallback.imageView = fallbackView;
-		envFallback.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		// Env map at binding 3
+		vk::ImageView fallbackCubeView = texMgr->getFallbackCubeView();
+		vk::DescriptorImageInfo envTexInfo;
+		if (envMapAvailable && envMapSlot) {
+			envTexInfo.sampler = defaultSampler;
+			envTexInfo.imageView = envMapSlot->imageView;
+			envTexInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		} else {
+			envTexInfo.sampler = defaultSampler;
+			envTexInfo.imageView = fallbackCubeView;
+			envTexInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		}
 
-		std::array<vk::WriteDescriptorSet, 4> globalWrites;
+		// Irradiance map at binding 4
+		vk::DescriptorImageInfo irrTexInfo;
+		if (envMapAvailable && irrMapSlot) {
+			irrTexInfo.sampler = defaultSampler;
+			irrTexInfo.imageView = irrMapSlot->imageView;
+			irrTexInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		} else {
+			irrTexInfo.sampler = defaultSampler;
+			irrTexInfo.imageView = fallbackCubeView;
+			irrTexInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		}
+
+		std::array<vk::WriteDescriptorSet, 5> globalWrites;
 		globalWrites[0].dstSet = globalSet;
 		globalWrites[0].dstBinding = 0;
 		globalWrites[0].dstArrayElement = 0;
@@ -1567,7 +1605,14 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 		globalWrites[3].dstArrayElement = 0;
 		globalWrites[3].descriptorCount = 1;
 		globalWrites[3].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-		globalWrites[3].pImageInfo = &envFallback;
+		globalWrites[3].pImageInfo = &envTexInfo;
+
+		globalWrites[4].dstSet = globalSet;
+		globalWrites[4].dstBinding = 4;
+		globalWrites[4].dstArrayElement = 0;
+		globalWrites[4].descriptorCount = 1;
+		globalWrites[4].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		globalWrites[4].pImageInfo = &irrTexInfo;
 
 		m_device.updateDescriptorSets(globalWrites, {});
 

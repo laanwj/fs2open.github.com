@@ -19,6 +19,7 @@
 #include "graphics/matrix.h"
 #include "graphics/util/primitives.h"
 #include "graphics/util/uniform_structs.h"
+#include "lighting/lighting.h"
 #include "graphics/util/UniformBuffer.h"
 #include "graphics/shaders/compiled/default-material_structs.vert.h"
 
@@ -1216,7 +1217,7 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 		vk::Sampler fallbackSampler = texManager->getDefaultSampler();
 		vk::ImageView fallbackView = texManager->getFallbackTextureView();
 
-		// Set 0: Global - bindings: 0=Lights UBO, 1=DeferredGlobals UBO, 2=Shadow tex, 3=Env tex
+		// Set 0: Global - bindings: 0=Lights UBO, 1=DeferredGlobals UBO, 2=Shadow tex, 3=Env cube, 4=Irr cube
 		vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
 		Assertion(globalSet, "Failed to allocate Global descriptor set — draw would use stale descriptors!");
 		if (globalSet) {
@@ -1227,7 +1228,12 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 			}
 			if (fallbackSampler && fallbackView) {
 				descManager->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
-				descManager->updateTexture(globalSet, 3, fallbackView, fallbackSampler);
+			}
+			// Bindings 3-4 are samplerCube — use fallback cubemap view
+			vk::ImageView fallbackCubeView = texManager->getFallbackCubeView();
+			if (fallbackSampler && fallbackCubeView) {
+				descManager->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
+				descManager->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
 			}
 
 			// Overwrite with actual pending uniform bindings
@@ -2058,6 +2064,348 @@ void vulkan_render_rocket_primitives(interface_material* material_info,
 	drawManager->renderRocketPrimitives(material_info, prim_type, layout, n_indices, vertex_buffer, index_buffer);
 
 	gr_end_2d_matrix();
+}
+
+void vulkan_calculate_irrmap()
+{
+	if (ENVMAP < 0 || gr_screen.irrmap_render_target < 0) {
+		return;
+	}
+
+	auto* renderer = getRendererInstance();
+	auto* stateTracker = getStateTracker();
+	auto* texManager = getTextureManager();
+	auto* descManager = getDescriptorManager();
+	auto* bufferManager = getBufferManager();
+	auto* pipelineManager = getPipelineManager();
+	auto* pp = getPostProcessor();
+
+	if (!renderer || !stateTracker || !texManager || !descManager || !bufferManager || !pipelineManager || !pp) {
+		return;
+	}
+
+	// Get envmap cubemap view
+	auto* envSlot = bm_get_slot(ENVMAP, true);
+	if (!envSlot || !envSlot->gr_info) {
+		return;
+	}
+	auto* envTs = static_cast<tcache_slot_vulkan*>(envSlot->gr_info);
+	vk::ImageView envmapView = envTs->isCubemap ? envTs->cubeImageView : envTs->imageView;
+	if (!envmapView) {
+		return;
+	}
+
+	// Get irrmap render target (cubemap with per-face framebuffers)
+	auto* irrSlot = bm_get_slot(gr_screen.irrmap_render_target, true);
+	if (!irrSlot || !irrSlot->gr_info) {
+		return;
+	}
+	auto* irrTs = static_cast<tcache_slot_vulkan*>(irrSlot->gr_info);
+	if (!irrTs->isCubemap || !irrTs->renderPass) {
+		return;
+	}
+
+	vk::CommandBuffer cmd = stateTracker->getCommandBuffer();
+
+	// End the current render pass (G-buffer or scene)
+	cmd.endRenderPass();
+
+	// Create pipeline for irradiance map generation
+	PipelineConfig config;
+	config.shaderType = SDR_TYPE_IRRADIANCE_MAP_GEN;
+	config.vertexLayoutHash = 0;
+	config.primitiveType = PRIM_TYPE_TRIS;
+	config.depthMode = ZBUFFER_TYPE_NONE;
+	config.blendMode = ALPHA_BLEND_NONE;
+	config.cullEnabled = false;
+	config.depthWriteEnabled = false;
+	config.renderPass = irrTs->renderPass;
+
+	vertex_layout emptyLayout;
+	vk::Pipeline pipeline = pipelineManager->getPipeline(config, emptyLayout);
+	if (!pipeline) {
+		mprintf(("vulkan_calculate_irrmap: Failed to get pipeline!\n"));
+		return;
+	}
+
+	vk::PipelineLayout pipelineLayout = pipelineManager->getPipelineLayout();
+
+	// Create a small host-visible UBO for the 6 face indices
+	// minUniformBufferOffsetAlignment is typically 256 bytes
+	const uint32_t UBO_SLOT_SIZE = 256;  // Safe alignment for all GPUs
+	const uint32_t UBO_TOTAL_SIZE = 6 * UBO_SLOT_SIZE;
+
+	vk::Device device = bufferManager->getDevice();
+	auto* memManager = getMemoryManager();
+
+	vk::BufferCreateInfo uboBufInfo;
+	uboBufInfo.size = UBO_TOTAL_SIZE;
+	uboBufInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
+	uboBufInfo.sharingMode = vk::SharingMode::eExclusive;
+
+	vk::Buffer faceUBO;
+	VulkanAllocation faceUBOAlloc;
+	try {
+		faceUBO = device.createBuffer(uboBufInfo);
+	} catch (const vk::SystemError& e) {
+		mprintf(("vulkan_calculate_irrmap: Failed to create face UBO: %s\n", e.what()));
+		return;
+	}
+
+	if (!memManager->allocateBufferMemory(faceUBO, MemoryUsage::CpuToGpu, faceUBOAlloc)) {
+		device.destroyBuffer(faceUBO);
+		return;
+	}
+
+	// Map and write face indices
+	auto* mapped = static_cast<uint8_t*>(memManager->mapMemory(faceUBOAlloc));
+	if (!mapped) {
+		device.destroyBuffer(faceUBO);
+		memManager->freeAllocation(faceUBOAlloc);
+		return;
+	}
+	memset(mapped, 0, UBO_TOTAL_SIZE);
+	for (int i = 0; i < 6; i++) {
+		*reinterpret_cast<int*>(mapped + i * UBO_SLOT_SIZE) = i;
+	}
+	memManager->unmapMemory(faceUBOAlloc);
+
+	// Get fallback resources
+	vk::Buffer fallbackUBO = bufferManager->getFallbackUniformBuffer();
+	vk::DeviceSize fallbackUBOSize = static_cast<vk::DeviceSize>(bufferManager->getFallbackUniformBufferSize());
+	vk::Sampler defaultSampler = texManager->getDefaultSampler();
+	vk::ImageView fallbackView = texManager->getFallbackTextureView();
+	vk::ImageView fallbackView2D = texManager->getFallbackTextureView2D();
+	vk::ImageView fallbackCubeView = texManager->getFallbackCubeView();
+
+	vk::Extent2D irrExtent(irrTs->width, irrTs->height);
+
+	for (int face = 0; face < 6; face++) {
+		vk::Framebuffer fb = irrTs->cubeFaceFramebuffers[face];
+		if (!fb) {
+			continue;
+		}
+
+		// Begin render pass for this face (loadOp=eClear, finalLayout=eShaderReadOnlyOptimal)
+		vk::RenderPassBeginInfo rpBegin;
+		rpBegin.renderPass = irrTs->renderPass;
+		rpBegin.framebuffer = fb;
+		rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+		rpBegin.renderArea.extent = irrExtent;
+
+		vk::ClearValue clearValue;
+		clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+		rpBegin.clearValueCount = 1;
+		rpBegin.pClearValues = &clearValue;
+
+		cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+
+		// Set viewport and scissor
+		vk::Viewport viewport;
+		viewport.x = 0.0f;
+		viewport.y = 0.0f;
+		viewport.width = static_cast<float>(irrExtent.width);
+		viewport.height = static_cast<float>(irrExtent.height);
+		viewport.minDepth = 0.0f;
+		viewport.maxDepth = 1.0f;
+		cmd.setViewport(0, viewport);
+
+		vk::Rect2D scissor;
+		scissor.offset = vk::Offset2D(0, 0);
+		scissor.extent = irrExtent;
+		cmd.setScissor(0, scissor);
+
+		// Set 0: Global (all fallback)
+		vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
+		if (globalSet) {
+			if (fallbackUBO) {
+				descManager->updateUniformBuffer(globalSet, 0, fallbackUBO, 0, fallbackUBOSize);
+				descManager->updateUniformBuffer(globalSet, 1, fallbackUBO, 0, fallbackUBOSize);
+			}
+			if (defaultSampler && fallbackView) {
+				descManager->updateTexture(globalSet, 2, fallbackView, defaultSampler);
+			}
+			if (defaultSampler && fallbackCubeView) {
+				descManager->updateTexture(globalSet, 3, fallbackCubeView, defaultSampler);
+				descManager->updateTexture(globalSet, 4, fallbackCubeView, defaultSampler);
+			}
+		}
+
+		// Set 1: Material (envmap cubemap at binding 1)
+		vk::DescriptorSet materialSet = descManager->allocateFrameSet(DescriptorSetIndex::Material);
+		if (materialSet) {
+			// Binding 0: ModelData UBO (fallback)
+			if (fallbackUBO) {
+				descManager->updateUniformBuffer(materialSet, 0, fallbackUBO, 0, fallbackUBOSize);
+				descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
+			}
+
+			// Binding 1: envmap cubemap (element 0) + fallback for rest of array
+			{
+				vk::DescriptorImageInfo envInfo;
+				envInfo.sampler = defaultSampler;
+				envInfo.imageView = envmapView;
+				envInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+				vk::WriteDescriptorSet envWrite;
+				envWrite.dstSet = materialSet;
+				envWrite.dstBinding = 1;
+				envWrite.dstArrayElement = 0;
+				envWrite.descriptorCount = 1;
+				envWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+				envWrite.pImageInfo = &envInfo;
+
+				// Fill remaining texture array elements with fallback 2D
+				SCP_vector<vk::DescriptorImageInfo> fallbackImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1);
+				for (auto& fi : fallbackImages) {
+					fi.sampler = defaultSampler;
+					fi.imageView = fallbackView2D;
+					fi.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+				}
+
+				vk::WriteDescriptorSet fallbackTexWrite;
+				fallbackTexWrite.dstSet = materialSet;
+				fallbackTexWrite.dstBinding = 1;
+				fallbackTexWrite.dstArrayElement = 1;
+				fallbackTexWrite.descriptorCount = static_cast<uint32_t>(fallbackImages.size());
+				fallbackTexWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+				fallbackTexWrite.pImageInfo = fallbackImages.data();
+
+				// Binding 3: SSBO (fallback)
+				vk::DescriptorBufferInfo ssboBufInfo;
+				ssboBufInfo.buffer = fallbackUBO;
+				ssboBufInfo.offset = 0;
+				ssboBufInfo.range = fallbackUBOSize;
+
+				vk::WriteDescriptorSet ssboWrite;
+				ssboWrite.dstSet = materialSet;
+				ssboWrite.dstBinding = 3;
+				ssboWrite.dstArrayElement = 0;
+				ssboWrite.descriptorCount = 1;
+				ssboWrite.descriptorType = vk::DescriptorType::eStorageBuffer;
+				ssboWrite.pBufferInfo = &ssboBufInfo;
+
+				// Bindings 4-6: fallback textures
+				vk::DescriptorImageInfo fallbackImgInfo;
+				fallbackImgInfo.sampler = defaultSampler;
+				fallbackImgInfo.imageView = fallbackView2D;
+				fallbackImgInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+				vk::WriteDescriptorSet b4Write, b5Write, b6Write;
+				b4Write.dstSet = materialSet; b4Write.dstBinding = 4; b4Write.dstArrayElement = 0;
+				b4Write.descriptorCount = 1; b4Write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+				b4Write.pImageInfo = &fallbackImgInfo;
+
+				b5Write = b4Write; b5Write.dstBinding = 5;
+				b6Write = b4Write; b6Write.dstBinding = 6;
+
+				std::array<vk::WriteDescriptorSet, 6> writes = {envWrite, fallbackTexWrite, ssboWrite, b4Write, b5Write, b6Write};
+				device.updateDescriptorSets(writes, {});
+			}
+		}
+
+		// Set 2: PerDraw (face UBO at binding 0)
+		vk::DescriptorSet perDrawSet = descManager->allocateFrameSet(DescriptorSetIndex::PerDraw);
+		if (perDrawSet) {
+			descManager->updateUniformBuffer(perDrawSet, 0, faceUBO,
+				static_cast<vk::DeviceSize>(face) * UBO_SLOT_SIZE, UBO_SLOT_SIZE);
+			// Fill remaining per-draw bindings with fallback
+			for (uint32_t b = 1; b <= 4; ++b) {
+				descManager->updateUniformBuffer(perDrawSet, b, fallbackUBO, 0, fallbackUBOSize);
+			}
+		}
+
+		// Bind all descriptor sets
+		if (globalSet && materialSet && perDrawSet) {
+			cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout,
+				0, {globalSet, materialSet, perDrawSet}, {});
+		}
+
+		// Draw fullscreen triangle
+		cmd.draw(3, 1, 0, 0);
+		cmd.endRenderPass();
+	}
+
+	// Queue UBO for deferred destruction (safe to destroy after frame submission)
+	getDeletionQueue()->queueBuffer(faceUBO, faceUBOAlloc);
+
+	// Resume the scene/G-buffer render pass
+	bool useGbuf = renderer->isSceneRendering() && pp->isGbufInitialized() && light_deferred_enabled();
+	if (useGbuf) {
+		// Transition G-buffer attachments for resume
+		{
+			vk::ImageMemoryBarrier barrier;
+			barrier.srcAccessMask = {};
+			barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+			barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.image = pp->getSceneColorImage();
+			barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+			cmd.pipelineBarrier(
+				vk::PipelineStageFlagBits::eTopOfPipe,
+				vk::PipelineStageFlagBits::eColorAttachmentOutput,
+				{}, nullptr, nullptr, barrier);
+		}
+
+		pp->transitionGbufForResume(cmd);
+
+		auto extent = pp->getSceneExtent();
+		vk::RenderPassBeginInfo rpBegin;
+		rpBegin.renderPass = pp->getGbufRenderPassLoad();
+		rpBegin.framebuffer = pp->getGbufFramebuffer();
+		rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+		rpBegin.renderArea.extent = extent;
+
+		std::array<vk::ClearValue, 7> clearValues{};
+		clearValues[6].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+
+		cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		stateTracker->setRenderPass(pp->getGbufRenderPassLoad(), 0);
+		stateTracker->setColorAttachmentCount(VulkanPostProcessor::GBUF_COLOR_ATTACHMENT_COUNT);
+	} else {
+		// Resume simple scene render pass
+		auto extent = pp->getSceneExtent();
+		vk::RenderPassBeginInfo rpBegin;
+		rpBegin.renderPass = pp->getSceneRenderPassLoad();
+		rpBegin.framebuffer = pp->getSceneFramebuffer();
+		rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+		rpBegin.renderArea.extent = extent;
+
+		std::array<vk::ClearValue, 2> clearValues;
+		clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+		clearValues[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+
+		cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		stateTracker->setRenderPass(pp->getSceneRenderPassLoad(), 0);
+	}
+
+	// Restore viewport and scissor
+	{
+		vk::Viewport viewport;
+		viewport.x = static_cast<float>(gr_screen.offset_x);
+		viewport.y = static_cast<float>(gr_screen.offset_y);
+		viewport.width = static_cast<float>(gr_screen.clip_width);
+		viewport.height = static_cast<float>(gr_screen.clip_height);
+		viewport.minDepth = 0.0f;
+		viewport.maxDepth = 1.0f;
+		cmd.setViewport(0, viewport);
+
+		vk::Rect2D scissor;
+		scissor.offset = vk::Offset2D(gr_screen.offset_x, gr_screen.offset_y);
+		scissor.extent = vk::Extent2D(static_cast<uint32_t>(gr_screen.clip_width),
+		                               static_cast<uint32_t>(gr_screen.clip_height));
+		cmd.setScissor(0, scissor);
+	}
+
+	mprintf(("vulkan_calculate_irrmap: Generated irradiance cubemap (%ux%u)\n", irrTs->width, irrTs->height));
 }
 
 } // namespace vulkan

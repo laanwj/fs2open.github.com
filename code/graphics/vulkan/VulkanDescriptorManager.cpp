@@ -326,8 +326,12 @@ void VulkanDescriptorManager::createSetLayouts()
 			{ 2, vk::DescriptorType::eCombinedImageSampler, 1,
 			  vk::ShaderStageFlagBits::eFragment },
 
-			// Binding 3: Environment/irradiance maps
+			// Binding 3: Environment map (samplerCube)
 			{ 3, vk::DescriptorType::eCombinedImageSampler, 1,
+			  vk::ShaderStageFlagBits::eFragment },
+
+			// Binding 4: Irradiance map (samplerCube)
+			{ 4, vk::DescriptorType::eCombinedImageSampler, 1,
 			  vk::ShaderStageFlagBits::eFragment },
 		};
 		m_setLayouts[static_cast<size_t>(DescriptorSetIndex::Global)] = createSetLayout(bindings);

@@ -55,11 +55,6 @@ bool vulkan_is_capable(gr_capability capability)
 {
 	switch (capability) {
 	case gr_capability::CAPABILITY_ENVIRONMENT_MAP:
-		// Cubemap rendering is not fully implemented yet (faces aren't uploaded,
-		// env slot gets a fallback 2D texture), but we return true because:
-		// 1. It degrades gracefully (no reflections, not a crash)
-		// 2. Mods can declare this as a required capability — returning false
-		//    would block them from loading even though the game runs fine
 		return true;
 	case gr_capability::CAPABILITY_NORMAL_MAP:
 		return Cmdline_normal != 0;
@@ -691,7 +686,7 @@ void vulkan_deferred_lighting_finish()
 		stateTracker->setRenderPass(pp->getSceneRenderPassLoad(), 0);
 	}
 }
-void stub_calculate_irrmap() {}
+
 void stub_dump_envmap(const char* /*filename*/) {}
 void stub_override_fog(bool /*set_override*/) {}
 
@@ -1015,7 +1010,12 @@ void vulkan_render_decals(decal_material* material_info,
 		}
 		if (fallbackSampler && fallbackView) {
 			descManager->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
-			descManager->updateTexture(globalSet, 3, fallbackView, fallbackSampler);
+		}
+		// Bindings 3-4 are samplerCube — use fallback cubemap view
+		vk::ImageView fallbackCubeView = texManager->getFallbackCubeView();
+		if (fallbackSampler && fallbackCubeView) {
+			descManager->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
+			descManager->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
 		}
 		stateTracker->bindDescriptorSet(DescriptorSetIndex::Global, globalSet);
 	}
@@ -1235,7 +1235,7 @@ void init_function_pointers()
 	gr_screen.gf_deferred_lighting_end = vulkan_deferred_lighting_end;
 	gr_screen.gf_deferred_lighting_finish = vulkan_deferred_lighting_finish;
 
-	gr_screen.gf_calculate_irrmap = stub_calculate_irrmap;
+	gr_screen.gf_calculate_irrmap = vulkan_calculate_irrmap;
 	gr_screen.gf_dump_envmap = stub_dump_envmap;
 	gr_screen.gf_override_fog = stub_override_fog;
 

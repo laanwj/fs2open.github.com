@@ -446,5 +446,8 @@ void vulkan_render_rocket_primitives(interface_material* material_info,
 // Transform buffer for batched submodel rendering
 void vulkan_update_transform_buffer(void* data, size_t size);
 
+// Environment mapping
+void vulkan_calculate_irrmap();
+
 } // namespace vulkan
 } // namespace graphics

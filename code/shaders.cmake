@@ -37,6 +37,8 @@ set(SHADERS
 	${SHADER_DIR}/deferred.frag
 	${SHADER_DIR}/shadow.vert
 	${SHADER_DIR}/shadow.frag
+	${SHADER_DIR}/irradiance.vert
+	${SHADER_DIR}/irradiance.frag
 )
 
 # Shaders that have complex uniform blocks with vec3 members that cause struct generation issues
@@ -62,6 +64,8 @@ set(SHADERS_SKIP_STRUCT_GEN
 	${SHADER_DIR}/deferred.frag
 	${SHADER_DIR}/shadow.vert
 	${SHADER_DIR}/shadow.frag
+	${SHADER_DIR}/irradiance.vert
+	${SHADER_DIR}/irradiance.frag
 )
 
 target_sources(code PRIVATE ${SHADERS})

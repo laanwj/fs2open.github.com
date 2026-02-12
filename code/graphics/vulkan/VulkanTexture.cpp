@@ -45,6 +45,10 @@ void tcache_slot_vulkan::reset()
 	framebufferView = nullptr;
 	renderPass = nullptr;
 	isRenderTarget = false;
+	isCubemap = false;
+	for (auto& v : cubeFaceViews) v = nullptr;
+	for (auto& fb : cubeFaceFramebuffers) fb = nullptr;
+	cubeImageView = nullptr;
 	uScale = 1.0f;
 	vScale = 1.0f;
 }
@@ -123,7 +127,7 @@ bool VulkanTextureManager::init(vk::Device device, vk::PhysicalDevice physicalDe
 	}
 
 	m_fallbackTextureView = createImageView(m_fallbackTexture, vk::Format::eR8G8B8A8Unorm,
-	                                         vk::ImageAspectFlagBits::eColor, 1, true);
+	                                         vk::ImageAspectFlagBits::eColor, 1, ImageViewType::Array2D);
 	if (!m_fallbackTextureView) {
 		mprintf(("Failed to create fallback texture view!\n"));
 		m_device.destroyImage(m_fallbackTexture);
@@ -134,7 +138,7 @@ bool VulkanTextureManager::init(vk::Device device, vk::PhysicalDevice physicalDe
 	// Also create a 2D (non-array) view of the same texture for post-processing shaders
 	// that use sampler2D instead of sampler2DArray
 	m_fallbackTextureView2D = createImageView(m_fallbackTexture, vk::Format::eR8G8B8A8Unorm,
-	                                           vk::ImageAspectFlagBits::eColor, 1, false);
+	                                           vk::ImageAspectFlagBits::eColor, 1, ImageViewType::Plain2D);
 	if (!m_fallbackTextureView2D) {
 		mprintf(("Failed to create fallback texture 2D view!\n"));
 		m_device.destroyImageView(m_fallbackTextureView);
@@ -182,6 +186,73 @@ bool VulkanTextureManager::init(vk::Device device, vk::PhysicalDevice physicalDe
 
 	mprintf(("Created fallback texture\n"));
 
+	// Create fallback 1x1x6 white cubemap for unbound samplerCube slots
+	if (!createImage(1, 1, 1, vk::Format::eR8G8B8A8Unorm, vk::ImageTiling::eOptimal,
+	                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+	                 MemoryUsage::GpuOnly, m_fallbackCubeTexture, m_fallbackCubeAllocation, 6, true)) {
+		mprintf(("Failed to create fallback cubemap texture!\n"));
+		return false;
+	}
+
+	m_fallbackCubeView = createImageView(m_fallbackCubeTexture, vk::Format::eR8G8B8A8Unorm,
+	                                      vk::ImageAspectFlagBits::eColor, 1, ImageViewType::Cube, 6);
+	if (!m_fallbackCubeView) {
+		mprintf(("Failed to create fallback cubemap view!\n"));
+		return false;
+	}
+
+	// Upload white pixels to all 6 faces of the fallback cubemap
+	{
+		uint32_t whitePixels[6];
+		for (int i = 0; i < 6; i++) whitePixels[i] = 0xFFFFFFFF;
+		vk::DeviceSize cubeBufferSize = sizeof(whitePixels);
+
+		vk::BufferCreateInfo cubeBufInfo;
+		cubeBufInfo.size = cubeBufferSize;
+		cubeBufInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+		cubeBufInfo.sharingMode = vk::SharingMode::eExclusive;
+
+		vk::Buffer cubeStagingBuffer = m_device.createBuffer(cubeBufInfo);
+		VulkanAllocation cubeStagingAlloc;
+		m_memoryManager->allocateBufferMemory(cubeStagingBuffer, MemoryUsage::CpuToGpu, cubeStagingAlloc);
+
+		void* cubeMapped = m_device.mapMemory(cubeStagingAlloc.memory, cubeStagingAlloc.offset, cubeBufferSize);
+		memcpy(cubeMapped, whitePixels, sizeof(whitePixels));
+		m_device.unmapMemory(cubeStagingAlloc.memory);
+
+		SCP_vector<vk::BufferImageCopy> cubeRegions;
+		for (uint32_t face = 0; face < 6; face++) {
+			vk::BufferImageCopy region;
+			region.bufferOffset = face * 4;
+			region.bufferRowLength = 0;
+			region.bufferImageHeight = 0;
+			region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+			region.imageSubresource.mipLevel = 0;
+			region.imageSubresource.baseArrayLayer = face;
+			region.imageSubresource.layerCount = 1;
+			region.imageOffset = vk::Offset3D(0, 0, 0);
+			region.imageExtent = vk::Extent3D(1, 1, 1);
+			cubeRegions.push_back(region);
+		}
+
+		vk::CommandBuffer cubeCmd = beginSingleTimeCommands();
+		recordUploadCommands(cubeCmd, m_fallbackCubeTexture, cubeStagingBuffer, vk::Format::eR8G8B8A8Unorm,
+		                     1, 1, 1, vk::ImageLayout::eUndefined, false, cubeRegions, 6);
+		cubeCmd.end();
+
+		vk::SubmitInfo cubeSubmit;
+		cubeSubmit.commandBufferCount = 1;
+		cubeSubmit.pCommandBuffers = &cubeCmd;
+		m_graphicsQueue.submit(cubeSubmit, nullptr);
+		m_graphicsQueue.waitIdle();
+		m_device.freeCommandBuffers(m_commandPool, cubeCmd);
+
+		m_device.destroyBuffer(cubeStagingBuffer);
+		m_memoryManager->freeAllocation(cubeStagingAlloc);
+	}
+
+	mprintf(("Created fallback cubemap\n"));
+
 	m_initialized = true;
 	return true;
 }
@@ -190,6 +261,19 @@ void VulkanTextureManager::shutdown()
 {
 	if (!m_initialized) {
 		return;
+	}
+
+	// Destroy fallback cubemap
+	if (m_fallbackCubeView) {
+		m_device.destroyImageView(m_fallbackCubeView);
+		m_fallbackCubeView = nullptr;
+	}
+	if (m_fallbackCubeTexture) {
+		m_device.destroyImage(m_fallbackCubeTexture);
+		m_fallbackCubeTexture = nullptr;
+	}
+	if (m_fallbackCubeAllocation.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_fallbackCubeAllocation);
 	}
 
 	// Destroy fallback texture
@@ -303,6 +387,30 @@ void VulkanTextureManager::bm_free_data(bitmap_slot* slot, bool release)
 
 	// Queue resources for deferred destruction to avoid destroying
 	// resources that may still be referenced by in-flight command buffers
+
+	// Cubemap per-face framebuffers and views (must be before ts->framebuffer
+	// since framebuffer may alias cubeFaceFramebuffers[0])
+	for (auto& fb : ts->cubeFaceFramebuffers) {
+		if (fb) {
+			deletionQueue->queueFramebuffer(fb);
+			fb = nullptr;
+		}
+	}
+	for (auto& v : ts->cubeFaceViews) {
+		if (v) {
+			deletionQueue->queueImageView(v);
+			v = nullptr;
+		}
+	}
+	if (ts->cubeImageView) {
+		deletionQueue->queueImageView(ts->cubeImageView);
+		ts->cubeImageView = nullptr;
+	}
+	// If framebuffer was aliased to cubeFaceFramebuffers[0], it's already cleaned up
+	if (ts->isCubemap) {
+		ts->framebuffer = nullptr;
+	}
+
 	if (ts->framebuffer) {
 		deletionQueue->queueFramebuffer(ts->framebuffer);
 		ts->framebuffer = nullptr;
@@ -407,7 +515,7 @@ bool VulkanTextureManager::uploadAnimationFrames(int handle, bitmap* bm, int com
 
 	// Create multi-layer image view
 	vk::ImageView imageView = createImageView(image, format,
-		vk::ImageAspectFlagBits::eColor, mipLevels, true, arrayLayerCount);
+		vk::ImageAspectFlagBits::eColor, mipLevels, ImageViewType::Array2D, arrayLayerCount);
 	if (!imageView) {
 		mprintf(("VulkanTexture: uploadAnimationFrames: failed to create image view\n"));
 		m_device.destroyImage(image);
@@ -652,6 +760,205 @@ bool VulkanTextureManager::uploadAnimationFrames(int handle, bitmap* bm, int com
 	return true;
 }
 
+bool VulkanTextureManager::uploadCubemap(int handle, bitmap* bm, int compType)
+{
+	mprintf(("VulkanTexture: Uploading cubemap: handle=%d w=%d h=%d compType=%d\n",
+		handle, bm->w, bm->h, compType));
+
+	auto* slot = bm_get_slot(handle, true);
+	if (!slot) {
+		return false;
+	}
+	if (!slot->gr_info) {
+		bm_init(slot);
+	}
+	auto* ts = static_cast<tcache_slot_vulkan*>(slot->gr_info);
+
+	uint32_t faceW = static_cast<uint32_t>(bm->w);
+	uint32_t faceH = static_cast<uint32_t>(bm->h);
+
+	// Map cubemap DDS compression types to base types
+	int baseCompType = compType;
+	if (compType == DDS_CUBEMAP_DXT1) baseCompType = DDS_DXT1;
+	else if (compType == DDS_CUBEMAP_DXT3) baseCompType = DDS_DXT3;
+	else if (compType == DDS_CUBEMAP_DXT5) baseCompType = DDS_DXT5;
+
+	bool isCompressed = (baseCompType == DDS_DXT1 || baseCompType == DDS_DXT3 ||
+	                     baseCompType == DDS_DXT5 || baseCompType == DDS_BC7);
+
+	vk::Format format;
+	if (isCompressed) {
+		format = bppToVkFormat(bm->bpp, true, baseCompType);
+	} else {
+		format = bppToVkFormat(bm->bpp);
+	}
+	if (format == vk::Format::eUndefined) {
+		mprintf(("VulkanTexture: uploadCubemap: unsupported format\n"));
+		return false;
+	}
+
+	uint32_t mipLevels = 1;
+	size_t blockSize = 0;
+
+	if (isCompressed) {
+		blockSize = (baseCompType == DDS_DXT1) ? 8 : 16;
+		mipLevels = static_cast<uint32_t>(bm_get_num_mipmaps(handle));
+		if (mipLevels < 1) mipLevels = 1;
+	}
+
+	// Calculate per-face data size (all mip levels for one face)
+	size_t perFaceSize = 0;
+	if (isCompressed) {
+		uint32_t mipW = faceW, mipH = faceH;
+		for (uint32_t m = 0; m < mipLevels; m++) {
+			uint32_t blocksW = (mipW + 3) / 4;
+			uint32_t blocksH = (mipH + 3) / 4;
+			perFaceSize += blocksW * blocksH * blockSize;
+			mipW = std::max(1u, mipW / 2);
+			mipH = std::max(1u, mipH / 2);
+		}
+	} else {
+		size_t dstBpp = (bm->bpp == 24) ? 4 : (bm->bpp / 8);
+		perFaceSize = faceW * faceH * dstBpp;
+	}
+
+	size_t totalDataSize = perFaceSize * 6;
+
+	// Defer destruction of existing resources
+	if (ts->image) {
+		auto* deletionQueue = getDeletionQueue();
+		if (ts->imageView) {
+			deletionQueue->queueImageView(ts->imageView);
+			ts->imageView = nullptr;
+		}
+		deletionQueue->queueImage(ts->image, ts->allocation);
+		ts->image = nullptr;
+		ts->allocation = VulkanAllocation{};
+	}
+
+	// Create cubemap image (6 layers, eCubeCompatible)
+	vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+	if (!createImage(faceW, faceH, mipLevels, format, vk::ImageTiling::eOptimal,
+	                 usage, MemoryUsage::GpuOnly, ts->image, ts->allocation, 6, true)) {
+		mprintf(("VulkanTexture: uploadCubemap: failed to create cubemap image\n"));
+		return false;
+	}
+
+	// Create cubemap image view (samplerCube)
+	ts->imageView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor,
+	                                mipLevels, ImageViewType::Cube, 6);
+	if (!ts->imageView) {
+		mprintf(("VulkanTexture: uploadCubemap: failed to create cube image view\n"));
+		m_device.destroyImage(ts->image);
+		ts->image = nullptr;
+		m_memoryManager->freeAllocation(ts->allocation);
+		return false;
+	}
+
+	// Create staging buffer
+	vk::BufferCreateInfo bufferInfo;
+	bufferInfo.size = totalDataSize;
+	bufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+	vk::Buffer stagingBuffer;
+	VulkanAllocation stagingAllocation;
+
+	try {
+		stagingBuffer = m_device.createBuffer(bufferInfo);
+	} catch (const vk::SystemError& e) {
+		mprintf(("VulkanTexture: uploadCubemap: failed to create staging buffer: %s\n", e.what()));
+		return false;
+	}
+
+	if (!m_memoryManager->allocateBufferMemory(stagingBuffer, MemoryUsage::CpuOnly, stagingAllocation)) {
+		m_device.destroyBuffer(stagingBuffer);
+		return false;
+	}
+
+	void* mapped = m_memoryManager->mapMemory(stagingAllocation);
+	if (!mapped) {
+		m_memoryManager->freeAllocation(stagingAllocation);
+		m_device.destroyBuffer(stagingBuffer);
+		return false;
+	}
+
+	// Copy data to staging buffer
+	// DDS cubemap data layout: face0[mip0..mipN], face1[mip0..mipN], ..., face5[mip0..mipN]
+	if (isCompressed) {
+		memcpy(mapped, reinterpret_cast<const void*>(bm->data), totalDataSize);
+	} else if (bm->bpp == 24) {
+		// Convert BGR to BGRA for all 6 faces
+		const uint8_t* src = reinterpret_cast<const uint8_t*>(bm->data);
+		uint8_t* dst = static_cast<uint8_t*>(mapped);
+		size_t pixelCount = faceW * faceH * 6;
+		for (size_t i = 0; i < pixelCount; ++i) {
+			dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = 255;
+			src += 3; dst += 4;
+		}
+	} else {
+		memcpy(mapped, reinterpret_cast<const void*>(bm->data), totalDataSize);
+	}
+
+	// Build per-face, per-mip copy regions
+	SCP_vector<vk::BufferImageCopy> copyRegions;
+	size_t bufferOffset = 0;
+	for (uint32_t face = 0; face < 6; face++) {
+		uint32_t mipW = faceW, mipH = faceH;
+		for (uint32_t mip = 0; mip < mipLevels; mip++) {
+			vk::BufferImageCopy region;
+			region.bufferOffset = static_cast<vk::DeviceSize>(bufferOffset);
+			region.bufferRowLength = 0;
+			region.bufferImageHeight = 0;
+			region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+			region.imageSubresource.mipLevel = mip;
+			region.imageSubresource.baseArrayLayer = face;
+			region.imageSubresource.layerCount = 1;
+			region.imageOffset = vk::Offset3D(0, 0, 0);
+			region.imageExtent = vk::Extent3D(mipW, mipH, 1);
+			copyRegions.push_back(region);
+
+			if (isCompressed) {
+				uint32_t blocksW = (mipW + 3) / 4;
+				uint32_t blocksH = (mipH + 3) / 4;
+				bufferOffset += blocksW * blocksH * blockSize;
+			} else {
+				size_t dstBpp = (bm->bpp == 24) ? 4 : (bm->bpp / 8);
+				bufferOffset += mipW * mipH * dstBpp;
+			}
+			mipW = std::max(1u, mipW / 2);
+			mipH = std::max(1u, mipH / 2);
+		}
+	}
+
+	m_memoryManager->flushMemory(stagingAllocation, 0, totalDataSize);
+	m_memoryManager->unmapMemory(stagingAllocation);
+
+	// Record transitions + copy and submit async
+	vk::CommandBuffer cmd = beginSingleTimeCommands();
+	recordUploadCommands(cmd, ts->image, stagingBuffer, format, faceW, faceH,
+	                     mipLevels, vk::ImageLayout::eUndefined, false, copyRegions, 6);
+	submitUploadAsync(cmd, stagingBuffer, stagingAllocation);
+
+	// Update slot info
+	ts->width = faceW;
+	ts->height = faceH;
+	ts->format = format;
+	ts->mipLevels = mipLevels;
+	ts->bpp = bm->bpp;
+	ts->arrayLayers = 6;
+	ts->bitmapHandle = handle;
+	ts->currentLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+	ts->used = true;
+	ts->isCubemap = true;
+	ts->uScale = 1.0f;
+	ts->vScale = 1.0f;
+
+	mprintf(("VulkanTexture: Cubemap uploaded: %ux%u, %u mips, format=%d\n",
+		faceW, faceH, mipLevels, static_cast<int>(format)));
+	return true;
+}
+
 bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 {
 	static int callCount = 0;
@@ -709,6 +1016,18 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 		}
 		// First frame requested — create array and upload all frames
 		return uploadAnimationFrames(handle, bm, compType, baseFrame, numFrames);
+	}
+
+	// Detect cubemap textures
+	bool isCubemapUpload = (bm->flags & BMP_TEX_CUBEMAP) != 0;
+	if (!isCubemapUpload) {
+		// Also check compression type for cubemap DDS variants
+		isCubemapUpload = (compType == DDS_CUBEMAP_DXT1 || compType == DDS_CUBEMAP_DXT3 ||
+		                   compType == DDS_CUBEMAP_DXT5);
+	}
+
+	if (isCubemapUpload) {
+		return uploadCubemap(handle, bm, compType);
 	}
 
 	auto* slot = bm_get_slot(handle, true);
@@ -850,8 +1169,8 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 		return false;
 	}
 
-	// Create image view
-	ts->imageView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, mipLevels, true);
+	// Create image view (sampler2DArray for regular textures)
+	ts->imageView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, mipLevels, ImageViewType::Array2D);
 	if (!ts->imageView) {
 		mprintf(("Failed to create texture image view!\n"));
 		m_device.destroyImage(ts->image);
@@ -965,6 +1284,8 @@ int VulkanTextureManager::bm_make_render_target(int handle, int* width, int* hei
 		mipLevels = calculateMipLevels(w, h);
 	}
 
+	bool isCubemapRT = (flags & BMP_FLAG_CUBEMAP) != 0;
+	uint32_t arrayLayers = isCubemapRT ? 6 : 1;
 	vk::Format format = vk::Format::eR8G8B8A8Unorm;
 
 	// Create image for render target
@@ -977,31 +1298,63 @@ int VulkanTextureManager::bm_make_render_target(int handle, int* width, int* hei
 	}
 
 	if (!createImage(w, h, mipLevels, format, vk::ImageTiling::eOptimal,
-	                 usage, MemoryUsage::GpuOnly, ts->image, ts->allocation)) {
+	                 usage, MemoryUsage::GpuOnly, ts->image, ts->allocation, arrayLayers, isCubemapRT)) {
 		mprintf(("Failed to create render target image!\n"));
 		return 0;
 	}
 
-	// Create image view (use array view for shader compatibility)
-	ts->imageView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, mipLevels, true);
-	if (!ts->imageView) {
-		m_device.destroyImage(ts->image);
-		ts->image = nullptr;
-		m_memoryManager->freeAllocation(ts->allocation);
-		return 0;
-	}
-
-	// For mipmapped render targets, create a single-mip view for framebuffer use
-	// (framebuffer attachments must have levelCount == 1)
-	if (mipLevels > 1) {
-		ts->framebufferView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, 1, true);
-		if (!ts->framebufferView) {
-			m_device.destroyImageView(ts->imageView);
+	if (isCubemapRT) {
+		// Cubemap render target: create cube view for sampling + per-face 2D views for framebuffer
+		ts->imageView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor,
+		                                mipLevels, ImageViewType::Cube, 6);
+		if (!ts->imageView) {
 			m_device.destroyImage(ts->image);
 			ts->image = nullptr;
-			ts->imageView = nullptr;
 			m_memoryManager->freeAllocation(ts->allocation);
 			return 0;
+		}
+
+		// Create per-face 2D views for framebuffer attachments
+		for (uint32_t face = 0; face < 6; face++) {
+			ts->cubeFaceViews[face] = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor,
+			                                           1, ImageViewType::Plain2D, 1, face);
+			if (!ts->cubeFaceViews[face]) {
+				mprintf(("Failed to create cubemap face %u view!\n", face));
+				// Clean up previously created views
+				for (uint32_t j = 0; j < face; j++) {
+					m_device.destroyImageView(ts->cubeFaceViews[j]);
+					ts->cubeFaceViews[j] = nullptr;
+				}
+				m_device.destroyImageView(ts->imageView);
+				m_device.destroyImage(ts->image);
+				ts->image = nullptr;
+				ts->imageView = nullptr;
+				m_memoryManager->freeAllocation(ts->allocation);
+				return 0;
+			}
+		}
+	} else {
+		// Regular render target: array view for shader compatibility
+		ts->imageView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, mipLevels, ImageViewType::Array2D);
+		if (!ts->imageView) {
+			m_device.destroyImage(ts->image);
+			ts->image = nullptr;
+			m_memoryManager->freeAllocation(ts->allocation);
+			return 0;
+		}
+
+		// For mipmapped render targets, create a single-mip view for framebuffer use
+		// (framebuffer attachments must have levelCount == 1)
+		if (mipLevels > 1) {
+			ts->framebufferView = createImageView(ts->image, format, vk::ImageAspectFlagBits::eColor, 1, ImageViewType::Array2D);
+			if (!ts->framebufferView) {
+				m_device.destroyImageView(ts->imageView);
+				m_device.destroyImage(ts->image);
+				ts->image = nullptr;
+				ts->imageView = nullptr;
+				m_memoryManager->freeAllocation(ts->allocation);
+				return 0;
+			}
 		}
 	}
 
@@ -1043,29 +1396,51 @@ int VulkanTextureManager::bm_make_render_target(int handle, int* width, int* hei
 		return 0;
 	}
 
-	// Create framebuffer
-	// Use framebufferView (single-mip) if available, otherwise imageView
-	vk::ImageView fbAttachment = ts->framebufferView ? ts->framebufferView : ts->imageView;
-	vk::FramebufferCreateInfo framebufferInfo;
-	framebufferInfo.renderPass = ts->renderPass;
-	framebufferInfo.attachmentCount = 1;
-	framebufferInfo.pAttachments = &fbAttachment;
-	framebufferInfo.width = w;
-	framebufferInfo.height = h;
-	framebufferInfo.layers = 1;
+	if (isCubemapRT) {
+		// Create per-face framebuffers
+		for (uint32_t face = 0; face < 6; face++) {
+			vk::FramebufferCreateInfo framebufferInfo;
+			framebufferInfo.renderPass = ts->renderPass;
+			framebufferInfo.attachmentCount = 1;
+			framebufferInfo.pAttachments = &ts->cubeFaceViews[face];
+			framebufferInfo.width = w;
+			framebufferInfo.height = h;
+			framebufferInfo.layers = 1;
 
-	try {
-		ts->framebuffer = m_device.createFramebuffer(framebufferInfo);
-	} catch (const vk::SystemError& e) {
-		mprintf(("Failed to create framebuffer: %s\n", e.what()));
-		m_device.destroyRenderPass(ts->renderPass);
-		m_device.destroyImageView(ts->imageView);
-		m_device.destroyImage(ts->image);
-		ts->image = nullptr;
-		ts->imageView = nullptr;
-		ts->renderPass = nullptr;
-		m_memoryManager->freeAllocation(ts->allocation);
-		return 0;
+			try {
+				ts->cubeFaceFramebuffers[face] = m_device.createFramebuffer(framebufferInfo);
+			} catch (const vk::SystemError& e) {
+				mprintf(("Failed to create cubemap face %u framebuffer: %s\n", face, e.what()));
+				return 0;
+			}
+		}
+		// Default framebuffer points to face 0
+		ts->framebuffer = ts->cubeFaceFramebuffers[0];
+	} else {
+		// Create framebuffer
+		// Use framebufferView (single-mip) if available, otherwise imageView
+		vk::ImageView fbAttachment = ts->framebufferView ? ts->framebufferView : ts->imageView;
+		vk::FramebufferCreateInfo framebufferInfo;
+		framebufferInfo.renderPass = ts->renderPass;
+		framebufferInfo.attachmentCount = 1;
+		framebufferInfo.pAttachments = &fbAttachment;
+		framebufferInfo.width = w;
+		framebufferInfo.height = h;
+		framebufferInfo.layers = 1;
+
+		try {
+			ts->framebuffer = m_device.createFramebuffer(framebufferInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("Failed to create framebuffer: %s\n", e.what()));
+			m_device.destroyRenderPass(ts->renderPass);
+			m_device.destroyImageView(ts->imageView);
+			m_device.destroyImage(ts->image);
+			ts->image = nullptr;
+			ts->imageView = nullptr;
+			ts->renderPass = nullptr;
+			m_memoryManager->freeAllocation(ts->allocation);
+			return 0;
+		}
 	}
 
 	// Update slot info
@@ -1074,8 +1449,10 @@ int VulkanTextureManager::bm_make_render_target(int handle, int* width, int* hei
 	ts->format = format;
 	ts->mipLevels = mipLevels;
 	ts->bpp = 32;
+	ts->arrayLayers = arrayLayers;
 	ts->bitmapHandle = handle;
 	ts->isRenderTarget = true;
+	ts->isCubemap = isCubemapRT;
 	ts->used = true;
 	ts->uScale = 1.0f;
 	ts->vScale = 1.0f;
@@ -1114,8 +1491,12 @@ int VulkanTextureManager::bm_set_render_target(int handle, int face)
 		return 0;
 	}
 
+	// For cubemap render targets, select the face framebuffer
+	if (ts->isCubemap && face >= 0 && face < 6) {
+		ts->framebuffer = ts->cubeFaceFramebuffers[face];
+	}
+
 	m_currentRenderTarget = handle;
-	(void)face;  // TODO: Handle cubemap faces
 
 	return 1;
 }
@@ -1283,6 +1664,11 @@ vk::ImageView VulkanTextureManager::getFallbackTextureView()
 vk::ImageView VulkanTextureManager::getFallbackTextureView2D()
 {
 	return m_fallbackTextureView2D;
+}
+
+vk::ImageView VulkanTextureManager::getFallbackCubeView()
+{
+	return m_fallbackCubeView;
 }
 
 tcache_slot_vulkan* VulkanTextureManager::getTextureSlot(int handle)
@@ -1549,7 +1935,7 @@ bool VulkanTextureManager::createImage(uint32_t width, uint32_t height, uint32_t
                                         vk::Format format, vk::ImageTiling tiling,
                                         vk::ImageUsageFlags usage, MemoryUsage memUsage,
                                         vk::Image& image, VulkanAllocation& allocation,
-                                        uint32_t arrayLayers)
+                                        uint32_t arrayLayers, bool cubemap)
 {
 	vk::ImageCreateInfo imageInfo;
 	imageInfo.imageType = vk::ImageType::e2D;
@@ -1564,6 +1950,11 @@ bool VulkanTextureManager::createImage(uint32_t width, uint32_t height, uint32_t
 	imageInfo.usage = usage;
 	imageInfo.sharingMode = vk::SharingMode::eExclusive;
 	imageInfo.samples = vk::SampleCountFlagBits::e1;
+
+	if (cubemap) {
+		imageInfo.flags |= vk::ImageCreateFlagBits::eCubeCompatible;
+		Assertion(arrayLayers == 6, "Cubemap images must have exactly 6 array layers!");
+	}
 
 	try {
 		image = m_device.createImage(imageInfo);
@@ -1584,19 +1975,29 @@ bool VulkanTextureManager::createImage(uint32_t width, uint32_t height, uint32_t
 vk::ImageView VulkanTextureManager::createImageView(vk::Image image, vk::Format format,
                                                      vk::ImageAspectFlags aspectFlags,
                                                      uint32_t mipLevels,
-                                                     bool asArray,
-                                                     uint32_t layerCount)
+                                                     ImageViewType viewType,
+                                                     uint32_t layerCount,
+                                                     uint32_t baseArrayLayer)
 {
 	vk::ImageViewCreateInfo viewInfo;
 	viewInfo.image = image;
-	// Use 2DArray view type for shader compatibility (sampler2DArray in shaders)
-	// Even single-layer textures are viewed as arrays with layerCount=1
-	viewInfo.viewType = asArray ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
+	switch (viewType) {
+	case ImageViewType::Cube:
+		viewInfo.viewType = vk::ImageViewType::eCube;
+		break;
+	case ImageViewType::Array2D:
+		viewInfo.viewType = vk::ImageViewType::e2DArray;
+		break;
+	case ImageViewType::Plain2D:
+	default:
+		viewInfo.viewType = vk::ImageViewType::e2D;
+		break;
+	}
 	viewInfo.format = format;
 	viewInfo.subresourceRange.aspectMask = aspectFlags;
 	viewInfo.subresourceRange.baseMipLevel = 0;
 	viewInfo.subresourceRange.levelCount = mipLevels;
-	viewInfo.subresourceRange.baseArrayLayer = 0;
+	viewInfo.subresourceRange.baseArrayLayer = baseArrayLayer;
 	viewInfo.subresourceRange.layerCount = layerCount;
 
 	try {
@@ -1911,8 +2312,17 @@ int vulkan_preload(int bitmap_num, int /*is_aabitmap*/)
 		lockBpp = 32;
 		lockFlags = BMP_TEX_BC7;
 		break;
+	case DDS_CUBEMAP_DXT1:
+		lockBpp = 24;
+		lockFlags = BMP_TEX_CUBEMAP;
+		break;
+	case DDS_CUBEMAP_DXT3:
+	case DDS_CUBEMAP_DXT5:
+		lockBpp = 32;
+		lockFlags = BMP_TEX_CUBEMAP;
+		break;
 	default:
-		// Uncompressed or cubemap — use 32bpp decompressed
+		// Uncompressed — use 32bpp decompressed
 		compType = 0;
 		break;
 	}

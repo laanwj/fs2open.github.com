@@ -37,7 +37,7 @@ struct deferred_global_data {
 	float invScreenHeight;
 	float nearPlane;
 
-	float pad;
+	int use_env_map;
 };
 
 /**

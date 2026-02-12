@@ -47,10 +47,12 @@ layout(set = 0, binding = 1, std140) uniform globalDeferredData {
 
 	float nearPlane;
 
-	float globalPad;
+	int use_env_map;
 };
 
 layout(set = 0, binding = 2) uniform sampler2DArray shadowMap;
+layout(set = 0, binding = 3) uniform samplerCube sEnvmap;
+layout(set = 0, binding = 4) uniform samplerCube sIrrmap;
 
 layout(set = 2, binding = 1, std140) uniform matrixData {
 	mat4 modelViewMatrix;
@@ -254,6 +256,44 @@ void GetLightInfo(vec3 position, in float alpha, in vec3 reflectDir, out vec3 li
 	}
 }
 
+// ===== Environment Map Lighting =====
+// Ported from deferred-f.sdr ComputeEnvLight()
+
+void ComputeEnvLight(float alpha, float ao, vec3 light_dir, vec3 eyeDir,
+                     vec3 normal, vec4 baseColor, vec4 specColor, out vec3 envLight)
+{
+	const float ENV_REZ = 512.0;
+	const float REZ_BIAS = log2(ENV_REZ * sqrt(3.0));
+
+	float alphaSqr = alpha * alpha;
+	float rough_bias = 0.5 * log2(2.0 / alphaSqr - 1.0);
+	float mip_bias = REZ_BIAS - rough_bias;
+
+	// Sample specular environment map with roughness-based mip bias
+	vec3 env_light_dir = vec3(modelViewMatrix * vec4(light_dir, 0.0));
+	vec4 specEnvColour = srgb_to_linear(textureLod(sEnvmap, env_light_dir, mip_bias));
+
+	vec3 halfVec = normal;
+
+	// Fresnel using Schlick approximation
+	vec3 fresnel = mix(specColor.rgb, FresnelSchlick(halfVec, eyeDir, specColor.rgb), specColor.a);
+
+	// Pseudo-IBL geometry term (k = alpha^2 / 2)
+	float k = alphaSqr / 2.0;
+	float NdotL = max(dot(light_dir, normal), 0.0);
+	float g1vNL = GeometrySchlickGGX(NdotL, k);
+
+	vec3 specEnvLighting = specEnvColour.rgb * fresnel * g1vNL;
+
+	// Diffuse from irradiance map
+	vec3 kD = vec3(1.0) - fresnel;
+	kD *= (vec3(1.0) - specColor.rgb);
+	vec3 diffEnvColor = srgb_to_linear(texture(sIrrmap, vec3(modelViewMatrix * vec4(normal, 0.0))).rgb);
+	vec3 diffEnvLighting = kD * baseColor.rgb * diffEnvColor * ao;
+
+	envLight = (specEnvLighting + diffEnvLighting) * baseColor.a;
+}
+
 void main()
 {
 	vec2 screenPos = gl_FragCoord.xy * vec2(invScreenWidth, invScreenHeight);
@@ -279,6 +319,11 @@ void main()
 	if (lightType == LT_AMBIENT) {
 		float ao = position_buffer.w;
 		fragmentColor.rgb = diffuseLightColor * diffColor * ao;
+		if (use_env_map != 0) {
+			vec3 envLight;
+			ComputeEnvLight(alpha, ao, reflectDir, eyeDir, normal, diffuse, specColor, envLight);
+			fragmentColor.rgb += envLight;
+		}
 	}
 	else {
 		float fresnel = specColor.a;
