@@ -16,7 +16,7 @@ layout(std140) uniform decalInfoData
     int normal_index;
     int diffuse_blend_mode;
     int glow_blend_mode;
-} _132;
+} _134;
 
 uniform sampler2D gDepthBuffer;
 uniform sampler2D gNormalBuffer;
@@ -34,125 +34,126 @@ out vec4 fragOut1;
 out vec4 fragOut3;
 out vec4 fragOut5;
 
-vec4 _704;
+vec4 _710;
 
 void main()
 {
-    ivec2 _470 = ivec2(gl_FragCoord.xy);
-    vec4 _479 = _83.invProjMatrix * vec4(((gl_FragCoord.xy / _83.viewportSize) * 2.0) - vec2(1.0), texelFetch(gDepthBuffer, _470, 0).x, 1.0);
-    vec3 _485 = _479.xyz / vec3(_479.w);
-    vec4 _500 = (invModelMatrix * _83.invViewMatrix) * vec4(_485, 1.0);
-    if (any(greaterThan(abs(_500.xyz), vec3(0.5))) || any(isnan(_500)))
+    vec2 _461 = gl_FragCoord.xy / _83.viewportSize;
+    ivec2 _474 = ivec2(gl_FragCoord.xy);
+    vec4 _483 = _83.invProjMatrix * vec4((_461.x * 2.0) - 1.0, 1.0 - (_461.y * 2.0), texelFetch(gDepthBuffer, _474, 0).x, 1.0);
+    vec3 _489 = _483.xyz / vec3(_483.w);
+    vec4 _504 = (invModelMatrix * _83.invViewMatrix) * vec4(_489, 1.0);
+    if (any(greaterThan(abs(_504.xyz), vec3(0.5))) || any(isnan(_504)))
     {
         discard;
     }
-    vec2 _524 = _500.xy + vec2(0.5);
-    vec3 _664;
-    vec3 _666;
-    vec3 _667;
-    if (_132.normal_index < 0)
+    vec2 _528 = _504.xy + vec2(0.5);
+    vec3 _670;
+    vec3 _672;
+    vec3 _673;
+    if (_134.normal_index < 0)
     {
-        _667 = vec3(0.0);
-        _666 = vec3(0.0);
-        _664 = texelFetch(gNormalBuffer, _470, 0).xyz;
+        _673 = vec3(0.0);
+        _672 = vec3(0.0);
+        _670 = texelFetch(gNormalBuffer, _474, 0).xyz;
     }
     else
     {
-        vec3 _544 = dFdx(_485);
-        vec3 _546 = dFdy(_485);
-        _667 = normalize(_546);
-        _666 = normalize(_544);
-        _664 = normalize(cross(_544, _546));
+        vec3 _548 = dFdx(_489);
+        vec3 _550 = dFdy(_489);
+        _673 = normalize(_550);
+        _672 = normalize(_548);
+        _670 = normalize(cross(_548, _550));
     }
-    float _560 = acos(clamp(dot(_664, decalDirection), -1.0, 1.0));
-    if (_560 > normal_angle_cutoff)
+    float _564 = acos(clamp(dot(_670, decalDirection), -1.0, 1.0));
+    if (_564 > normal_angle_cutoff)
     {
         discard;
     }
-    float _572 = (alpha_scale * (1.0 - smoothstep(0.4000000059604644775390625, 0.5, abs(_500.z)))) * (1.0 - smoothstep(angle_fade_start, normal_angle_cutoff, _560));
-    vec4 _688;
-    if (_132.diffuse_index >= 0)
+    float _576 = (alpha_scale * (1.0 - smoothstep(0.4000000059604644775390625, 0.5, abs(_504.z)))) * (1.0 - smoothstep(angle_fade_start, normal_angle_cutoff, _564));
+    vec4 _694;
+    if (_134.diffuse_index >= 0)
     {
-        vec4 _297 = texture(decalTextures, vec3(_524, float(_132.diffuse_index)));
-        vec3 _578 = pow(_297.xyz, vec3(2.2000000476837158203125));
-        float _303 = _578.x;
-        vec4 _621 = _704;
-        _621.x = _303;
-        vec4 _623 = _621;
-        _623.y = _578.y;
-        vec4 _625 = _623;
-        _625.z = _578.z;
-        vec4 _689;
-        if (_132.diffuse_blend_mode == 0)
+        vec4 _299 = texture(decalTextures, vec3(_528, float(_134.diffuse_index)));
+        vec3 _582 = pow(_299.xyz, vec3(2.2000000476837158203125));
+        float _305 = _582.x;
+        vec4 _627 = _710;
+        _627.x = _305;
+        vec4 _629 = _627;
+        _629.y = _582.y;
+        vec4 _631 = _629;
+        _631.z = _582.z;
+        vec4 _695;
+        if (_134.diffuse_blend_mode == 0)
         {
-            _689 = vec4(_303, _578.yz, _297.w * _572);
+            _695 = vec4(_305, _582.yz, _299.w * _576);
         }
         else
         {
-            _689 = vec4(_625.xyz * _572, 1.0);
+            _695 = vec4(_631.xyz * _576, 1.0);
         }
-        _688 = _689;
+        _694 = _695;
     }
     else
     {
-        _688 = vec4(0.0);
+        _694 = vec4(0.0);
     }
-    vec4 _697;
-    if (_132.glow_index >= 0)
+    vec4 _703;
+    if (_134.glow_index >= 0)
     {
-        vec4 _347 = texture(decalTextures, vec3(_524, float(_132.glow_index)));
-        vec3 _353 = pow(_347.xyz, vec3(2.2000000476837158203125)) * 3.0;
-        vec4 _628 = _704;
-        _628.x = _353.x;
-        vec4 _630 = _628;
-        _630.y = _353.y;
-        vec4 _632 = _630;
-        _632.z = _353.z;
-        vec3 _363 = _632.xyz * 1.5;
-        float _365 = _363.x;
-        vec4 _634 = _704;
-        _634.x = _365;
+        vec4 _349 = texture(decalTextures, vec3(_528, float(_134.glow_index)));
+        vec3 _355 = pow(_349.xyz, vec3(2.2000000476837158203125)) * 3.0;
+        vec4 _634 = _710;
+        _634.x = _355.x;
         vec4 _636 = _634;
-        _636.y = _363.y;
+        _636.y = _355.y;
         vec4 _638 = _636;
-        _638.z = _363.z;
-        vec4 _698;
-        if (_132.glow_blend_mode == 0)
+        _638.z = _355.z;
+        vec3 _365 = _638.xyz * 1.5;
+        float _367 = _365.x;
+        vec4 _640 = _710;
+        _640.x = _367;
+        vec4 _642 = _640;
+        _642.y = _365.y;
+        vec4 _644 = _642;
+        _644.z = _365.z;
+        vec4 _704;
+        if (_134.glow_blend_mode == 0)
         {
-            _698 = vec4(_365, _363.yz, _347.w * _572);
+            _704 = vec4(_367, _365.yz, _349.w * _576);
         }
         else
         {
-            vec3 _395 = _638.xyz * _572;
-            vec4 _642 = vec4(0.0);
-            _642.x = _395.x;
-            vec4 _644 = _642;
-            _644.y = _395.y;
-            vec4 _646 = _644;
-            _646.z = _395.z;
-            _698 = _646;
+            vec3 _397 = _644.xyz * _576;
+            vec4 _648 = vec4(0.0);
+            _648.x = _397.x;
+            vec4 _650 = _648;
+            _650.y = _397.y;
+            vec4 _652 = _650;
+            _652.z = _397.z;
+            _704 = _652;
         }
-        _697 = _698;
+        _703 = _704;
     }
     else
     {
-        _697 = vec4(0.0);
+        _703 = vec4(0.0);
     }
-    vec3 _691;
-    if (_132.normal_index >= 0)
+    vec3 _697;
+    if (_134.normal_index >= 0)
     {
-        vec2 _589 = (texture(decalTextures, vec3(_524, float(_132.normal_index))).wy * 2.0) - vec2(1.0);
-        float _591 = _589.x;
-        float _593 = _589.y;
-        _691 = (mat3(_667, _666, _664) * vec3(_591, _593, sqrt(max(0.0, (1.0 - (_591 * _591)) - (_593 * _593))))) * _572;
+        vec2 _593 = (texture(decalTextures, vec3(_528, float(_134.normal_index))).wy * 2.0) - vec2(1.0);
+        float _595 = _593.x;
+        float _597 = _593.y;
+        _697 = (mat3(_673, _672, _670) * vec3(_595, _597, sqrt(max(0.0, (1.0 - (_595 * _595)) - (_597 * _597))))) * _576;
     }
     else
     {
-        _691 = vec3(0.0);
+        _697 = vec3(0.0);
     }
-    fragOut0 = _688;
-    fragOut2 = vec4(_691, 0.0);
-    fragOut4 = _697;
+    fragOut0 = _694;
+    fragOut2 = vec4(_697, 0.0);
+    fragOut4 = _703;
     fragOut1 = vec4(0.0);
     fragOut3 = vec4(0.0);
     fragOut5 = vec4(0.0);

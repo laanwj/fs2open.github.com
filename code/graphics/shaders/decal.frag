@@ -73,7 +73,10 @@ vec3 computeViewPosition(vec2 textureCoord) {
 	vec4 clipSpaceLocation;
 	vec2 normalizedCoord = textureCoord / viewportSize;
 
-	clipSpaceLocation.xy = normalizedCoord * 2.0 - 1.0;
+	clipSpaceLocation.x = normalizedCoord.x * 2.0 - 1.0;
+	// Vulkan negative viewport (y=H, height=-H) inverts the Y mapping:
+	// pixel_y = H/2 * (1 - NDC_y), so NDC_y = 1 - 2*pixel_y/H
+	clipSpaceLocation.y = 1.0 - normalizedCoord.y * 2.0;
 	// Vulkan depth is [0,1] — use directly (no *2-1 like OpenGL)
 	clipSpaceLocation.z = texelFetch(gDepthBuffer, ivec2(textureCoord), 0).r;
 	clipSpaceLocation.w = 1.0;
