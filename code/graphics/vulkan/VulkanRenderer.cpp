@@ -685,6 +685,9 @@ bool VulkanRenderer::createLogicalDevice(const PhysicalDeviceValues& deviceValue
 
 	m_device = deviceValues.device.createDeviceUnique(deviceCreate);
 
+	// Load device-level function pointers for the dynamic dispatcher
+	VULKAN_HPP_DEFAULT_DISPATCHER.init(m_device.get());
+
 	// Create queues
 	m_graphicsQueue = m_device->getQueue(deviceValues.graphicsQueueIndex.index, 0);
 	m_transferQueue = m_device->getQueue(deviceValues.transferQueueIndex.index, 0);
