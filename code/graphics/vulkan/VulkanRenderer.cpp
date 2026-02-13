@@ -6,6 +6,8 @@
 
 #include "bmpman/bmpman.h"
 #include "globalincs/version.h"
+#include "graphics/grinternal.h"
+#include "graphics/post_processing.h"
 
 #include "backends/imgui_impl_sdl.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -417,6 +419,15 @@ bool VulkanRenderer::initialize()
 		m_postProcessor.reset();
 	} else {
 		setPostProcessor(m_postProcessor.get());
+	}
+
+	// Initialize shared post-processing manager (bloom/lightshaft settings, post-effect table)
+	// This is renderer-agnostic; OpenGL creates it in opengl_post_process_init().
+	if (!graphics::Post_processing_manager) {
+		graphics::Post_processing_manager.reset(new graphics::PostProcessingManager());
+		if (!graphics::Post_processing_manager->parse_table()) {
+			mprintf(("Warning: Unable to read post-processing table\n"));
+		}
 	}
 
 	// Initialize query manager for GPU timestamp profiling
@@ -1746,6 +1757,12 @@ void VulkanRenderer::shutdown()
 		setPostProcessor(nullptr);
 		m_postProcessor->shutdown();
 		m_postProcessor.reset();
+	}
+
+	// Clean up shared post-processing manager
+	if (graphics::Post_processing_manager) {
+		graphics::Post_processing_manager->clear();
+		graphics::Post_processing_manager = nullptr;
 	}
 
 	if (m_drawManager) {
