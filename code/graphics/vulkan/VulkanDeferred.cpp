@@ -419,6 +419,14 @@ void vulkan_shadow_map_start(matrix4* shadow_view_matrix, const matrix* light_ma
 		return;
 	}
 
+	// Shadows require the G-buffer render pass (deferred lighting).
+	// In contexts without deferred lighting (e.g. tech room), the active
+	// render pass is the swap chain or 2-attachment scene pass — ending it
+	// and resuming the G-buffer pass would break rendering.
+	if (!getRendererInstance()->isUsingGbufRenderPass()) {
+		return;
+	}
+
 	auto* pp = getPostProcessor();
 	if (!pp) {
 		return;

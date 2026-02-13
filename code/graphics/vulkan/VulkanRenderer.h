@@ -188,6 +188,7 @@ class VulkanRenderer {
 	 * scene render pass mid-frame for forward transparent rendering.
 	 */
 	void setUseGbufRenderPass(bool use) { m_useGbufRenderPass = use; }
+	bool isUsingGbufRenderPass() const { return m_useGbufRenderPass; }
 
   private:
 	bool initDisplayDevice() const;
