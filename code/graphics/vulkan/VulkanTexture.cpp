@@ -259,7 +259,7 @@ bool VulkanTextureManager::init(vk::Device device, vk::PhysicalDevice physicalDe
 	if (!createImage(1, 1, 1, vk::Format::eR8G8B8A8Unorm, vk::ImageTiling::eOptimal,
 	                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
 	                 MemoryUsage::GpuOnly, m_fallback3DTexture, m_fallback3DAllocation,
-	                 1, false, 1)) {
+	                 1, false, 1, vk::ImageType::e3D)) {
 		mprintf(("Failed to create fallback 3D texture!\n"));
 		return false;
 	}
@@ -1072,7 +1072,7 @@ bool VulkanTextureManager::upload3DTexture(int handle, bitmap* bm, int texDepth)
 	if (!createImage(width, height, 1, format, vk::ImageTiling::eOptimal,
 	                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
 	                 MemoryUsage::GpuOnly, ts->image, ts->allocation,
-	                 1, false, depth3D)) {
+	                 1, false, depth3D, vk::ImageType::e3D)) {
 		mprintf(("Failed to create 3D texture image!\n"));
 		return false;
 	}
@@ -1593,7 +1593,7 @@ int VulkanTextureManager::bm_make_render_target(int handle, int* width, int* hei
 	colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
 	colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
 	colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-	colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
+	colorAttachment.initialLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 	colorAttachment.finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
 	vk::AttachmentReference colorAttachmentRef;
@@ -1670,6 +1670,11 @@ int VulkanTextureManager::bm_make_render_target(int handle, int* width, int* hei
 		}
 	}
 
+	// Transition image to eShaderReadOnlyOptimal so it's in a valid layout
+	// if sampled before being rendered into (render pass expects this initial layout)
+	transitionImageLayout(ts->image, format, vk::ImageLayout::eUndefined,
+	                      vk::ImageLayout::eShaderReadOnlyOptimal, mipLevels, arrayLayers);
+
 	// Update slot info
 	ts->width = w;
 	ts->height = h;
@@ -1683,7 +1688,7 @@ int VulkanTextureManager::bm_make_render_target(int handle, int* width, int* hei
 	ts->used = true;
 	ts->uScale = 1.0f;
 	ts->vScale = 1.0f;
-	ts->currentLayout = vk::ImageLayout::eUndefined;
+	ts->currentLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
 	if (bpp) {
 		*bpp = 32;
@@ -1957,7 +1962,8 @@ vk::Format VulkanTextureManager::bppToVkFormat(int bpp, bool compressed, int com
 void VulkanTextureManager::transitionImageLayout(vk::Image image, vk::Format format,
                                                   vk::ImageLayout oldLayout,
                                                   vk::ImageLayout newLayout,
-                                                  uint32_t mipLevels)
+                                                  uint32_t mipLevels,
+                                                  uint32_t arrayLayers)
 {
 	vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
 
@@ -1971,7 +1977,7 @@ void VulkanTextureManager::transitionImageLayout(vk::Image image, vk::Format for
 	barrier.subresourceRange.baseMipLevel = 0;
 	barrier.subresourceRange.levelCount = mipLevels;
 	barrier.subresourceRange.baseArrayLayer = 0;
-	barrier.subresourceRange.layerCount = 1;
+	barrier.subresourceRange.layerCount = arrayLayers;
 
 	vk::PipelineStageFlags sourceStage;
 	vk::PipelineStageFlags destinationStage;
@@ -1987,6 +1993,12 @@ void VulkanTextureManager::transitionImageLayout(vk::Image image, vk::Format for
 		barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
 		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
 		sourceStage = vk::PipelineStageFlagBits::eTransfer;
+		destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
+	} else if (oldLayout == vk::ImageLayout::eUndefined &&
+	           newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+		sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
 		destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
 	} else if (oldLayout == vk::ImageLayout::eUndefined &&
 	           newLayout == vk::ImageLayout::eColorAttachmentOptimal) {
@@ -2163,10 +2175,10 @@ bool VulkanTextureManager::createImage(uint32_t width, uint32_t height, uint32_t
                                         vk::ImageUsageFlags usage, MemoryUsage memUsage,
                                         vk::Image& image, VulkanAllocation& allocation,
                                         uint32_t arrayLayers, bool cubemap,
-                                        uint32_t imageDepth)
+                                        uint32_t imageDepth, vk::ImageType imageType)
 {
 	vk::ImageCreateInfo imageInfo;
-	imageInfo.imageType = (imageDepth > 1) ? vk::ImageType::e3D : vk::ImageType::e2D;
+	imageInfo.imageType = imageType;
 	imageInfo.extent.width = width;
 	imageInfo.extent.height = height;
 	imageInfo.extent.depth = imageDepth;

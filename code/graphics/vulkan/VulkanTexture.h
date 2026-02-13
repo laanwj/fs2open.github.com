@@ -187,7 +187,7 @@ public:
 	 */
 	void transitionImageLayout(vk::Image image, vk::Format format,
 	                           vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
-	                           uint32_t mipLevels = 1);
+	                           uint32_t mipLevels = 1, uint32_t arrayLayers = 1);
 
 	/**
 	 * @brief Generate mipmaps for a texture
@@ -204,13 +204,15 @@ private:
 	/**
 	 * @brief Create a Vulkan image
 	 * @param cubemap If true, sets eCubeCompatible flag (requires arrayLayers=6)
+	 * @param imageType Vulkan image type (e2D, e3D, etc.)
 	 */
 	bool createImage(uint32_t width, uint32_t height, uint32_t mipLevels,
 	                 vk::Format format, vk::ImageTiling tiling,
 	                 vk::ImageUsageFlags usage, MemoryUsage memUsage,
 	                 vk::Image& image, VulkanAllocation& allocation,
 	                 uint32_t arrayLayers = 1, bool cubemap = false,
-	                 uint32_t imageDepth = 1);
+	                 uint32_t imageDepth = 1,
+	                 vk::ImageType imageType = vk::ImageType::e2D);
 
 	enum class ImageViewType { Array2D, Plain2D, Cube, Volume3D };
 
