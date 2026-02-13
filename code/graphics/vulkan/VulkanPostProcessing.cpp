@@ -2620,7 +2620,7 @@ bool VulkanPostProcessor::initLDRTargets()
 		                  | vk::PipelineStageFlagBits::eColorAttachmentOutput;
 		dep.srcAccessMask = vk::AccessFlagBits::eShaderRead
 		                  | vk::AccessFlagBits::eColorAttachmentWrite;
-		dep.dstAccessMask = vk::AccessFlagBits::eShaderRead
+		dep.dstAccessMask = vk::AccessFlagBits::eColorAttachmentRead
 		                  | vk::AccessFlagBits::eColorAttachmentWrite;
 
 		vk::RenderPassCreateInfo rpInfo;
