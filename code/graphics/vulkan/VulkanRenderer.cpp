@@ -213,21 +213,34 @@ vk::SurfaceFormatKHR chooseSurfaceFormat(const PhysicalDeviceValues& values)
 
 vk::PresentModeKHR choosePresentMode(const PhysicalDeviceValues& values)
 {
+	vk::PresentModeKHR chosen = vk::PresentModeKHR::eFifo; // guaranteed to be supported
+
 	// Depending on if we want Vsync or not, choose the best mode
 	for (const auto& availablePresentMode : values.presentModes) {
 		if (Gr_enable_vsync) {
 			if (availablePresentMode == vk::PresentModeKHR::eMailbox) {
-				return availablePresentMode;
+				chosen = availablePresentMode;
+				break;
 			}
 		} else {
 			if (availablePresentMode == vk::PresentModeKHR::eImmediate) {
-				return availablePresentMode;
+				chosen = availablePresentMode;
+				break;
 			}
 		}
 	}
 
-	// Guaranteed to be supported
-	return vk::PresentModeKHR::eFifo;
+	const char* name = "Unknown";
+	switch (chosen) {
+		case vk::PresentModeKHR::eImmediate:    name = "Immediate"; break;
+		case vk::PresentModeKHR::eMailbox:       name = "Mailbox"; break;
+		case vk::PresentModeKHR::eFifo:          name = "FIFO (vsync)"; break;
+		case vk::PresentModeKHR::eFifoRelaxed:   name = "FIFO Relaxed"; break;
+		default: break;
+	}
+	mprintf(("Vulkan: Present mode: %s (Gr_enable_vsync=%d)\n", name, Gr_enable_vsync ? 1 : 0));
+
+	return chosen;
 }
 
 vk::Extent2D chooseSwapChainExtent(const PhysicalDeviceValues& values, uint32_t width, uint32_t height)
