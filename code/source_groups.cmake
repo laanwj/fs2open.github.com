@@ -579,6 +579,8 @@ if (FSO_BUILD_WITH_VULKAN)
 		graphics/vulkan/RenderFrame.h
 		graphics/vulkan/VulkanBuffer.cpp
 		graphics/vulkan/VulkanBuffer.h
+		graphics/vulkan/VulkanDeferred.cpp
+		graphics/vulkan/VulkanDeferred.h
 		graphics/vulkan/VulkanDeletionQueue.cpp
 		graphics/vulkan/VulkanDeletionQueue.h
 		graphics/vulkan/VulkanDescriptorManager.cpp
