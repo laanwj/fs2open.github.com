@@ -3703,116 +3703,10 @@ void VulkanPostProcessor::copyEffectTexture(vk::CommandBuffer cmd)
 	// Called mid-scene, outside a render pass.
 	// Scene color is in eShaderReadOnlyOptimal (from the ended scene render pass).
 	// Copies scene color → effect texture so distortion/soft particle shaders can sample it.
-
-	// Transition scene color: eShaderReadOnlyOptimal → eTransferSrcOptimal
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-		barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
-		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_sceneColor.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, {}, {}, barrier);
-	}
-
-	// Transition effect texture: eUndefined → eTransferDstOptimal
-	// Using eUndefined discards any previous content (which we're overwriting anyway)
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = {};
-		barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barrier.oldLayout = vk::ImageLayout::eUndefined;
-		barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_sceneEffect.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTopOfPipe,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, {}, {}, barrier);
-	}
-
-	// Copy scene color → effect texture (same format and extent, use vkCmdCopyImage)
-	{
-		vk::ImageCopy region;
-		region.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-		region.srcSubresource.mipLevel = 0;
-		region.srcSubresource.baseArrayLayer = 0;
-		region.srcSubresource.layerCount = 1;
-		region.srcOffset = vk::Offset3D(0, 0, 0);
-		region.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-		region.dstSubresource.mipLevel = 0;
-		region.dstSubresource.baseArrayLayer = 0;
-		region.dstSubresource.layerCount = 1;
-		region.dstOffset = vk::Offset3D(0, 0, 0);
-		region.extent = vk::Extent3D(m_extent.width, m_extent.height, 1);
-
-		cmd.copyImage(
-			m_sceneColor.image, vk::ImageLayout::eTransferSrcOptimal,
-			m_sceneEffect.image, vk::ImageLayout::eTransferDstOptimal,
-			region);
-	}
-
-	// Transition scene color: eTransferSrcOptimal → eColorAttachmentOptimal (ready for resumed render pass)
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
-		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-		barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_sceneColor.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			{}, {}, {}, barrier);
-	}
-
-	// Transition effect texture: eTransferDstOptimal → eShaderReadOnlyOptimal (ready for sampling)
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-		barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
-		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_sceneEffect.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::PipelineStageFlagBits::eFragmentShader,
-			{}, {}, {}, barrier);
-	}
+	copyImageToImage(cmd,
+		m_sceneColor.image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+		m_sceneEffect.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
+		m_extent);
 }
 
 void VulkanPostProcessor::copySceneDepth(vk::CommandBuffer cmd)
@@ -3820,116 +3714,11 @@ void VulkanPostProcessor::copySceneDepth(vk::CommandBuffer cmd)
 	// Called mid-scene, outside a render pass.
 	// Copies scene depth → depth copy texture so soft particle shaders can sample it.
 	// Scene depth is in eDepthStencilAttachmentOptimal (from the ended scene render pass).
-
-	// Transition scene depth: eDepthStencilAttachmentOptimal → eTransferSrcOptimal
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-		barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
-		barrier.oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-		barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_sceneDepth.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eLateFragmentTests,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, {}, {}, barrier);
-	}
-
-	// Transition depth copy: eUndefined → eTransferDstOptimal
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = {};
-		barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barrier.oldLayout = vk::ImageLayout::eUndefined;
-		barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_sceneDepthCopy.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTopOfPipe,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, {}, {}, barrier);
-	}
-
-	// Copy scene depth → depth copy (depth aspect only)
-	{
-		vk::ImageCopy region;
-		region.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
-		region.srcSubresource.mipLevel = 0;
-		region.srcSubresource.baseArrayLayer = 0;
-		region.srcSubresource.layerCount = 1;
-		region.srcOffset = vk::Offset3D(0, 0, 0);
-		region.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
-		region.dstSubresource.mipLevel = 0;
-		region.dstSubresource.baseArrayLayer = 0;
-		region.dstSubresource.layerCount = 1;
-		region.dstOffset = vk::Offset3D(0, 0, 0);
-		region.extent = vk::Extent3D(m_extent.width, m_extent.height, 1);
-
-		cmd.copyImage(
-			m_sceneDepth.image, vk::ImageLayout::eTransferSrcOptimal,
-			m_sceneDepthCopy.image, vk::ImageLayout::eTransferDstOptimal,
-			region);
-	}
-
-	// Transition scene depth back: eTransferSrcOptimal → eDepthStencilAttachmentOptimal
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
-		barrier.dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite
-		                      | vk::AccessFlagBits::eDepthStencilAttachmentRead;
-		barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barrier.newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_sceneDepth.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::PipelineStageFlagBits::eEarlyFragmentTests,
-			{}, {}, {}, barrier);
-	}
-
-	// Transition depth copy: eTransferDstOptimal → eShaderReadOnlyOptimal (ready for sampling)
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-		barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
-		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_sceneDepthCopy.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::PipelineStageFlagBits::eFragmentShader,
-			{}, {}, {}, barrier);
-	}
+	copyImageToImage(cmd,
+		m_sceneDepth.image, vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageLayout::eDepthStencilAttachmentOptimal,
+		m_sceneDepthCopy.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
+		m_extent,
+		vk::ImageAspectFlagBits::eDepth);
 }
 
 void VulkanPostProcessor::copyGbufNormal(vk::CommandBuffer cmd)
@@ -3937,116 +3726,11 @@ void VulkanPostProcessor::copyGbufNormal(vk::CommandBuffer cmd)
 	// Called mid-scene, outside a render pass.
 	// Copies G-buffer normal → normal copy so decal shader can sample it for angle rejection.
 	// G-buffer normal is in eShaderReadOnlyOptimal (from the ended G-buffer render pass).
-
-	// Transition G-buffer normal: eShaderReadOnlyOptimal → eTransferSrcOptimal
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = {};
-		barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
-		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_gbufNormal.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, {}, {}, barrier);
-	}
-
-	// Transition normal copy: eUndefined → eTransferDstOptimal
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = {};
-		barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barrier.oldLayout = vk::ImageLayout::eUndefined;
-		barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_gbufNormalCopy.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTopOfPipe,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, {}, {}, barrier);
-	}
-
-	// Copy G-buffer normal → normal copy
-	{
-		vk::ImageCopy region;
-		region.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-		region.srcSubresource.mipLevel = 0;
-		region.srcSubresource.baseArrayLayer = 0;
-		region.srcSubresource.layerCount = 1;
-		region.srcOffset = vk::Offset3D(0, 0, 0);
-		region.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-		region.dstSubresource.mipLevel = 0;
-		region.dstSubresource.baseArrayLayer = 0;
-		region.dstSubresource.layerCount = 1;
-		region.dstOffset = vk::Offset3D(0, 0, 0);
-		region.extent = vk::Extent3D(m_extent.width, m_extent.height, 1);
-
-		cmd.copyImage(
-			m_gbufNormal.image, vk::ImageLayout::eTransferSrcOptimal,
-			m_gbufNormalCopy.image, vk::ImageLayout::eTransferDstOptimal,
-			region);
-	}
-
-	// Transition G-buffer normal back: eTransferSrcOptimal → eShaderReadOnlyOptimal
-	// (transitionGbufForResume will later transition it to eColorAttachmentOptimal)
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
-		barrier.dstAccessMask = {};
-		barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_gbufNormal.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::PipelineStageFlagBits::eFragmentShader,
-			{}, {}, {}, barrier);
-	}
-
-	// Transition normal copy: eTransferDstOptimal → eShaderReadOnlyOptimal
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-		barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
-		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_gbufNormalCopy.image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::PipelineStageFlagBits::eFragmentShader,
-			{}, {}, {}, barrier);
-	}
+	// Normal goes back to eShaderReadOnlyOptimal (transitionGbufForResume handles the rest).
+	copyImageToImage(cmd,
+		m_gbufNormal.image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+		m_gbufNormalCopy.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal,
+		m_extent);
 }
 
 void VulkanPostProcessor::updateDistortion(vk::CommandBuffer cmd, float frametime)
@@ -5205,70 +4889,6 @@ void VulkanPostProcessor::renderSceneFog(vk::CommandBuffer cmd)
 	m_bloomUBOMapped = nullptr;
 }
 
-void VulkanPostProcessor::copySceneColorToComposite(vk::CommandBuffer cmd)
-{
-	auto extent = m_extent;
-
-	// Transition scene color: eColorAttachmentOptimal -> eTransferSrcOptimal
-	// Transition composite: eShaderReadOnlyOptimal -> eTransferDstOptimal
-	std::array<vk::ImageMemoryBarrier, 2> barriers;
-
-	barriers[0].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-	barriers[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
-	barriers[0].oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
-	barriers[0].newLayout = vk::ImageLayout::eTransferSrcOptimal;
-	barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barriers[0].image = m_sceneColor.image;
-	barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-	barriers[1].srcAccessMask = vk::AccessFlagBits::eShaderRead;
-	barriers[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-	barriers[1].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-	barriers[1].newLayout = vk::ImageLayout::eTransferDstOptimal;
-	barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barriers[1].image = m_gbufComposite.image;
-	barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-	cmd.pipelineBarrier(
-		vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
-		vk::PipelineStageFlagBits::eTransfer,
-		{}, nullptr, nullptr, barriers);
-
-	// Copy scene color -> composite
-	vk::ImageCopy region;
-	region.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-	region.srcOffset = vk::Offset3D(0, 0, 0);
-	region.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-	region.dstOffset = vk::Offset3D(0, 0, 0);
-	region.extent = vk::Extent3D(extent.width, extent.height, 1);
-
-	cmd.copyImage(
-		m_sceneColor.image, vk::ImageLayout::eTransferSrcOptimal,
-		m_gbufComposite.image, vk::ImageLayout::eTransferDstOptimal,
-		region);
-
-	// Transition composite: eTransferDstOptimal -> eShaderReadOnlyOptimal (ready for sampling)
-	// Transition scene color: eTransferSrcOptimal -> eColorAttachmentOptimal (render target again)
-	barriers[0].srcAccessMask = vk::AccessFlagBits::eTransferRead;
-	barriers[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-	barriers[0].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
-	barriers[0].newLayout = vk::ImageLayout::eColorAttachmentOptimal;
-	barriers[0].image = m_sceneColor.image;
-
-	barriers[1].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-	barriers[1].dstAccessMask = vk::AccessFlagBits::eShaderRead;
-	barriers[1].oldLayout = vk::ImageLayout::eTransferDstOptimal;
-	barriers[1].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-	barriers[1].image = m_gbufComposite.image;
-
-	cmd.pipelineBarrier(
-		vk::PipelineStageFlagBits::eTransfer,
-		vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
-		{}, nullptr, nullptr, barriers);
-}
-
 void VulkanPostProcessor::renderVolumetricFog(vk::CommandBuffer cmd)
 {
 	GR_DEBUG_SCOPE("Volumetric Nebulae");
@@ -5366,72 +4986,19 @@ void VulkanPostProcessor::renderVolumetricFog(vk::CommandBuffer cmd)
 		m_emissiveMipmappedInitialized = true;
 	}
 
-	// Copy G-buffer emissive (mip 0) to mipmapped emissive, then generate mips
-	{
-		// Transition mipmapped emissive: eUndefined -> eTransferDstOptimal (all mips)
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = {};
-		barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barrier.oldLayout = vk::ImageLayout::eUndefined;
-		barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = m_emissiveMipmapped.image;
-		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, m_emissiveMipLevels, 0, 1};
+	// Copy G-buffer emissive (mip 0) to mipmapped emissive, then generate mips.
+	// dstMipLevels transitions ALL mip levels to eTransferDstOptimal in the pre-barrier.
+	// Skip dst post-barrier (stays in eTransferDstOptimal for generateMipmaps).
+	copyImageToImage(cmd,
+		m_gbufEmissive.image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+		m_emissiveMipmapped.image, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+		m_extent,
+		vk::ImageAspectFlagBits::eColor,
+		m_emissiveMipLevels);
 
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTopOfPipe,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, nullptr, nullptr, barrier);
-
-		// Transition G-buffer emissive: eShaderReadOnlyOptimal -> eTransferSrcOptimal
-		barrier.srcAccessMask = vk::AccessFlagBits::eShaderRead;
-		barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
-		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barrier.image = m_gbufEmissive.image;
-		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eFragmentShader,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, nullptr, nullptr, barrier);
-
-		// Copy mip 0
-		vk::ImageCopy region;
-		region.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		region.srcOffset = vk::Offset3D(0, 0, 0);
-		region.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		region.dstOffset = vk::Offset3D(0, 0, 0);
-		region.extent = vk::Extent3D(m_extent.width, m_extent.height, 1);
-
-		cmd.copyImage(
-			m_gbufEmissive.image, vk::ImageLayout::eTransferSrcOptimal,
-			m_emissiveMipmapped.image, vk::ImageLayout::eTransferDstOptimal,
-			region);
-
-		// Transition G-buffer emissive back to eShaderReadOnlyOptimal
-		barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
-		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-		barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barrier.image = m_gbufEmissive.image;
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::PipelineStageFlagBits::eFragmentShader,
-			{}, nullptr, nullptr, barrier);
-
-		// Generate mipmaps via blit chain
-		generateMipmaps(cmd, m_emissiveMipmapped.image, m_extent.width, m_extent.height, m_emissiveMipLevels);
-
-		// After generateMipmaps, all mips are in eShaderReadOnlyOptimal (from the final transition in generateMipmaps)
-		// Actually, generateMipmaps transitions the last mip to eShaderReadOnlyOptimal via its final transition.
-		// But the intermediate mips go through eTransferSrcOptimal → we need them all in eShaderReadOnlyOptimal.
-		// generateMipmaps already handles this — mip 0 starts in eTransferDstOptimal but gets transitioned.
-		// Let me check: generateMipmaps transitions each mip from eTransferDstOptimal → eTransferSrcOptimal,
-		// then at the end transitions ALL mips to eShaderReadOnlyOptimal. So after return, all mips are readable.
-	}
+	// Generate mipmaps via blit chain (expects dst in eTransferDstOptimal).
+	// After return, all mips are in eShaderReadOnlyOptimal.
+	generateMipmaps(cmd, m_emissiveMipmapped.image, m_extent.width, m_extent.height, m_emissiveMipLevels);
 
 	// Copy scene depth (if not already done by renderSceneFog)
 	// copySceneDepth is safe to call multiple times — but it re-transitions the depth buffer.
@@ -5756,6 +5323,138 @@ void VulkanPostProcessor::renderVolumetricFog(vk::CommandBuffer cmd)
 
 	m_memoryManager->unmapMemory(m_bloomUBOAlloc);
 	m_bloomUBOMapped = nullptr;
+}
+
+void copyImageToImage(
+    vk::CommandBuffer cmd,
+    vk::Image src, vk::ImageLayout srcOldLayout, vk::ImageLayout srcNewLayout,
+    vk::Image dst, vk::ImageLayout dstOldLayout, vk::ImageLayout dstNewLayout,
+    vk::Extent2D extent,
+    vk::ImageAspectFlags aspect,
+    uint32_t dstMipLevels)
+{
+	// Derive access mask and pipeline stage from a layout.
+	// 'leaving' = true for srcAccessMask (flushing writes before transition),
+	// false for dstAccessMask (making data available after transition).
+	auto layoutInfo = [](vk::ImageLayout layout, bool leaving)
+	    -> std::pair<vk::AccessFlags, vk::PipelineStageFlags> {
+		switch (layout) {
+		case vk::ImageLayout::eUndefined:
+			return {{}, vk::PipelineStageFlagBits::eTopOfPipe};
+		case vk::ImageLayout::eShaderReadOnlyOptimal:
+			return {leaving ? vk::AccessFlags{} : vk::AccessFlagBits::eShaderRead,
+			        vk::PipelineStageFlagBits::eFragmentShader};
+		case vk::ImageLayout::eColorAttachmentOptimal:
+			return {leaving ? vk::AccessFlagBits::eColorAttachmentWrite
+			               : (vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite),
+			        vk::PipelineStageFlagBits::eColorAttachmentOutput};
+		case vk::ImageLayout::eDepthStencilAttachmentOptimal:
+			return {leaving ? vk::AccessFlagBits::eDepthStencilAttachmentWrite
+			               : (vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite),
+			        leaving ? vk::PipelineStageFlagBits::eLateFragmentTests
+			                : vk::PipelineStageFlagBits::eEarlyFragmentTests};
+		case vk::ImageLayout::eTransferSrcOptimal:
+			return {vk::AccessFlagBits::eTransferRead, vk::PipelineStageFlagBits::eTransfer};
+		case vk::ImageLayout::eTransferDstOptimal:
+			return {vk::AccessFlagBits::eTransferWrite, vk::PipelineStageFlagBits::eTransfer};
+		default:
+			Assertion(false, "copyImageToImage: unsupported layout %d", static_cast<int>(layout));
+			return {{}, vk::PipelineStageFlagBits::eAllCommands};
+		}
+	};
+
+	// 1. Pre-barriers: transition src → eTransferSrcOptimal, dst → eTransferDstOptimal
+	{
+		auto [srcAccess, srcStage] = layoutInfo(srcOldLayout, true);
+		auto [dstAccess, dstStage] = layoutInfo(dstOldLayout, true);
+
+		std::array<vk::ImageMemoryBarrier, 2> barriers;
+
+		barriers[0].srcAccessMask = srcAccess;
+		barriers[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
+		barriers[0].oldLayout = srcOldLayout;
+		barriers[0].newLayout = vk::ImageLayout::eTransferSrcOptimal;
+		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].image = src;
+		barriers[0].subresourceRange = {aspect, 0, 1, 0, 1};
+
+		barriers[1].srcAccessMask = dstAccess;
+		barriers[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barriers[1].oldLayout = dstOldLayout;
+		barriers[1].newLayout = vk::ImageLayout::eTransferDstOptimal;
+		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[1].image = dst;
+		barriers[1].subresourceRange = {aspect, 0, dstMipLevels, 0, 1};
+
+		cmd.pipelineBarrier(
+			srcStage | dstStage,
+			vk::PipelineStageFlagBits::eTransfer,
+			{}, nullptr, nullptr, barriers);
+	}
+
+	// 2. Copy (always mip 0, layer 0)
+	{
+		vk::ImageCopy region;
+		region.srcSubresource = {aspect, 0, 0, 1};
+		region.dstSubresource = {aspect, 0, 0, 1};
+		region.extent = vk::Extent3D(extent.width, extent.height, 1);
+
+		cmd.copyImage(
+			src, vk::ImageLayout::eTransferSrcOptimal,
+			dst, vk::ImageLayout::eTransferDstOptimal,
+			region);
+	}
+
+	// 3. Post-barriers: transition src → srcNewLayout, dst → dstNewLayout
+	// Skip rule: if newLayout matches the transfer layout, skip that barrier
+	{
+		bool skipSrc = (srcNewLayout == vk::ImageLayout::eTransferSrcOptimal);
+		bool skipDst = (dstNewLayout == vk::ImageLayout::eTransferDstOptimal);
+
+		if (skipSrc && skipDst) {
+			return;
+		}
+
+		std::array<vk::ImageMemoryBarrier, 2> barriers;
+		uint32_t count = 0;
+		vk::PipelineStageFlags postDstStage = {};
+
+		if (!skipSrc) {
+			auto [access, stage] = layoutInfo(srcNewLayout, false);
+			barriers[count].srcAccessMask = vk::AccessFlagBits::eTransferRead;
+			barriers[count].dstAccessMask = access;
+			barriers[count].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+			barriers[count].newLayout = srcNewLayout;
+			barriers[count].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[count].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[count].image = src;
+			barriers[count].subresourceRange = {aspect, 0, 1, 0, 1};
+			count++;
+			postDstStage |= stage;
+		}
+
+		if (!skipDst) {
+			auto [access, stage] = layoutInfo(dstNewLayout, false);
+			barriers[count].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+			barriers[count].dstAccessMask = access;
+			barriers[count].oldLayout = vk::ImageLayout::eTransferDstOptimal;
+			barriers[count].newLayout = dstNewLayout;
+			barriers[count].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[count].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[count].image = dst;
+			barriers[count].subresourceRange = {aspect, 0, dstMipLevels, 0, 1};
+			count++;
+			postDstStage |= stage;
+		}
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			postDstStage,
+			{}, nullptr, nullptr,
+			vk::ArrayProxy<const vk::ImageMemoryBarrier>(count, barriers.data()));
+	}
 }
 
 // No-op: In OpenGL, begin/end push/pop an FBO and run the post-processing

@@ -476,18 +476,6 @@ public:
 	 */
 	void renderVolumetricFog(vk::CommandBuffer cmd);
 
-	/**
-	 * @brief Copy scene color to composite buffer (reverse of normal flow)
-	 *
-	 * Used between scene fog and volumetric fog so volumetric can read
-	 * the fogged result from composite.
-	 * After return, composite is in eShaderReadOnlyOptimal,
-	 * scene color is in eColorAttachmentOptimal.
-	 *
-	 * @param cmd Active command buffer (must be outside a render pass)
-	 */
-	void copySceneColorToComposite(vk::CommandBuffer cmd);
-
 private:
 	void updateTonemappingUBO();
 
@@ -698,6 +686,35 @@ void vulkan_post_process_begin();
 void vulkan_post_process_end();
 void vulkan_post_process_save_zbuffer();
 void vulkan_post_process_restore_zbuffer();
+
+/**
+ * @brief Copy one image to another with automatic barrier management
+ *
+ * Handles pre-barriers (src→eTransferSrcOptimal, dst→eTransferDstOptimal),
+ * the copy command, and post-barriers (eTransferSrc→srcNewLayout, eTransferDst→dstNewLayout).
+ * Access masks and pipeline stages are derived from the layouts automatically.
+ *
+ * Skip rule: if srcNewLayout == eTransferSrcOptimal, the src post-barrier is skipped
+ * (image stays in transfer source layout). Same for dst + eTransferDstOptimal.
+ *
+ * @param cmd         Active command buffer (must be outside a render pass)
+ * @param src         Source image
+ * @param srcOldLayout Current layout of source image
+ * @param srcNewLayout Desired layout of source image after copy
+ * @param dst         Destination image
+ * @param dstOldLayout Current layout of destination image
+ * @param dstNewLayout Desired layout of destination image after copy
+ * @param extent      Copy region (width x height)
+ * @param aspect      Image aspect (eColor or eDepth)
+ * @param dstMipLevels Number of mip levels in dst subresource range (for pre-barrier)
+ */
+void copyImageToImage(
+    vk::CommandBuffer cmd,
+    vk::Image src, vk::ImageLayout srcOldLayout, vk::ImageLayout srcNewLayout,
+    vk::Image dst, vk::ImageLayout dstOldLayout, vk::ImageLayout dstNewLayout,
+    vk::Extent2D extent,
+    vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor,
+    uint32_t dstMipLevels = 1);
 
 } // namespace vulkan
 } // namespace graphics

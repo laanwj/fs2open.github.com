@@ -58,49 +58,12 @@ void vulkan_deferred_lighting_begin(bool clearNonColorBufs)
 	// All 6 color attachments transition to eShaderReadOnlyOptimal (finalLayout).
 	cmd.endRenderPass();
 
-	// Transition scene color (attachment 0): eShaderReadOnlyOptimal → eTransferSrc
-	// Transition non-MSAA emissive (attachment 4): eShaderReadOnlyOptimal → eTransferDst
-	{
-		std::array<vk::ImageMemoryBarrier, 2> barriers;
-
-		// Scene color → transfer source
-		barriers[0].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-		barriers[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
-		barriers[0].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barriers[0].newLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].image = pp->getSceneColorImage();
-		barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-		// Emissive → transfer destination
-		barriers[1].srcAccessMask = {};
-		barriers[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barriers[1].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barriers[1].newLayout = vk::ImageLayout::eTransferDstOptimal;
-		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].image = pp->getGbufEmissiveImage();
-		barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, nullptr, nullptr, barriers);
-	}
-
-	// Copy scene color → non-MSAA emissive (pre-deferred content becomes emissive)
-	{
-		auto extent = pp->getSceneExtent();
-		vk::ImageCopy region;
-		region.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		region.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		region.extent = vk::Extent3D(extent.width, extent.height, 1);
-		cmd.copyImage(
-			pp->getSceneColorImage(), vk::ImageLayout::eTransferSrcOptimal,
-			pp->getGbufEmissiveImage(), vk::ImageLayout::eTransferDstOptimal,
-			region);
-	}
+	// Copy scene color → non-MSAA emissive (pre-deferred content becomes emissive).
+	// Skip both post-barriers — conditional MSAA/non-MSAA code below handles transitions.
+	copyImageToImage(cmd,
+		pp->getSceneColorImage(), vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal,
+		pp->getGbufEmissiveImage(), vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferDstOptimal,
+		pp->getSceneExtent());
 
 	if (msaaActive) {
 		// --- MSAA path ---
@@ -705,67 +668,11 @@ void vulkan_deferred_lighting_finish()
 	cmd.endRenderPass();
 
 	// 2. Copy emissive → composite (the emissive data becomes the base for light accumulation)
-	{
-		// Transition emissive: eShaderReadOnlyOptimal → eTransferSrcOptimal
-		// Transition composite: eShaderReadOnlyOptimal → eTransferDstOptimal
-		std::array<vk::ImageMemoryBarrier, 2> barriers;
-
-		barriers[0].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-		barriers[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
-		barriers[0].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barriers[0].newLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].image = pp->getGbufEmissiveImage();
-		barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-		barriers[1].srcAccessMask = {};
-		barriers[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barriers[1].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barriers[1].newLayout = vk::ImageLayout::eTransferDstOptimal;
-		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].image = pp->getGbufCompositeImage();
-		barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, nullptr, nullptr, barriers);
-
-		// Copy
-		auto extent = pp->getSceneExtent();
-		vk::ImageCopy region;
-		region.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		region.srcOffset = vk::Offset3D(0, 0, 0);
-		region.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		region.dstOffset = vk::Offset3D(0, 0, 0);
-		region.extent = vk::Extent3D(extent.width, extent.height, 1);
-
-		cmd.copyImage(
-			pp->getGbufEmissiveImage(), vk::ImageLayout::eTransferSrcOptimal,
-			pp->getGbufCompositeImage(), vk::ImageLayout::eTransferDstOptimal,
-			region);
-
-		// Transition emissive back to eShaderReadOnlyOptimal (done with it)
-		// Transition composite to eColorAttachmentOptimal (for light accum render pass)
-		barriers[0].srcAccessMask = vk::AccessFlagBits::eTransferRead;
-		barriers[0].dstAccessMask = vk::AccessFlagBits::eShaderRead;
-		barriers[0].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barriers[0].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barriers[0].image = pp->getGbufEmissiveImage();
-
-		barriers[1].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barriers[1].dstAccessMask = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
-		barriers[1].oldLayout = vk::ImageLayout::eTransferDstOptimal;
-		barriers[1].newLayout = vk::ImageLayout::eColorAttachmentOptimal;
-		barriers[1].image = pp->getGbufCompositeImage();
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
-			{}, nullptr, nullptr, barriers);
-	}
+	// Emissive → eShaderReadOnlyOptimal (done), composite → eColorAttachmentOptimal (for light accum)
+	copyImageToImage(cmd,
+		pp->getGbufEmissiveImage(), vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+		pp->getGbufCompositeImage(), vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+		pp->getSceneExtent());
 
 	// 3. Render deferred lights (begins + ends light accum render pass internally)
 	// After this, composite is in eShaderReadOnlyOptimal
@@ -786,7 +693,10 @@ void vulkan_deferred_lighting_finish()
 
 		if (bDrawNebVolumetrics) {
 			// Copy scene color → composite so volumetric reads the fogged result
-			pp->copySceneColorToComposite(cmd);
+			copyImageToImage(cmd,
+				pp->getSceneColorImage(), vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+				pp->getGbufCompositeImage(), vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+				pp->getSceneExtent());
 		}
 	}
 	if (bDrawNebVolumetrics) {
@@ -797,62 +707,11 @@ void vulkan_deferred_lighting_finish()
 
 	if (!fogRendered) {
 		// No fog — copy composite → scene color (existing behavior)
-		auto extent = pp->getSceneExtent();
-
-		// Transition composite: eShaderReadOnlyOptimal → eTransferSrcOptimal
-		// Transition scene color: eShaderReadOnlyOptimal → eTransferDstOptimal
-		std::array<vk::ImageMemoryBarrier, 2> barriers;
-
-		barriers[0].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-		barriers[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
-		barriers[0].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barriers[0].newLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].image = pp->getGbufCompositeImage();
-		barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-		barriers[1].srcAccessMask = {};
-		barriers[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barriers[1].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barriers[1].newLayout = vk::ImageLayout::eTransferDstOptimal;
-		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].image = pp->getSceneColorImage();
-		barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits::eTransfer,
-			{}, nullptr, nullptr, barriers);
-
-		vk::ImageCopy region;
-		region.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		region.srcOffset = vk::Offset3D(0, 0, 0);
-		region.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-		region.dstOffset = vk::Offset3D(0, 0, 0);
-		region.extent = vk::Extent3D(extent.width, extent.height, 1);
-
-		cmd.copyImage(
-			pp->getGbufCompositeImage(), vk::ImageLayout::eTransferSrcOptimal,
-			pp->getSceneColorImage(), vk::ImageLayout::eTransferDstOptimal,
-			region);
-
-		// Transition scene color: eTransferDstOptimal → eColorAttachmentOptimal
-		vk::ImageMemoryBarrier sceneBarrier;
-		sceneBarrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-		sceneBarrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
-		sceneBarrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
-		sceneBarrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
-		sceneBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		sceneBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		sceneBarrier.image = pp->getSceneColorImage();
-		sceneBarrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			{}, nullptr, nullptr, sceneBarrier);
+		// Skip src post-barrier (composite not used again in this path)
+		copyImageToImage(cmd,
+			pp->getGbufCompositeImage(), vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal,
+			pp->getSceneColorImage(), vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+			pp->getSceneExtent());
 	}
 
 	// 5. Switch to scene render pass for forward transparent objects
