@@ -38,25 +38,31 @@ void RenderFrame::onFrameFinished(std::function<void()> finishFunc)
 {
 	m_frameFinishedCallbacks.push_back(std::move(finishFunc));
 }
-uint32_t RenderFrame::acquireSwapchainImage()
+SwapChainStatus RenderFrame::acquireSwapchainImage(uint32_t& outImageIndex)
 {
 	Assertion(!m_inFlight, "Cannot acquire swapchain image when frame is still in flight.");
 
 	uint32_t imageIndex;
-	vk::Result res = m_device.acquireNextImageKHR(m_swapChain,
-		std::numeric_limits<uint64_t>::max(),
-		m_imageAvailableSemaphore.get(),
-		nullptr,
-		&imageIndex);
-	// TODO: This should handle at least VK_SUBOPTIMAL_KHR, which means that the swap chain is no longer
-	// optimal and should be recreated.
-	(void)res;
+	vk::Result res;
+	try {
+		res = m_device.acquireNextImageKHR(m_swapChain,
+			std::numeric_limits<uint64_t>::max(),
+			m_imageAvailableSemaphore.get(),
+			nullptr,
+			&imageIndex);
+	} catch (vk::OutOfDateKHRError&) {
+		return SwapChainStatus::eOutOfDate;
+	}
 
 	m_swapChainIdx = imageIndex;
+	outImageIndex = imageIndex;
 
-	return imageIndex;
+	if (res == vk::Result::eSuboptimalKHR) {
+		return SwapChainStatus::eSuboptimal;
+	}
+	return SwapChainStatus::eSuccess;
 }
-void RenderFrame::submitAndPresent(const SCP_vector<vk::CommandBuffer>& cmdBuffers)
+SwapChainStatus RenderFrame::submitAndPresent(const SCP_vector<vk::CommandBuffer>& cmdBuffers)
 {
 	Assertion(!m_inFlight, "Cannot submit a frame for presentation when it is still in flight.");
 
@@ -79,7 +85,7 @@ void RenderFrame::submitAndPresent(const SCP_vector<vk::CommandBuffer>& cmdBuffe
 
 	m_graphicsQueue.submit(submitInfo, m_frameInFlightFence.get());
 
-	// This frame is now officially in flight
+	// This frame is now officially in flight (fence pending even if present fails)
 	m_inFlight = true;
 
 	vk::PresentInfoKHR presentInfo;
@@ -92,7 +98,21 @@ void RenderFrame::submitAndPresent(const SCP_vector<vk::CommandBuffer>& cmdBuffe
 	presentInfo.pImageIndices = &m_swapChainIdx;
 	presentInfo.pResults = nullptr;
 
-	(void)m_presentQueue.presentKHR(presentInfo);
+	vk::Result res;
+	try {
+		res = m_presentQueue.presentKHR(presentInfo);
+	} catch (vk::OutOfDateKHRError&) {
+		return SwapChainStatus::eOutOfDate;
+	}
+
+	if (res == vk::Result::eSuboptimalKHR) {
+		return SwapChainStatus::eSuboptimal;
+	}
+	return SwapChainStatus::eSuccess;
+}
+void RenderFrame::updateSwapChain(vk::SwapchainKHR swapChain)
+{
+	m_swapChain = swapChain;
 }
 
 } // namespace vulkan

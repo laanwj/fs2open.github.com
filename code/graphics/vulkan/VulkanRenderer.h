@@ -206,7 +206,7 @@ class VulkanRenderer {
 
 	bool createLogicalDevice(const PhysicalDeviceValues& deviceValues);
 
-	bool createSwapChain(const PhysicalDeviceValues& deviceValues);
+	bool createSwapChain(const PhysicalDeviceValues& deviceValues, vk::SwapchainKHR oldSwapchain = nullptr);
 
 	vk::UniqueShaderModule loadShader(const SCP_string& name);
 
@@ -225,6 +225,8 @@ class VulkanRenderer {
 	void createPresentSyncObjects();
 
 	void acquireNextSwapChainImage();
+
+	bool recreateSwapChain();
 
 	void createImGuiDescriptorPool();
 	void initImGui();
@@ -275,10 +277,14 @@ class VulkanRenderer {
 	SCP_vector<vk::CommandBuffer> m_currentCommandBuffers;  // For cleanup
 	bool m_frameInProgress = false;
 
+	// Swap chain recreation
+	bool m_swapChainNeedsRecreation = false;
+
 	// Physical device info (needed for memory manager)
 	vk::PhysicalDevice m_physicalDevice;
 	uint32_t m_graphicsQueueFamilyIndex = 0;
 	uint32_t m_transferQueueFamilyIndex = 0;
+	uint32_t m_presentQueueFamilyIndex = 0;
 
 	// Memory, buffer, and texture management
 	std::unique_ptr<VulkanMemoryManager> m_memoryManager;

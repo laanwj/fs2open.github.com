@@ -347,62 +347,16 @@ bool VulkanRenderer::initialize()
 		return false;
 	}
 
+	createCommandPool(deviceValues);
+
 	if (!createSwapChain(deviceValues)) {
 		mprintf(("Failed to create swap chain.\n"));
 		return false;
 	}
 
-	createCommandPool(deviceValues);
 	createDepthResources();
 	createRenderPass();
 	createFrameBuffers();
-
-	// Transition swap chain images to ePresentSrcKHR so the render pass
-	// can use initialLayout=ePresentSrcKHR from the start.
-	{
-		vk::CommandBufferAllocateInfo allocInfo;
-		allocInfo.commandPool = m_graphicsCommandPool.get();
-		allocInfo.level = vk::CommandBufferLevel::ePrimary;
-		allocInfo.commandBufferCount = 1;
-
-		auto cmdBuffers = m_device->allocateCommandBuffers(allocInfo);
-		auto cmd = cmdBuffers.front();
-
-		vk::CommandBufferBeginInfo beginInfo;
-		beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
-		cmd.begin(beginInfo);
-
-		for (auto& image : m_swapChainImages) {
-			vk::ImageMemoryBarrier barrier;
-			barrier.oldLayout = vk::ImageLayout::eUndefined;
-			barrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
-			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.image = image;
-			barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-			barrier.subresourceRange.baseMipLevel = 0;
-			barrier.subresourceRange.levelCount = 1;
-			barrier.subresourceRange.baseArrayLayer = 0;
-			barrier.subresourceRange.layerCount = 1;
-			barrier.srcAccessMask = {};
-			barrier.dstAccessMask = {};
-
-			cmd.pipelineBarrier(
-				vk::PipelineStageFlagBits::eTopOfPipe,
-				vk::PipelineStageFlagBits::eBottomOfPipe,
-				{}, nullptr, nullptr, barrier);
-		}
-
-		cmd.end();
-
-		vk::SubmitInfo submitInfo;
-		submitInfo.commandBufferCount = 1;
-		submitInfo.pCommandBuffers = &cmd;
-		m_graphicsQueue.submit(submitInfo, nullptr);
-		m_graphicsQueue.waitIdle();
-
-		m_device->freeCommandBuffers(m_graphicsCommandPool.get(), cmdBuffers);
-	}
 
 	createPresentSyncObjects();
 
@@ -780,7 +734,7 @@ bool VulkanRenderer::createLogicalDevice(const PhysicalDeviceValues& deviceValue
 	m_physicalDevice = deviceValues.device;
 	m_graphicsQueueFamilyIndex = deviceValues.graphicsQueueIndex.index;
 	m_transferQueueFamilyIndex = deviceValues.transferQueueIndex.index;
-
+	m_presentQueueFamilyIndex = deviceValues.presentQueueIndex.index;
 
 	// Initialize memory manager
 	m_memoryManager = std::unique_ptr<VulkanMemoryManager>(new VulkanMemoryManager());
@@ -808,7 +762,7 @@ bool VulkanRenderer::createLogicalDevice(const PhysicalDeviceValues& deviceValue
 
 	return true;
 }
-bool VulkanRenderer::createSwapChain(const PhysicalDeviceValues& deviceValues)
+bool VulkanRenderer::createSwapChain(const PhysicalDeviceValues& deviceValues, vk::SwapchainKHR oldSwapchain)
 {
 	// Choose one more than the minimum to avoid driver synchronization if it is not done with a thread yet
 	uint32_t imageCount = deviceValues.surfaceCapabilities.minImageCount + 1;
@@ -837,17 +791,21 @@ bool VulkanRenderer::createSwapChain(const PhysicalDeviceValues& deviceValues)
 		createInfo.pQueueFamilyIndices = queueFamilyIndices;
 	} else {
 		createInfo.imageSharingMode = vk::SharingMode::eExclusive;
-		createInfo.queueFamilyIndexCount = 0;     // Optional
-		createInfo.pQueueFamilyIndices = nullptr; // Optional
 	}
 
 	createInfo.preTransform = deviceValues.surfaceCapabilities.currentTransform;
 	createInfo.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
 	createInfo.presentMode = choosePresentMode(deviceValues);
 	createInfo.clipped = true;
-	createInfo.oldSwapchain = nullptr;
+	createInfo.oldSwapchain = oldSwapchain;
 
-	m_swapChain = m_device->createSwapchainKHRUnique(createInfo);
+	auto newSwapChain = m_device->createSwapchainKHRUnique(createInfo);
+
+	// Clear old resources before replacing the swap chain
+	m_swapChainFramebuffers.clear();
+	m_swapChainImageViews.clear();
+
+	m_swapChain = std::move(newSwapChain);
 
 	auto swapChainImages = m_device->getSwapchainImagesKHR(m_swapChain.get());
 	m_swapChainImages.assign(swapChainImages.begin(), swapChainImages.end());
@@ -873,6 +831,53 @@ bool VulkanRenderer::createSwapChain(const PhysicalDeviceValues& deviceValues)
 		viewCreateInfo.subresourceRange.layerCount = 1;
 
 		m_swapChainImageViews.push_back(m_device->createImageViewUnique(viewCreateInfo));
+	}
+
+	// Transition new images eUndefined → ePresentSrcKHR so the render pass
+	// can use initialLayout=ePresentSrcKHR from the start.
+	{
+		vk::CommandBufferAllocateInfo allocInfo;
+		allocInfo.commandPool = m_graphicsCommandPool.get();
+		allocInfo.level = vk::CommandBufferLevel::ePrimary;
+		allocInfo.commandBufferCount = 1;
+
+		auto cmdBuffers = m_device->allocateCommandBuffers(allocInfo);
+		auto cmd = cmdBuffers.front();
+
+		vk::CommandBufferBeginInfo beginInfo;
+		beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+		cmd.begin(beginInfo);
+
+		for (auto& image : m_swapChainImages) {
+			vk::ImageMemoryBarrier barrier;
+			barrier.oldLayout = vk::ImageLayout::eUndefined;
+			barrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
+			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.image = image;
+			barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+			barrier.subresourceRange.baseMipLevel = 0;
+			barrier.subresourceRange.levelCount = 1;
+			barrier.subresourceRange.baseArrayLayer = 0;
+			barrier.subresourceRange.layerCount = 1;
+			barrier.srcAccessMask = {};
+			barrier.dstAccessMask = {};
+
+			cmd.pipelineBarrier(
+				vk::PipelineStageFlagBits::eTopOfPipe,
+				vk::PipelineStageFlagBits::eBottomOfPipe,
+				{}, nullptr, nullptr, barrier);
+		}
+
+		cmd.end();
+
+		vk::SubmitInfo submitInfo;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &cmd;
+		m_graphicsQueue.submit(submitInfo, nullptr);
+		m_graphicsQueue.waitIdle();
+
+		m_device->freeCommandBuffers(m_graphicsCommandPool.get(), cmdBuffers);
 	}
 
 	return true;
@@ -1062,7 +1067,43 @@ void VulkanRenderer::acquireNextSwapChainImage()
 {
 	m_frames[m_currentFrame]->waitForFinish();
 
-	m_currentSwapChainImage = m_frames[m_currentFrame]->acquireSwapchainImage();
+	// Recreate swap chain if flagged from a previous frame
+	if (m_swapChainNeedsRecreation) {
+		// Wait for minimized window (0x0 extent) before recreating
+		while (true) {
+			if (recreateSwapChain()) {
+				break;
+			}
+			// Window is minimized — wait and pump events until surface is valid again
+			os_sleep(100);
+			SDL_PumpEvents();
+		}
+	}
+
+	uint32_t imageIndex = 0;
+	auto status = m_frames[m_currentFrame]->acquireSwapchainImage(imageIndex);
+
+	if (status == SwapChainStatus::eOutOfDate) {
+		// Must recreate immediately and retry
+		while (true) {
+			if (recreateSwapChain()) {
+				break;
+			}
+			os_sleep(100);
+			SDL_PumpEvents();
+		}
+		status = m_frames[m_currentFrame]->acquireSwapchainImage(imageIndex);
+		if (status == SwapChainStatus::eOutOfDate) {
+			// If still failing after recreation, flag for next frame
+			m_swapChainNeedsRecreation = true;
+		}
+	}
+
+	if (status == SwapChainStatus::eSuboptimal) {
+		m_swapChainNeedsRecreation = true;
+	}
+
+	m_currentSwapChainImage = imageIndex;
 
 	// Ensure that this image is no longer in use
 	if (m_swapChainImageRenderImage[m_currentSwapChainImage]) {
@@ -1169,7 +1210,11 @@ void VulkanRenderer::flip()
 	});
 
 	// Submit and present
-	m_frames[m_currentFrame]->submitAndPresent(m_currentCommandBuffers);
+	auto presentStatus = m_frames[m_currentFrame]->submitAndPresent(m_currentCommandBuffers);
+
+	if (presentStatus == SwapChainStatus::eSuboptimal || presentStatus == SwapChainStatus::eOutOfDate) {
+		m_swapChainNeedsRecreation = true;
+	}
 
 	// Notify query manager that this frame's command buffer was submitted
 	if (m_queryManager) {
@@ -1777,6 +1822,57 @@ void VulkanRenderer::copySceneDepthForParticles()
 		-static_cast<float>(extent.height));
 
 	m_sceneDepthCopiedThisFrame = true;
+}
+
+bool VulkanRenderer::recreateSwapChain()
+{
+	mprintf(("Vulkan: Recreating swap chain...\n"));
+
+	// Wait for all frames to finish so no resources are in use
+	for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+		m_frames[i]->waitForFinish();
+	}
+	m_device->waitIdle();
+
+	// Re-query surface state (may have changed due to resize/compositor)
+	PhysicalDeviceValues freshValues;
+	freshValues.device = m_physicalDevice;
+	freshValues.surfaceCapabilities = m_physicalDevice.getSurfaceCapabilitiesKHR(m_vkSurface.get());
+	auto fmts = m_physicalDevice.getSurfaceFormatsKHR(m_vkSurface.get());
+	freshValues.surfaceFormats.assign(fmts.begin(), fmts.end());
+	auto modes = m_physicalDevice.getSurfacePresentModesKHR(m_vkSurface.get());
+	freshValues.presentModes.assign(modes.begin(), modes.end());
+	freshValues.graphicsQueueIndex = {true, m_graphicsQueueFamilyIndex};
+	freshValues.presentQueueIndex = {true, m_presentQueueFamilyIndex};
+
+	// Check for 0x0 extent (minimized window) — caller should retry later
+	auto extent = chooseSwapChainExtent(freshValues, gr_screen.max_w, gr_screen.max_h);
+	if (extent.width == 0 || extent.height == 0) {
+		mprintf(("Vulkan: Surface extent is 0x0 (minimized), deferring swap chain recreation\n"));
+		return false;
+	}
+
+	// Recreate swap chain, image views, and framebuffers
+	// (createSwapChain clears old resources and transitions new images internally)
+	createSwapChain(freshValues, m_swapChain.get());
+	createFrameBuffers();
+
+	// Update RenderFrame handles to point to the new swap chain
+	for (auto& frame : m_frames) {
+		frame->updateSwapChain(m_swapChain.get());
+	}
+
+	// Reset swap chain image tracking
+	m_swapChainImageRenderImage.clear();
+	m_swapChainImageRenderImage.resize(m_swapChainImages.size(), nullptr);
+	m_previousSwapChainImage = UINT32_MAX;
+
+	m_swapChainNeedsRecreation = false;
+
+	mprintf(("Vulkan: Swap chain recreated successfully (%ux%u, %zu images)\n",
+		m_swapChainExtent.width, m_swapChainExtent.height, m_swapChainImages.size()));
+
+	return true;
 }
 
 void VulkanRenderer::shutdown()
