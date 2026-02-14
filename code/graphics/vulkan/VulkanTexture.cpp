@@ -120,201 +120,23 @@ bool VulkanTextureManager::init(vk::Device device, vk::PhysicalDevice physicalDe
 		return false;
 	}
 
-	// Create fallback 1x1 white texture for unbound descriptor slots
-	if (!createImage(1, 1, 1, vk::Format::eR8G8B8A8Unorm, vk::ImageTiling::eOptimal,
-	                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-	                 MemoryUsage::GpuOnly, m_fallbackTexture, m_fallbackTextureAllocation)) {
-		mprintf(("Failed to create fallback texture!\n"));
+	// Create 1x1 white fallback textures for unbound descriptor slots
+	if (!createFallbackTexture(m_fallbackTexture, m_fallbackTextureAllocation,
+	                           m_fallbackTextureView, ImageViewType::Array2D)) {
 		return false;
 	}
-
-	m_fallbackTextureView = createImageView(m_fallbackTexture, vk::Format::eR8G8B8A8Unorm,
-	                                         vk::ImageAspectFlagBits::eColor, 1, ImageViewType::Array2D);
-	if (!m_fallbackTextureView) {
-		mprintf(("Failed to create fallback texture view!\n"));
-		m_device.destroyImage(m_fallbackTexture);
-		m_memoryManager->freeAllocation(m_fallbackTextureAllocation);
+	if (!createFallbackTexture(m_fallbackTexture2D, m_fallbackTexture2DAllocation,
+	                           m_fallbackTextureView2D, ImageViewType::Plain2D)) {
 		return false;
 	}
-
-	// Also create a 2D (non-array) view of the same texture for post-processing shaders
-	// that use sampler2D instead of sampler2DArray
-	m_fallbackTextureView2D = createImageView(m_fallbackTexture, vk::Format::eR8G8B8A8Unorm,
-	                                           vk::ImageAspectFlagBits::eColor, 1, ImageViewType::Plain2D);
-	if (!m_fallbackTextureView2D) {
-		mprintf(("Failed to create fallback texture 2D view!\n"));
-		m_device.destroyImageView(m_fallbackTextureView);
-		m_device.destroyImage(m_fallbackTexture);
-		m_memoryManager->freeAllocation(m_fallbackTextureAllocation);
+	if (!createFallbackTexture(m_fallbackCubeTexture, m_fallbackCubeAllocation,
+	                           m_fallbackCubeView, ImageViewType::Cube, 6, true)) {
 		return false;
 	}
-
-	// Upload white pixel data to fallback texture
-	{
-		// Create staging buffer with white pixel (RGBA: 255, 255, 255, 255)
-		uint32_t whitePixel = 0xFFFFFFFF;
-		vk::DeviceSize bufferSize = 4;
-
-		// Allocate staging buffer
-		vk::BufferCreateInfo bufferInfo;
-		bufferInfo.size = bufferSize;
-		bufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
-		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
-
-		vk::Buffer stagingBuffer = m_device.createBuffer(bufferInfo);
-		VulkanAllocation stagingAlloc;
-		m_memoryManager->allocateBufferMemory(stagingBuffer, MemoryUsage::CpuToGpu, stagingAlloc);
-
-		// Copy pixel data to staging buffer
-		void* mappedData = m_device.mapMemory(stagingAlloc.memory, stagingAlloc.offset, bufferSize);
-		memcpy(mappedData, &whitePixel, sizeof(whitePixel));
-		m_device.unmapMemory(stagingAlloc.memory);
-
-		// Transition image for transfer
-		transitionImageLayout(m_fallbackTexture, vk::Format::eR8G8B8A8Unorm,
-		                      vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, 1);
-
-		// Copy buffer to image
-		copyBufferToImage(stagingBuffer, m_fallbackTexture, 1, 1);
-
-		// Transition image for shader access
-		transitionImageLayout(m_fallbackTexture, vk::Format::eR8G8B8A8Unorm,
-		                      vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, 1);
-
-		// Clean up staging buffer
-		m_device.destroyBuffer(stagingBuffer);
-		m_memoryManager->freeAllocation(stagingAlloc);
-	}
-
-	mprintf(("Created fallback texture\n"));
-
-	// Create fallback 1x1x6 white cubemap for unbound samplerCube slots
-	if (!createImage(1, 1, 1, vk::Format::eR8G8B8A8Unorm, vk::ImageTiling::eOptimal,
-	                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-	                 MemoryUsage::GpuOnly, m_fallbackCubeTexture, m_fallbackCubeAllocation, 6, true)) {
-		mprintf(("Failed to create fallback cubemap texture!\n"));
+	if (!createFallbackTexture(m_fallback3DTexture, m_fallback3DAllocation,
+	                           m_fallback3DView, ImageViewType::Volume3D, 1, false, vk::ImageType::e3D)) {
 		return false;
 	}
-
-	m_fallbackCubeView = createImageView(m_fallbackCubeTexture, vk::Format::eR8G8B8A8Unorm,
-	                                      vk::ImageAspectFlagBits::eColor, 1, ImageViewType::Cube, 6);
-	if (!m_fallbackCubeView) {
-		mprintf(("Failed to create fallback cubemap view!\n"));
-		return false;
-	}
-
-	// Upload white pixels to all 6 faces of the fallback cubemap
-	{
-		uint32_t whitePixels[6];
-		for (int i = 0; i < 6; i++) whitePixels[i] = 0xFFFFFFFF;
-		vk::DeviceSize cubeBufferSize = sizeof(whitePixels);
-
-		vk::BufferCreateInfo cubeBufInfo;
-		cubeBufInfo.size = cubeBufferSize;
-		cubeBufInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
-		cubeBufInfo.sharingMode = vk::SharingMode::eExclusive;
-
-		vk::Buffer cubeStagingBuffer = m_device.createBuffer(cubeBufInfo);
-		VulkanAllocation cubeStagingAlloc;
-		m_memoryManager->allocateBufferMemory(cubeStagingBuffer, MemoryUsage::CpuToGpu, cubeStagingAlloc);
-
-		void* cubeMapped = m_device.mapMemory(cubeStagingAlloc.memory, cubeStagingAlloc.offset, cubeBufferSize);
-		memcpy(cubeMapped, whitePixels, sizeof(whitePixels));
-		m_device.unmapMemory(cubeStagingAlloc.memory);
-
-		SCP_vector<vk::BufferImageCopy> cubeRegions;
-		for (uint32_t face = 0; face < 6; face++) {
-			vk::BufferImageCopy region;
-			region.bufferOffset = face * 4;
-			region.bufferRowLength = 0;
-			region.bufferImageHeight = 0;
-			region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-			region.imageSubresource.mipLevel = 0;
-			region.imageSubresource.baseArrayLayer = face;
-			region.imageSubresource.layerCount = 1;
-			region.imageOffset = vk::Offset3D(0, 0, 0);
-			region.imageExtent = vk::Extent3D(1, 1, 1);
-			cubeRegions.push_back(region);
-		}
-
-		vk::CommandBuffer cubeCmd = beginSingleTimeCommands();
-		recordUploadCommands(cubeCmd, m_fallbackCubeTexture, cubeStagingBuffer, vk::Format::eR8G8B8A8Unorm,
-		                     1, 1, 1, vk::ImageLayout::eUndefined, false, cubeRegions, 6);
-		cubeCmd.end();
-
-		vk::SubmitInfo cubeSubmit;
-		cubeSubmit.commandBufferCount = 1;
-		cubeSubmit.pCommandBuffers = &cubeCmd;
-		m_graphicsQueue.submit(cubeSubmit, nullptr);
-		m_graphicsQueue.waitIdle();
-		m_device.freeCommandBuffers(m_commandPool, cubeCmd);
-
-		m_device.destroyBuffer(cubeStagingBuffer);
-		m_memoryManager->freeAllocation(cubeStagingAlloc);
-	}
-
-	mprintf(("Created fallback cubemap\n"));
-
-	// Create fallback 1x1x1 white 3D texture for unbound sampler3D slots
-	if (!createImage(1, 1, 1, vk::Format::eR8G8B8A8Unorm, vk::ImageTiling::eOptimal,
-	                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-	                 MemoryUsage::GpuOnly, m_fallback3DTexture, m_fallback3DAllocation,
-	                 1, false, 1, vk::ImageType::e3D)) {
-		mprintf(("Failed to create fallback 3D texture!\n"));
-		return false;
-	}
-
-	m_fallback3DView = createImageView(m_fallback3DTexture, vk::Format::eR8G8B8A8Unorm,
-	                                    vk::ImageAspectFlagBits::eColor, 1, ImageViewType::Volume3D);
-	if (!m_fallback3DView) {
-		mprintf(("Failed to create fallback 3D texture view!\n"));
-		return false;
-	}
-
-	// Upload white pixel to fallback 3D texture
-	{
-		uint32_t whitePixel = 0xFFFFFFFF;
-		vk::DeviceSize bufSize3D = 4;
-
-		vk::BufferCreateInfo bufInfo3D;
-		bufInfo3D.size = bufSize3D;
-		bufInfo3D.usage = vk::BufferUsageFlagBits::eTransferSrc;
-		bufInfo3D.sharingMode = vk::SharingMode::eExclusive;
-
-		vk::Buffer stagingBuf3D = m_device.createBuffer(bufInfo3D);
-		VulkanAllocation stagingAlloc3D;
-		m_memoryManager->allocateBufferMemory(stagingBuf3D, MemoryUsage::CpuToGpu, stagingAlloc3D);
-
-		void* mapped3D = m_device.mapMemory(stagingAlloc3D.memory, stagingAlloc3D.offset, bufSize3D);
-		memcpy(mapped3D, &whitePixel, sizeof(whitePixel));
-		m_device.unmapMemory(stagingAlloc3D.memory);
-
-		transitionImageLayout(m_fallback3DTexture, vk::Format::eR8G8B8A8Unorm,
-		                      vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, 1);
-
-		// Copy buffer to 3D image (extent depth=1 for 1x1x1)
-		vk::CommandBuffer cmd3D = beginSingleTimeCommands();
-		vk::BufferImageCopy region3D;
-		region3D.bufferOffset = 0;
-		region3D.bufferRowLength = 0;
-		region3D.bufferImageHeight = 0;
-		region3D.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-		region3D.imageSubresource.mipLevel = 0;
-		region3D.imageSubresource.baseArrayLayer = 0;
-		region3D.imageSubresource.layerCount = 1;
-		region3D.imageOffset = vk::Offset3D(0, 0, 0);
-		region3D.imageExtent = vk::Extent3D(1, 1, 1);
-		cmd3D.copyBufferToImage(stagingBuf3D, m_fallback3DTexture, vk::ImageLayout::eTransferDstOptimal, region3D);
-		endSingleTimeCommands(cmd3D);
-
-		transitionImageLayout(m_fallback3DTexture, vk::Format::eR8G8B8A8Unorm,
-		                      vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, 1);
-
-		m_device.destroyBuffer(stagingBuf3D);
-		m_memoryManager->freeAllocation(stagingAlloc3D);
-	}
-
-	mprintf(("Created fallback 3D texture\n"));
 
 	m_initialized = true;
 	return true;
@@ -352,10 +174,17 @@ void VulkanTextureManager::shutdown()
 		m_memoryManager->freeAllocation(m_fallbackCubeAllocation);
 	}
 
-	// Destroy fallback texture
+	// Destroy fallback textures
 	if (m_fallbackTextureView2D) {
 		m_device.destroyImageView(m_fallbackTextureView2D);
 		m_fallbackTextureView2D = nullptr;
+	}
+	if (m_fallbackTexture2D) {
+		m_device.destroyImage(m_fallbackTexture2D);
+		m_fallbackTexture2D = nullptr;
+	}
+	if (m_fallbackTexture2DAllocation.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_fallbackTexture2DAllocation);
 	}
 	if (m_fallbackTextureView) {
 		m_device.destroyImageView(m_fallbackTextureView);
@@ -2261,6 +2090,86 @@ vk::ImageView VulkanTextureManager::createImageView(vk::Image image, vk::Format 
 		mprintf(("Failed to create image view: %s\n", e.what()));
 		return nullptr;
 	}
+}
+
+bool VulkanTextureManager::createFallbackTexture(vk::Image& outImage, VulkanAllocation& outAlloc,
+                                                  vk::ImageView& outView, ImageViewType viewType,
+                                                  uint32_t arrayLayers, bool cubemap,
+                                                  vk::ImageType imageType)
+{
+	if (!createImage(1, 1, 1, vk::Format::eR8G8B8A8Unorm, vk::ImageTiling::eOptimal,
+	                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+	                 MemoryUsage::GpuOnly, outImage, outAlloc, arrayLayers, cubemap, 1, imageType)) {
+		mprintf(("Failed to create fallback texture image!\n"));
+		return false;
+	}
+
+	outView = createImageView(outImage, vk::Format::eR8G8B8A8Unorm,
+	                          vk::ImageAspectFlagBits::eColor, 1, viewType, arrayLayers);
+	if (!outView) {
+		mprintf(("Failed to create fallback texture view!\n"));
+		m_device.destroyImage(outImage);
+		m_memoryManager->freeAllocation(outAlloc);
+		return false;
+	}
+
+	// Upload white pixels via staging buffer
+	SCP_vector<uint32_t> whitePixels(arrayLayers, 0xFFFFFFFF);
+	vk::DeviceSize bufferSize = arrayLayers * sizeof(uint32_t);
+
+	vk::BufferCreateInfo bufferInfo;
+	bufferInfo.size = bufferSize;
+	bufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+	vk::Buffer stagingBuffer;
+	VulkanAllocation stagingAlloc;
+	try {
+		stagingBuffer = m_device.createBuffer(bufferInfo);
+	} catch (const vk::SystemError& e) {
+		mprintf(("Failed to create fallback staging buffer: %s\n", e.what()));
+		m_device.destroyImageView(outView);
+		m_device.destroyImage(outImage);
+		m_memoryManager->freeAllocation(outAlloc);
+		return false;
+	}
+
+	if (!m_memoryManager->allocateBufferMemory(stagingBuffer, MemoryUsage::CpuToGpu, stagingAlloc)) {
+		m_device.destroyBuffer(stagingBuffer);
+		m_device.destroyImageView(outView);
+		m_device.destroyImage(outImage);
+		m_memoryManager->freeAllocation(outAlloc);
+		return false;
+	}
+
+	void* mapped = m_device.mapMemory(stagingAlloc.memory, stagingAlloc.offset, bufferSize);
+	memcpy(mapped, whitePixels.data(), bufferSize);
+	m_device.unmapMemory(stagingAlloc.memory);
+
+	SCP_vector<vk::BufferImageCopy> regions;
+	for (uint32_t i = 0; i < arrayLayers; i++) {
+		vk::BufferImageCopy region;
+		region.bufferOffset = i * sizeof(uint32_t);
+		region.bufferRowLength = 0;
+		region.bufferImageHeight = 0;
+		region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+		region.imageSubresource.mipLevel = 0;
+		region.imageSubresource.baseArrayLayer = i;
+		region.imageSubresource.layerCount = 1;
+		region.imageOffset = vk::Offset3D(0, 0, 0);
+		region.imageExtent = vk::Extent3D(1, 1, 1);
+		regions.push_back(region);
+	}
+
+	vk::CommandBuffer cmd = beginSingleTimeCommands();
+	recordUploadCommands(cmd, outImage, stagingBuffer, vk::Format::eR8G8B8A8Unorm,
+	                     1, 1, 1, vk::ImageLayout::eUndefined, false, regions, arrayLayers);
+	endSingleTimeCommands(cmd);
+
+	m_device.destroyBuffer(stagingBuffer);
+	m_memoryManager->freeAllocation(stagingAlloc);
+
+	return true;
 }
 
 void VulkanTextureManager::copyBufferToImage(vk::Buffer buffer, vk::Image image,

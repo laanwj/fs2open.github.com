@@ -228,6 +228,14 @@ private:
 	                               uint32_t baseArrayLayer = 0);
 
 	/**
+	 * @brief Create a 1x1 white fallback texture (image + view + upload)
+	 */
+	bool createFallbackTexture(vk::Image& outImage, VulkanAllocation& outAlloc,
+	                           vk::ImageView& outView, ImageViewType viewType,
+	                           uint32_t arrayLayers = 1, bool cubemap = false,
+	                           vk::ImageType imageType = vk::ImageType::e2D);
+
+	/**
 	 * @brief Copy buffer data to image
 	 */
 	void copyBufferToImage(vk::Buffer buffer, vk::Image image,
@@ -308,11 +316,14 @@ private:
 	SCP_unordered_map<uint64_t, vk::Sampler> m_samplerCache;
 	vk::Sampler m_defaultSampler;
 
-	// Fallback 1x1 white texture for unbound texture slots
+	// Fallback 1x1 white textures for unbound texture slots
 	vk::Image m_fallbackTexture;
 	vk::ImageView m_fallbackTextureView;      // 2D_ARRAY view (for material texture arrays)
-	vk::ImageView m_fallbackTextureView2D;    // 2D view (for post-processing sampler2D)
 	VulkanAllocation m_fallbackTextureAllocation;
+
+	vk::Image m_fallbackTexture2D;
+	vk::ImageView m_fallbackTextureView2D;    // 2D view (for post-processing sampler2D)
+	VulkanAllocation m_fallbackTexture2DAllocation;
 
 	// Fallback 1x1x6 white cubemap for unbound samplerCube slots
 	vk::Image m_fallbackCubeTexture;
