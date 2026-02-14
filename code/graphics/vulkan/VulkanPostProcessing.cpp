@@ -5474,5 +5474,45 @@ void vulkan_post_process_end() {}
 void vulkan_post_process_save_zbuffer() {}
 void vulkan_post_process_restore_zbuffer() {}
 
+void vulkan_post_process_set_effect(const char* name, int value, const vec3d* rgb)
+{
+	if (!Gr_post_processing_enabled || !graphics::Post_processing_manager) {
+		return;
+	}
+	if (name == nullptr) {
+		return;
+	}
+
+	auto& ls_params = graphics::Post_processing_manager->getLightshaftParams();
+	if (!stricmp("lightshafts", name)) {
+		ls_params.intensity = value / 100.0f;
+		ls_params.on = !!value;
+		return;
+	}
+
+	auto& postEffects = graphics::Post_processing_manager->getPostEffects();
+	for (size_t idx = 0; idx < postEffects.size(); idx++) {
+		if (!stricmp(postEffects[idx].name.c_str(), name)) {
+			postEffects[idx].intensity = (value / postEffects[idx].div) + postEffects[idx].add;
+			if ((rgb != nullptr) && !(vmd_zero_vector == *rgb)) {
+				postEffects[idx].rgb = *rgb;
+			}
+			break;
+		}
+	}
+}
+
+void vulkan_post_process_set_defaults()
+{
+	if (!graphics::Post_processing_manager) {
+		return;
+	}
+
+	auto& postEffects = graphics::Post_processing_manager->getPostEffects();
+	for (auto& effect : postEffects) {
+		effect.intensity = effect.default_intensity;
+	}
+}
+
 } // namespace vulkan
 } // namespace graphics

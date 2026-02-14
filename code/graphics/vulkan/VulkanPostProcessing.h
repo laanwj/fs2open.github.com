@@ -686,6 +686,8 @@ void vulkan_post_process_begin();
 void vulkan_post_process_end();
 void vulkan_post_process_save_zbuffer();
 void vulkan_post_process_restore_zbuffer();
+void vulkan_post_process_set_effect(const char* name, int value, const vec3d* rgb);
+void vulkan_post_process_set_defaults();
 
 /**
  * @brief Copy one image to another with automatic barrier management

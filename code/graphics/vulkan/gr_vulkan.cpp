@@ -10,6 +10,7 @@
 #include "VulkanState.h"
 #include "VulkanDraw.h"
 #include "VulkanDeferred.h"
+#include "VulkanPostProcessing.h"
 
 #include "backends/imgui_impl_sdl.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -306,46 +307,6 @@ SCP_string vulkan_blob_screen()
 // ey_scale it computes have no consumers. Modern nebula rendering uses
 // NEB2_RENDER_HTL (fog color + gr_clear) and doesn't need get_region at all.
 void vulkan_get_region(int /*front*/, int /*w*/, int /*h*/, ubyte* /*data*/) {}
-
-void vulkan_post_process_set_effect(const char* name, int value, const vec3d* rgb)
-{
-	if (!Gr_post_processing_enabled || !graphics::Post_processing_manager) {
-		return;
-	}
-	if (name == nullptr) {
-		return;
-	}
-
-	auto& ls_params = graphics::Post_processing_manager->getLightshaftParams();
-	if (!stricmp("lightshafts", name)) {
-		ls_params.intensity = value / 100.0f;
-		ls_params.on = !!value;
-		return;
-	}
-
-	auto& postEffects = graphics::Post_processing_manager->getPostEffects();
-	for (size_t idx = 0; idx < postEffects.size(); idx++) {
-		if (!stricmp(postEffects[idx].name.c_str(), name)) {
-			postEffects[idx].intensity = (value / postEffects[idx].div) + postEffects[idx].add;
-			if ((rgb != nullptr) && !(vmd_zero_vector == *rgb)) {
-				postEffects[idx].rgb = *rgb;
-			}
-			break;
-		}
-	}
-}
-
-void vulkan_post_process_set_defaults()
-{
-	if (!graphics::Post_processing_manager) {
-		return;
-	}
-
-	auto& postEffects = graphics::Post_processing_manager->getPostEffects();
-	for (auto& effect : postEffects) {
-		effect.intensity = effect.default_intensity;
-	}
-}
 
 void stub_dump_envmap(const char* /*filename*/) {}
 
