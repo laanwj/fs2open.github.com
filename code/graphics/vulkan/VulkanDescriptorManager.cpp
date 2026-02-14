@@ -207,9 +207,9 @@ void VulkanDescriptorManager::updateTexture(vk::DescriptorSet set, uint32_t bind
 }
 
 void VulkanDescriptorManager::updateTextureArray(vk::DescriptorSet set, uint32_t binding,
-                                                  const SCP_vector<vk::DescriptorImageInfo>& images)
+                                                  const vk::DescriptorImageInfo* images, uint32_t count)
 {
-	if (images.empty()) {
+	if (count == 0) {
 		return;
 	}
 
@@ -217,9 +217,9 @@ void VulkanDescriptorManager::updateTextureArray(vk::DescriptorSet set, uint32_t
 	write.dstSet = set;
 	write.dstBinding = binding;
 	write.dstArrayElement = 0;
-	write.descriptorCount = static_cast<uint32_t>(images.size());
+	write.descriptorCount = count;
 	write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-	write.pImageInfo = images.data();
+	write.pImageInfo = images;
 
 	m_device.updateDescriptorSets(1, &write, 0, nullptr);
 }

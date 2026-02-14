@@ -112,7 +112,7 @@ public:
 	 * @brief Update a texture array binding
 	 */
 	void updateTextureArray(vk::DescriptorSet set, uint32_t binding,
-	                        const SCP_vector<vk::DescriptorImageInfo>& images);
+	                        const vk::DescriptorImageInfo* images, uint32_t count);
 
 	/**
 	 * @brief Begin a new frame - reset current frame's pool

@@ -1,4 +1,7 @@
 #include "VulkanPostProcessing.h"
+
+#include <array>
+
 #include "cmdline/cmdline.h"
 #include "gr_vulkan.h"
 #include "VulkanRenderer.h"
@@ -2264,7 +2267,7 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 		gbufTexWrite.pImageInfo = gbufTexInfos;
 
 		// Fill remaining texture array elements with fallback
-		SCP_vector<vk::DescriptorImageInfo> fallbackImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 4);
+		std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 4> fallbackImages;
 		for (auto& fi : fallbackImages) {
 			fi.sampler = defaultSampler;
 			fi.imageView = fallbackView;
@@ -2946,7 +2949,7 @@ void VulkanPostProcessor::drawFullscreenTriangle(vk::CommandBuffer cmd, vk::Rend
 		vk::ImageView fallbackView = texMgr->getFallbackTextureView2D();
 		vk::Sampler defaultSampler = texMgr->getDefaultSampler();
 
-		SCP_vector<vk::DescriptorImageInfo> fallbackImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1);
+		std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1> fallbackImages;
 		for (auto& fi : fallbackImages) {
 			fi.sampler = defaultSampler;
 			fi.imageView = fallbackView;
@@ -4031,7 +4034,7 @@ void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 		vk::ImageView fallbackView = texMgr->getFallbackTextureView2D();
 		vk::Sampler defaultSampler = texMgr->getDefaultSampler();
 
-		SCP_vector<vk::DescriptorImageInfo> fallbackImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1);
+		std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1> fallbackImages;
 		for (auto& fi : fallbackImages) {
 			fi.sampler = defaultSampler;
 			fi.imageView = fallbackView;
@@ -4749,7 +4752,7 @@ void VulkanPostProcessor::renderSceneFog(vk::CommandBuffer cmd)
 		texWrite.pImageInfo = &compositeInfo;
 
 		// Fill remaining texture array elements with fallback
-		SCP_vector<vk::DescriptorImageInfo> fallbackImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1);
+		std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1> fallbackImages;
 		for (auto& fi : fallbackImages) {
 			fi.sampler = defaultSampler;
 			fi.imageView = fallbackView;
@@ -5169,7 +5172,7 @@ void VulkanPostProcessor::renderVolumetricFog(vk::CommandBuffer cmd)
 		modelWrite.pBufferInfo = &fallbackBufInfo;
 
 		// Binding 1: Texture array — [0]=composite, [1]=emissive, rest=fallback
-		SCP_vector<vk::DescriptorImageInfo> texArrayInfos(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS);
+		std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS> texArrayInfos;
 		texArrayInfos[0].sampler = m_linearSampler;
 		texArrayInfos[0].imageView = m_gbufComposite.view;
 		texArrayInfos[0].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;

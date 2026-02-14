@@ -1,4 +1,7 @@
 #include "VulkanDraw.h"
+
+#include <array>
+
 #include "VulkanState.h"
 #include "VulkanBuffer.h"
 #include "VulkanPipeline.h"
@@ -957,8 +960,7 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 	auto* movieMat = dynamic_cast<movie_material*>(mat);
 	if (movieMat) {
 		// Movie materials use 3 YUV textures in the texture array at indices 0, 1, 2
-		SCP_vector<vk::DescriptorImageInfo> textureInfos;
-		textureInfos.resize(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS);
+		std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS> textureInfos;
 
 		// Initialize all slots with fallback
 		for (auto& info : textureInfos) {
@@ -988,13 +990,12 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 		loadYuvTexture(movieMat->getUtex(), 1);  // U at index 1
 		loadYuvTexture(movieMat->getVtex(), 2);  // V at index 2
 
-		descManager->updateTextureArray(materialSet, 1, textureInfos);
+		descManager->updateTextureArray(materialSet, 1, textureInfos.data(), static_cast<uint32_t>(textureInfos.size()));
 		return true;
 	}
 
 	// Build texture info array for all material texture slots
-	SCP_vector<vk::DescriptorImageInfo> textureInfos;
-	textureInfos.resize(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS);
+	std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS> textureInfos;
 
 	// Initialize all slots with fallback texture (1x1 white)
 	for (auto& info : textureInfos) {
@@ -1135,7 +1136,7 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 
 	// Update the texture array in the descriptor set
 	// All slots now have valid views (either actual texture or fallback)
-	descManager->updateTextureArray(materialSet, 1, textureInfos);
+	descManager->updateTextureArray(materialSet, 1, textureInfos.data(), static_cast<uint32_t>(textureInfos.size()));
 
 	return true;
 }
@@ -2275,7 +2276,7 @@ void vulkan_calculate_irrmap()
 				envWrite.pImageInfo = &envInfo;
 
 				// Fill remaining texture array elements with fallback 2D
-				SCP_vector<vk::DescriptorImageInfo> fallbackImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1);
+				std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1> fallbackImages;
 				for (auto& fi : fallbackImages) {
 					fi.sampler = defaultSampler;
 					fi.imageView = fallbackView2D;

@@ -1,5 +1,8 @@
 
 #include "VulkanDeferred.h"
+
+#include <array>
+
 #include "VulkanRenderer.h"
 #include "VulkanBuffer.h"
 #include "VulkanTexture.h"
@@ -203,7 +206,7 @@ void vulkan_deferred_lighting_begin(bool clearNonColorBufs)
 					descriptorMgr->updateStorageBuffer(materialSet, 3, fallbackBuf, 0, fallbackBufSize);
 
 					// Build texture array with scene color at slot 0, fallback at slots 1-15
-					SCP_vector<vk::DescriptorImageInfo> texImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS);
+					std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS> texImages;
 					texImages[0].sampler = pp->getSceneColorSampler();
 					texImages[0].imageView = pp->getSceneColorView();
 					texImages[0].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
@@ -212,7 +215,7 @@ void vulkan_deferred_lighting_begin(bool clearNonColorBufs)
 						texImages[slot].imageView = fallbackView;
 						texImages[slot].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 					}
-					descriptorMgr->updateTextureArray(materialSet, 1, texImages);
+					descriptorMgr->updateTextureArray(materialSet, 1, texImages.data(), static_cast<uint32_t>(texImages.size()));
 
 					if (fallbackView && fallbackSampler) {
 						descriptorMgr->updateTexture(materialSet, 4, fallbackView, fallbackSampler);
@@ -458,7 +461,7 @@ void vulkan_deferred_lighting_msaa()
 					vk::Filter::eNearest, vk::Filter::eNearest,
 					vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false);
 
-				SCP_vector<vk::DescriptorImageInfo> texImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS);
+				std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS> texImages;
 				// MSAA textures at slots 0-5
 				texImages[0] = {nearestSampler, pp->getMsaaColorView(), vk::ImageLayout::eShaderReadOnlyOptimal};
 				texImages[1] = {nearestSampler, pp->getMsaaPositionView(), vk::ImageLayout::eShaderReadOnlyOptimal};
@@ -472,7 +475,7 @@ void vulkan_deferred_lighting_msaa()
 				for (uint32_t slot = 6; slot < VulkanDescriptorManager::MAX_TEXTURE_BINDINGS; ++slot) {
 					texImages[slot] = {nearestSampler, pp->getMsaaColorView(), vk::ImageLayout::eShaderReadOnlyOptimal};
 				}
-				descriptorMgr->updateTextureArray(materialSet, 1, texImages);
+				descriptorMgr->updateTextureArray(materialSet, 1, texImages.data(), static_cast<uint32_t>(texImages.size()));
 
 				// Fallback for single-sampler bindings 4-6
 				if (fallbackView && fallbackSampler) {
