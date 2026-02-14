@@ -951,7 +951,7 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 	// types - they always stay clamped. We need a clamp sampler for those cases.
 	vk::Sampler clampSampler = texManager->getSampler(
 		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerAddressMode::eClampToEdge, true, 0.0f, true);
-	vk::ImageView fallbackView = texManager->getFallbackTextureView();
+	vk::ImageView fallbackView = texManager->getFallback2DArrayView();
 
 	// Check for movie material - needs special YUV texture handling
 	auto* movieMat = dynamic_cast<movie_material*>(mat);
@@ -1216,7 +1216,7 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 		vk::DeviceSize fallbackUBOSize = static_cast<vk::DeviceSize>(bufferManager->getFallbackUniformBufferSize());
 		auto* texManager = getTextureManager();
 		vk::Sampler fallbackSampler = texManager->getDefaultSampler();
-		vk::ImageView fallbackView = texManager->getFallbackTextureView();
+		vk::ImageView fallbackView = texManager->getFallback2DArrayView();
 
 		// Set 0: Global - bindings: 0=Lights UBO, 1=DeferredGlobals UBO, 2=Shadow tex, 3=Env cube, 4=Irr cube
 		vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
@@ -2192,7 +2192,7 @@ void vulkan_calculate_irrmap()
 	vk::Buffer fallbackUBO = bufferManager->getFallbackUniformBuffer();
 	vk::DeviceSize fallbackUBOSize = static_cast<vk::DeviceSize>(bufferManager->getFallbackUniformBufferSize());
 	vk::Sampler defaultSampler = texManager->getDefaultSampler();
-	vk::ImageView fallbackView = texManager->getFallbackTextureView();
+	vk::ImageView fallbackView = texManager->getFallback2DArrayView();
 	vk::ImageView fallbackView2D = texManager->getFallbackTextureView2D();
 	vk::ImageView fallbackCubeView = texManager->getFallbackCubeView();
 

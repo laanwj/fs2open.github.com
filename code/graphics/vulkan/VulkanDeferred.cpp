@@ -1226,7 +1226,7 @@ void vulkan_render_decals(decal_material* material_info,
 	vk::Buffer fallbackUBO = bufferManager->getFallbackUniformBuffer();
 	vk::DeviceSize fallbackUBOSize = static_cast<vk::DeviceSize>(bufferManager->getFallbackUniformBufferSize());
 	vk::Sampler fallbackSampler = texManager->getDefaultSampler();
-	vk::ImageView fallbackView = texManager->getFallbackTextureView();
+	vk::ImageView fallbackView = texManager->getFallback2DArrayView();
 	vk::ImageView fallbackView2D = texManager->getFallbackTextureView2D();
 
 	// Set 0: Global

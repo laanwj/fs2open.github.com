@@ -121,8 +121,8 @@ bool VulkanTextureManager::init(vk::Device device, vk::PhysicalDevice physicalDe
 	}
 
 	// Create 1x1 white fallback textures for unbound descriptor slots
-	if (!createFallbackTexture(m_fallbackTexture, m_fallbackTextureAllocation,
-	                           m_fallbackTextureView, ImageViewType::Array2D)) {
+	if (!createFallbackTexture(m_fallback2DArrayTexture, m_fallback2DArrayAllocation,
+	                           m_fallback2DArrayView, ImageViewType::Array2D)) {
 		return false;
 	}
 	if (!createFallbackTexture(m_fallbackTexture2D, m_fallbackTexture2DAllocation,
@@ -186,16 +186,16 @@ void VulkanTextureManager::shutdown()
 	if (m_fallbackTexture2DAllocation.memory != VK_NULL_HANDLE) {
 		m_memoryManager->freeAllocation(m_fallbackTexture2DAllocation);
 	}
-	if (m_fallbackTextureView) {
-		m_device.destroyImageView(m_fallbackTextureView);
-		m_fallbackTextureView = nullptr;
+	if (m_fallback2DArrayView) {
+		m_device.destroyImageView(m_fallback2DArrayView);
+		m_fallback2DArrayView = nullptr;
 	}
-	if (m_fallbackTexture) {
-		m_device.destroyImage(m_fallbackTexture);
-		m_fallbackTexture = nullptr;
+	if (m_fallback2DArrayTexture) {
+		m_device.destroyImage(m_fallback2DArrayTexture);
+		m_fallback2DArrayTexture = nullptr;
 	}
-	if (m_fallbackTextureAllocation.memory != VK_NULL_HANDLE) {
-		m_memoryManager->freeAllocation(m_fallbackTextureAllocation);
+	if (m_fallback2DArrayAllocation.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_fallback2DArrayAllocation);
 	}
 
 	// Destroy samplers
@@ -1717,9 +1717,9 @@ vk::Sampler VulkanTextureManager::getDefaultSampler()
 	return m_defaultSampler;
 }
 
-vk::ImageView VulkanTextureManager::getFallbackTextureView()
+vk::ImageView VulkanTextureManager::getFallback2DArrayView()
 {
-	return m_fallbackTextureView;
+	return m_fallback2DArrayView;
 }
 
 vk::ImageView VulkanTextureManager::getFallbackTextureView2D()
