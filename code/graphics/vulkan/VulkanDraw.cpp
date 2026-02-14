@@ -1884,9 +1884,18 @@ void vulkan_render_primitives_particle(particle_material* material_info,
 {
 	auto* renderer = getRendererInstance();
 	auto* drawManager = getDrawManager();
+	auto* pp = getPostProcessor();
 
-	// Trigger lazy scene depth copy (first particle draw per frame)
-	renderer->copySceneDepthForParticles();
+	// In deferred mode, once the G-buffer pass has ended the position texture
+	// (view-space XYZ) is in eShaderReadOnlyOptimal and free to sample.
+	bool usePosTexture = light_deferred_enabled()
+	                     && !renderer->isUsingGbufRenderPass()
+	                     && pp && pp->isGbufInitialized();
+
+	if (!usePosTexture) {
+		// Non-deferred path: copy hardware depth buffer
+		renderer->copySceneDepthForParticles();
+	}
 
 	// Set up matrices
 	gr_matrix_set_uniforms();
@@ -1903,23 +1912,31 @@ void vulkan_render_primitives_particle(particle_material* material_info,
 		data->farZ          = Max_draw_distance;
 		data->srgb          = High_dynamic_range ? 1 : 0;
 		data->blend_alpha   = material_info->get_blend_mode() != ALPHA_BLEND_ADDITIVE ? 1 : 0;
-		data->linear_depth  = 0;  // Deferred lighting not yet implemented
+		// In deferred mode, bind the G-buffer position texture (view-space XYZ)
+		// so linear_depth=1 reads .z directly (matches OpenGL behavior).
+		// Otherwise use the NDC conversion path with the hardware depth copy.
+		data->linear_depth  = usePosTexture ? 1 : 0;
 
 		buffer.submitData();
 		gr_bind_uniform_buffer(uniform_block_type::GenericData, buffer.getBufferOffset(0),
 		                       sizeof(graphics::generic_data::effect_data), buffer.bufferHandle());
 	}
 
-	// Set depth texture override so applyMaterial binds the real depth copy
-	if (renderer->isSceneDepthCopied()) {
-		auto* pp = getPostProcessor();
-		if (pp) {
-			auto* texMgr = getTextureManager();
-			drawManager->setDepthTextureOverride(
-				pp->getSceneDepthCopyView(),
-				texMgr->getSampler(vk::Filter::eNearest, vk::Filter::eNearest,
-				                   vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false));
-		}
+	// Set depth texture override
+	if (usePosTexture) {
+		// Deferred path: bind G-buffer position texture directly
+		auto* texMgr = getTextureManager();
+		drawManager->setDepthTextureOverride(
+			pp->getGbufPositionView(),
+			texMgr->getSampler(vk::Filter::eNearest, vk::Filter::eNearest,
+			                   vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false));
+	} else if (renderer->isSceneDepthCopied() && pp) {
+		// Non-deferred path: bind the hardware depth copy
+		auto* texMgr = getTextureManager();
+		drawManager->setDepthTextureOverride(
+			pp->getSceneDepthCopyView(),
+			texMgr->getSampler(vk::Filter::eNearest, vk::Filter::eNearest,
+			                   vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false));
 	}
 
 	drawManager->renderPrimitivesParticle(material_info, prim_type, layout, offset, n_verts, buffer_handle);
