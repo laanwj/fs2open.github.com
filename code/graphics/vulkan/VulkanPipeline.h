@@ -57,6 +57,9 @@ struct PipelineConfig {
 	// Color attachment count (for multiple render targets)
 	uint32_t colorAttachmentCount = 1;
 
+	// MSAA sample count (default e1 = no multisampling)
+	vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e1;
+
 	// Per-attachment blend (used by decal rendering to write-mask unused G-buffer attachments)
 	bool perAttachmentBlendEnabled = false;
 	struct AttachmentBlend {

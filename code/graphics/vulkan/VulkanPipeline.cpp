@@ -48,6 +48,7 @@ bool PipelineConfig::operator==(const PipelineConfig& other) const
 	       renderPass == other.renderPass &&
 	       subpass == other.subpass &&
 	       colorAttachmentCount == other.colorAttachmentCount &&
+	       sampleCount == other.sampleCount &&
 	       perAttachmentBlendEnabled == other.perAttachmentBlendEnabled &&
 	       [&]() {
 	           if (!perAttachmentBlendEnabled) return true;
@@ -92,6 +93,7 @@ size_t PipelineConfig::hash() const
 	h ^= std::hash<uint64_t>()(reinterpret_cast<uint64_t>(static_cast<VkRenderPass>(renderPass))) << 47;
 	h ^= std::hash<uint32_t>()(subpass) << 51;
 	h ^= std::hash<uint32_t>()(colorAttachmentCount) << 55;
+	h ^= std::hash<int>()(static_cast<int>(sampleCount)) << 56;
 	h ^= std::hash<bool>()(perAttachmentBlendEnabled) << 57;
 	if (perAttachmentBlendEnabled) {
 		for (uint32_t i = 0; i < colorAttachmentCount; ++i) {
@@ -395,7 +397,7 @@ vk::UniquePipeline VulkanPipelineManager::createPipeline(const PipelineConfig& c
 
 	// Multisample state
 	vk::PipelineMultisampleStateCreateInfo multisampling;
-	multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
+	multisampling.rasterizationSamples = config.sampleCount;
 	multisampling.sampleShadingEnable = VK_FALSE;
 
 	// Depth stencil state

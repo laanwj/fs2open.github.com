@@ -5,6 +5,7 @@
 #include "VulkanTexture.h"
 
 #include "bmpman/bmpman.h"
+#include "cmdline/cmdline.h"
 #include "globalincs/version.h"
 #include "graphics/grinternal.h"
 #include "graphics/post_processing.h"
@@ -295,6 +296,50 @@ bool VulkanRenderer::initialize()
 	if (!pickPhysicalDevice(deviceValues)) {
 		mprintf(("Could not find suitable physical Vulkan device.\n"));
 		return false;
+	}
+
+	// Validate MSAA sample count against device limits
+	if (Cmdline_msaa_enabled > 0) {
+		auto limits = deviceValues.properties.limits;
+		vk::SampleCountFlags supported = limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts;
+
+		// Map requested count to vk::SampleCountFlagBits
+		vk::SampleCountFlagBits requested = vk::SampleCountFlagBits::e1;
+		switch (Cmdline_msaa_enabled) {
+		case 4:  requested = vk::SampleCountFlagBits::e4; break;
+		case 8:  requested = vk::SampleCountFlagBits::e8; break;
+		case 16: requested = vk::SampleCountFlagBits::e16; break;
+		default:
+			mprintf(("Vulkan: Unsupported MSAA count %d, disabling MSAA\n", Cmdline_msaa_enabled));
+			Cmdline_msaa_enabled = 0;
+			break;
+		}
+
+		if (Cmdline_msaa_enabled > 0) {
+			if (supported & requested) {
+				m_msaaSampleCount = requested;
+				mprintf(("Vulkan: MSAA enabled with %dx sample count\n", Cmdline_msaa_enabled));
+			} else {
+				// Clamp down to highest supported
+				vk::SampleCountFlagBits fallback = vk::SampleCountFlagBits::e1;
+				int fallbackCount = 0;
+				if ((supported & vk::SampleCountFlagBits::e8) && Cmdline_msaa_enabled >= 8) {
+					fallback = vk::SampleCountFlagBits::e8; fallbackCount = 8;
+				} else if (supported & vk::SampleCountFlagBits::e4) {
+					fallback = vk::SampleCountFlagBits::e4; fallbackCount = 4;
+				}
+
+				if (fallbackCount > 0) {
+					mprintf(("Vulkan: Requested MSAA %dx not supported, falling back to %dx\n",
+						Cmdline_msaa_enabled, fallbackCount));
+					Cmdline_msaa_enabled = fallbackCount;
+					m_msaaSampleCount = fallback;
+				} else {
+					mprintf(("Vulkan: No suitable MSAA support, disabling MSAA\n"));
+					Cmdline_msaa_enabled = 0;
+				}
+			}
+		}
 	}
 
 	if (!createLogicalDevice(deviceValues)) {

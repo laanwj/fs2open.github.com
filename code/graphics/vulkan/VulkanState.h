@@ -188,6 +188,12 @@ public:
 	uint32_t getColorAttachmentCount() const { return m_colorAttachmentCount; }
 
 	/**
+	 * @brief Set current MSAA sample count for pipeline creation
+	 */
+	void setCurrentSampleCount(vk::SampleCountFlagBits count) { m_currentSampleCount = count; }
+	vk::SampleCountFlagBits getCurrentSampleCount() const { return m_currentSampleCount; }
+
+	/**
 	 * @brief Apply pending dynamic state to command buffer
 	 *
 	 * Must be called before every draw command to ensure dirty dynamic state
@@ -237,6 +243,7 @@ private:
 	int m_stencilMode = 0;
 	bool m_cullEnabled = true;
 	uint32_t m_colorAttachmentCount = 1;
+	vk::SampleCountFlagBits m_currentSampleCount = vk::SampleCountFlagBits::e1;
 
 	bool m_initialized = false;
 };

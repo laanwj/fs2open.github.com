@@ -1973,7 +1973,15 @@ void VulkanTextureManager::transitionImageLayout(vk::Image image, vk::Format for
 	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	barrier.image = image;
-	barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+	// Detect depth/stencil formats and use the correct aspect mask
+	if (format == vk::Format::eD32Sfloat || format == vk::Format::eD16Unorm) {
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+	} else if (format == vk::Format::eD24UnormS8Uint || format == vk::Format::eD32SfloatS8Uint ||
+	           format == vk::Format::eD16UnormS8Uint) {
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+	} else {
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+	}
 	barrier.subresourceRange.baseMipLevel = 0;
 	barrier.subresourceRange.levelCount = mipLevels;
 	barrier.subresourceRange.baseArrayLayer = 0;
@@ -2006,6 +2014,12 @@ void VulkanTextureManager::transitionImageLayout(vk::Image image, vk::Format for
 		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
 		sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
 		destinationStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+	} else if (oldLayout == vk::ImageLayout::eUndefined &&
+	           newLayout == vk::ImageLayout::eDepthStencilAttachmentOptimal) {
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+		sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
+		destinationStage = vk::PipelineStageFlagBits::eEarlyFragmentTests;
 	} else {
 		// Generic transition
 		barrier.srcAccessMask = vk::AccessFlagBits::eMemoryWrite;
@@ -2013,8 +2027,6 @@ void VulkanTextureManager::transitionImageLayout(vk::Image image, vk::Format for
 		sourceStage = vk::PipelineStageFlagBits::eAllCommands;
 		destinationStage = vk::PipelineStageFlagBits::eAllCommands;
 	}
-
-	(void)format;  // Format might be needed for depth/stencil transitions
 
 	commandBuffer.pipelineBarrier(sourceStage, destinationStage, {},
 	                               nullptr, nullptr, barrier);

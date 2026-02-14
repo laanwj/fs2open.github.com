@@ -925,10 +925,11 @@ PipelineConfig VulkanDrawManager::buildPipelineConfig(material* mat, primitive_t
 	config.fillMode = m_fillMode;
 	config.depthBiasEnabled = m_depthBiasEnabled;
 
-	// Get current render pass and attachment count from state tracker
+	// Get current render pass, attachment count, and sample count from state tracker
 	auto* stateTracker = getStateTracker();
 	config.renderPass = stateTracker->getCurrentRenderPass();
 	config.colorAttachmentCount = stateTracker->getColorAttachmentCount();
+	config.sampleCount = stateTracker->getCurrentSampleCount();
 
 	return config;
 }

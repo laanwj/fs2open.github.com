@@ -1,4 +1,5 @@
 #include "VulkanPostProcessing.h"
+#include "cmdline/cmdline.h"
 #include "gr_vulkan.h"
 #include "VulkanRenderer.h"
 #include "VulkanBuffer.h"
@@ -450,6 +451,14 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 		mprintf(("VulkanPostProcessor: G-buffer initialization failed (non-fatal)\n"));
 	}
 
+	// Initialize MSAA resources if MSAA is enabled and G-buffer is ready
+	if (m_gbufInitialized && Cmdline_msaa_enabled > 0) {
+		if (!initMSAA()) {
+			mprintf(("VulkanPostProcessor: MSAA initialization failed (non-fatal, disabling MSAA)\n"));
+			Cmdline_msaa_enabled = 0;
+		}
+	}
+
 	m_initialized = true;
 	mprintf(("VulkanPostProcessor: Initialized (%ux%u, RGBA16F scene color)\n",
 		extent.width, extent.height));
@@ -463,6 +472,7 @@ void VulkanPostProcessor::shutdown()
 
 		shutdownFogPass();
 		shutdownShadowPass();
+		shutdownMSAA();
 		shutdownLightVolumes();
 		shutdownGBuffer();
 		shutdownLDRTargets();
@@ -935,6 +945,617 @@ void VulkanPostProcessor::transitionGbufForResume(vk::CommandBuffer cmd)
 		vk::PipelineStageFlagBits::eColorAttachmentOutput,
 		vk::PipelineStageFlagBits::eColorAttachmentOutput,
 		{}, nullptr, nullptr, barriers);
+}
+
+// ===== MSAA G-Buffer =====
+
+bool VulkanPostProcessor::initMSAA()
+{
+	if (m_msaaInitialized) {
+		return true;
+	}
+
+	auto* renderer = getRendererInstance();
+	vk::SampleCountFlagBits msaaSamples = renderer->getMsaaSampleCount();
+	if (msaaSamples == vk::SampleCountFlagBits::e1) {
+		return false;
+	}
+
+	const uint32_t w = m_extent.width;
+	const uint32_t h = m_extent.height;
+	const vk::ImageUsageFlags msaaUsage =
+		vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+
+	// Create MSAA color images (5 total: color, position, normal, specular, emissive)
+	struct MsaaTarget {
+		RenderTarget* target;
+		vk::Format format;
+		const char* name;
+	};
+
+	MsaaTarget targets[] = {
+		{&m_msaaColor,    vk::Format::eR16G16B16A16Sfloat, "msaa-color"},
+		{&m_msaaPosition, vk::Format::eR16G16B16A16Sfloat, "msaa-position"},
+		{&m_msaaNormal,   vk::Format::eR16G16B16A16Sfloat, "msaa-normal"},
+		{&m_msaaSpecular, vk::Format::eR8G8B8A8Unorm,      "msaa-specular"},
+		{&m_msaaEmissive, vk::Format::eR16G16B16A16Sfloat, "msaa-emissive"},
+	};
+
+	for (auto& t : targets) {
+		if (!createImage(w, h, t.format, msaaUsage, vk::ImageAspectFlagBits::eColor,
+		                 t.target->image, t.target->view, t.target->allocation, msaaSamples)) {
+			mprintf(("VulkanPostProcessor: Failed to create %s image!\n", t.name));
+			shutdownMSAA();
+			return false;
+		}
+		t.target->format = t.format;
+		t.target->width = w;
+		t.target->height = h;
+	}
+
+	// Create MSAA depth image
+	{
+		vk::ImageCreateInfo imageInfo;
+		imageInfo.imageType = vk::ImageType::e2D;
+		imageInfo.format = m_depthFormat;
+		imageInfo.extent = vk::Extent3D(w, h, 1);
+		imageInfo.mipLevels = 1;
+		imageInfo.arrayLayers = 1;
+		imageInfo.samples = msaaSamples;
+		imageInfo.tiling = vk::ImageTiling::eOptimal;
+		imageInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled;
+		imageInfo.sharingMode = vk::SharingMode::eExclusive;
+		imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+
+		try {
+			m_msaaDepthImage = m_device.createImage(imageInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create MSAA depth image: %s\n", e.what()));
+			shutdownMSAA();
+			return false;
+		}
+
+		if (!m_memoryManager->allocateImageMemory(m_msaaDepthImage, MemoryUsage::GpuOnly, m_msaaDepthAlloc)) {
+			mprintf(("VulkanPostProcessor: Failed to allocate MSAA depth memory!\n"));
+			m_device.destroyImage(m_msaaDepthImage);
+			m_msaaDepthImage = nullptr;
+			shutdownMSAA();
+			return false;
+		}
+
+		vk::ImageViewCreateInfo viewInfo;
+		viewInfo.image = m_msaaDepthImage;
+		viewInfo.viewType = vk::ImageViewType::e2D;
+		viewInfo.format = m_depthFormat;
+		viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+		viewInfo.subresourceRange.baseMipLevel = 0;
+		viewInfo.subresourceRange.levelCount = 1;
+		viewInfo.subresourceRange.baseArrayLayer = 0;
+		viewInfo.subresourceRange.layerCount = 1;
+
+		try {
+			m_msaaDepthView = m_device.createImageView(viewInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create MSAA depth view: %s\n", e.what()));
+			shutdownMSAA();
+			return false;
+		}
+	}
+
+	// MSAA G-buffer render pass (eClear) — 5 color + depth
+	// Attachment order: [0]=color(MS), [1]=pos(MS), [2]=norm(MS), [3]=spec(MS), [4]=emissive(MS), [5]=depth(MS)
+	{
+		std::array<vk::AttachmentDescription, 6> attachments;
+
+		vk::Format colorFormats[5] = {
+			vk::Format::eR16G16B16A16Sfloat, // 0: color
+			vk::Format::eR16G16B16A16Sfloat, // 1: position
+			vk::Format::eR16G16B16A16Sfloat, // 2: normal
+			vk::Format::eR8G8B8A8Unorm,      // 3: specular
+			vk::Format::eR16G16B16A16Sfloat, // 4: emissive
+		};
+
+		for (uint32_t i = 0; i < 5; ++i) {
+			attachments[i].format = colorFormats[i];
+			attachments[i].samples = msaaSamples;
+			attachments[i].loadOp = vk::AttachmentLoadOp::eClear;
+			attachments[i].storeOp = vk::AttachmentStoreOp::eStore;
+			attachments[i].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+			attachments[i].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+			attachments[i].initialLayout = vk::ImageLayout::eColorAttachmentOptimal;
+			attachments[i].finalLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		}
+
+		// Depth (MS)
+		attachments[5].format = m_depthFormat;
+		attachments[5].samples = msaaSamples;
+		attachments[5].loadOp = vk::AttachmentLoadOp::eClear;
+		attachments[5].storeOp = vk::AttachmentStoreOp::eStore;
+		attachments[5].stencilLoadOp = vk::AttachmentLoadOp::eClear;
+		attachments[5].stencilStoreOp = vk::AttachmentStoreOp::eStore;
+		attachments[5].initialLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+		attachments[5].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		std::array<vk::AttachmentReference, 5> colorRefs;
+		for (uint32_t i = 0; i < 5; ++i) {
+			colorRefs[i].attachment = i;
+			colorRefs[i].layout = vk::ImageLayout::eColorAttachmentOptimal;
+		}
+
+		vk::AttachmentReference depthRef;
+		depthRef.attachment = 5;
+		depthRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		vk::SubpassDescription subpass;
+		subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+		subpass.colorAttachmentCount = 5;
+		subpass.pColorAttachments = colorRefs.data();
+		subpass.pDepthStencilAttachment = &depthRef;
+
+		vk::SubpassDependency dependency;
+		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependency.dstSubpass = 0;
+		dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests
+		                        | vk::PipelineStageFlagBits::eTransfer;
+		dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+		dependency.srcAccessMask = vk::AccessFlagBits::eTransferRead
+		                         | vk::AccessFlagBits::eTransferWrite;
+		dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentRead;
+
+		vk::RenderPassCreateInfo rpInfo;
+		rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+		rpInfo.pAttachments = attachments.data();
+		rpInfo.subpassCount = 1;
+		rpInfo.pSubpasses = &subpass;
+		rpInfo.dependencyCount = 1;
+		rpInfo.pDependencies = &dependency;
+
+		try {
+			m_msaaGbufRenderPass = m_device.createRenderPass(rpInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create MSAA G-buffer render pass: %s\n", e.what()));
+			shutdownMSAA();
+			return false;
+		}
+	}
+
+	// MSAA G-buffer render pass (eLoad) — emissive preserving variant
+	// All attachments eLoad except we accept eColorAttachmentOptimal as initial layout
+	{
+		std::array<vk::AttachmentDescription, 6> attachments;
+
+		vk::Format colorFormats[5] = {
+			vk::Format::eR16G16B16A16Sfloat,
+			vk::Format::eR16G16B16A16Sfloat,
+			vk::Format::eR16G16B16A16Sfloat,
+			vk::Format::eR8G8B8A8Unorm,
+			vk::Format::eR16G16B16A16Sfloat,
+		};
+
+		for (uint32_t i = 0; i < 5; ++i) {
+			attachments[i].format = colorFormats[i];
+			attachments[i].samples = msaaSamples;
+			attachments[i].loadOp = vk::AttachmentLoadOp::eLoad;
+			attachments[i].storeOp = vk::AttachmentStoreOp::eStore;
+			attachments[i].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+			attachments[i].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+			attachments[i].initialLayout = vk::ImageLayout::eColorAttachmentOptimal;
+			attachments[i].finalLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		}
+
+		attachments[5].format = m_depthFormat;
+		attachments[5].samples = msaaSamples;
+		attachments[5].loadOp = vk::AttachmentLoadOp::eLoad;
+		attachments[5].storeOp = vk::AttachmentStoreOp::eStore;
+		attachments[5].stencilLoadOp = vk::AttachmentLoadOp::eLoad;
+		attachments[5].stencilStoreOp = vk::AttachmentStoreOp::eStore;
+		attachments[5].initialLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+		attachments[5].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		std::array<vk::AttachmentReference, 5> colorRefs;
+		for (uint32_t i = 0; i < 5; ++i) {
+			colorRefs[i].attachment = i;
+			colorRefs[i].layout = vk::ImageLayout::eColorAttachmentOptimal;
+		}
+
+		vk::AttachmentReference depthRef;
+		depthRef.attachment = 5;
+		depthRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		vk::SubpassDescription subpass;
+		subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+		subpass.colorAttachmentCount = 5;
+		subpass.pColorAttachments = colorRefs.data();
+		subpass.pDepthStencilAttachment = &depthRef;
+
+		vk::SubpassDependency dependency;
+		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependency.dstSubpass = 0;
+		dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests
+		                        | vk::PipelineStageFlagBits::eTransfer;
+		dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+		dependency.srcAccessMask = vk::AccessFlagBits::eTransferRead
+		                         | vk::AccessFlagBits::eTransferWrite;
+		dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentRead;
+
+		vk::RenderPassCreateInfo rpInfo;
+		rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+		rpInfo.pAttachments = attachments.data();
+		rpInfo.subpassCount = 1;
+		rpInfo.pSubpasses = &subpass;
+		rpInfo.dependencyCount = 1;
+		rpInfo.pDependencies = &dependency;
+
+		try {
+			m_msaaGbufRenderPassLoad = m_device.createRenderPass(rpInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create MSAA G-buffer load render pass: %s\n", e.what()));
+			shutdownMSAA();
+			return false;
+		}
+	}
+
+	// MSAA G-buffer framebuffer (5 color + depth)
+	{
+		std::array<vk::ImageView, 6> fbAttachments = {
+			m_msaaColor.view,
+			m_msaaPosition.view,
+			m_msaaNormal.view,
+			m_msaaSpecular.view,
+			m_msaaEmissive.view,
+			m_msaaDepthView,
+		};
+
+		vk::FramebufferCreateInfo fbInfo;
+		fbInfo.renderPass = m_msaaGbufRenderPass;
+		fbInfo.attachmentCount = static_cast<uint32_t>(fbAttachments.size());
+		fbInfo.pAttachments = fbAttachments.data();
+		fbInfo.width = w;
+		fbInfo.height = h;
+		fbInfo.layers = 1;
+
+		try {
+			m_msaaGbufFramebuffer = m_device.createFramebuffer(fbInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create MSAA G-buffer framebuffer: %s\n", e.what()));
+			shutdownMSAA();
+			return false;
+		}
+	}
+
+	// Emissive copy render pass — 1 MS color attachment for upsampling non-MSAA → MSAA
+	{
+		vk::AttachmentDescription att;
+		att.format = vk::Format::eR16G16B16A16Sfloat;
+		att.samples = msaaSamples;
+		att.loadOp = vk::AttachmentLoadOp::eDontCare;
+		att.storeOp = vk::AttachmentStoreOp::eStore;
+		att.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+		att.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+		att.initialLayout = vk::ImageLayout::eUndefined;
+		att.finalLayout = vk::ImageLayout::eColorAttachmentOptimal;
+
+		vk::AttachmentReference colorRef;
+		colorRef.attachment = 0;
+		colorRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
+		vk::SubpassDescription subpass;
+		subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &colorRef;
+
+		vk::SubpassDependency dependency;
+		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependency.dstSubpass = 0;
+		dependency.srcStageMask = vk::PipelineStageFlagBits::eFragmentShader;
+		dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+		dependency.srcAccessMask = vk::AccessFlagBits::eShaderRead;
+		dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+
+		vk::RenderPassCreateInfo rpInfo;
+		rpInfo.attachmentCount = 1;
+		rpInfo.pAttachments = &att;
+		rpInfo.subpassCount = 1;
+		rpInfo.pSubpasses = &subpass;
+		rpInfo.dependencyCount = 1;
+		rpInfo.pDependencies = &dependency;
+
+		try {
+			m_msaaEmissiveCopyRenderPass = m_device.createRenderPass(rpInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create MSAA emissive copy render pass: %s\n", e.what()));
+			shutdownMSAA();
+			return false;
+		}
+	}
+
+	// Emissive copy framebuffer (MSAA emissive as sole attachment)
+	{
+		vk::ImageView att = m_msaaEmissive.view;
+		vk::FramebufferCreateInfo fbInfo;
+		fbInfo.renderPass = m_msaaEmissiveCopyRenderPass;
+		fbInfo.attachmentCount = 1;
+		fbInfo.pAttachments = &att;
+		fbInfo.width = w;
+		fbInfo.height = h;
+		fbInfo.layers = 1;
+
+		try {
+			m_msaaEmissiveCopyFramebuffer = m_device.createFramebuffer(fbInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create MSAA emissive copy framebuffer: %s\n", e.what()));
+			shutdownMSAA();
+			return false;
+		}
+	}
+
+	// MSAA Resolve render pass — 5 non-MSAA color + depth (via gl_FragDepth)
+	// Writes to the non-MSAA G-buffer images. loadOp=eDontCare (fully overwritten).
+	{
+		std::array<vk::AttachmentDescription, 6> attachments;
+
+		vk::Format colorFormats[5] = {
+			vk::Format::eR16G16B16A16Sfloat, // 0: color
+			vk::Format::eR16G16B16A16Sfloat, // 1: position
+			vk::Format::eR16G16B16A16Sfloat, // 2: normal
+			vk::Format::eR8G8B8A8Unorm,      // 3: specular
+			vk::Format::eR16G16B16A16Sfloat, // 4: emissive
+		};
+
+		for (uint32_t i = 0; i < 5; ++i) {
+			attachments[i].format = colorFormats[i];
+			attachments[i].samples = vk::SampleCountFlagBits::e1;
+			attachments[i].loadOp = vk::AttachmentLoadOp::eDontCare;
+			attachments[i].storeOp = vk::AttachmentStoreOp::eStore;
+			attachments[i].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+			attachments[i].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+			attachments[i].initialLayout = vk::ImageLayout::eUndefined;
+			attachments[i].finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		}
+
+		// Depth (non-MSAA, written via gl_FragDepth)
+		attachments[5].format = m_depthFormat;
+		attachments[5].samples = vk::SampleCountFlagBits::e1;
+		attachments[5].loadOp = vk::AttachmentLoadOp::eDontCare;
+		attachments[5].storeOp = vk::AttachmentStoreOp::eStore;
+		attachments[5].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+		attachments[5].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+		attachments[5].initialLayout = vk::ImageLayout::eUndefined;
+		attachments[5].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		std::array<vk::AttachmentReference, 5> colorRefs;
+		for (uint32_t i = 0; i < 5; ++i) {
+			colorRefs[i].attachment = i;
+			colorRefs[i].layout = vk::ImageLayout::eColorAttachmentOptimal;
+		}
+
+		vk::AttachmentReference depthRef;
+		depthRef.attachment = 5;
+		depthRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+		vk::SubpassDescription subpass;
+		subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+		subpass.colorAttachmentCount = 5;
+		subpass.pColorAttachments = colorRefs.data();
+		subpass.pDepthStencilAttachment = &depthRef;
+
+		vk::SubpassDependency dependency;
+		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependency.dstSubpass = 0;
+		dependency.srcStageMask = vk::PipelineStageFlagBits::eFragmentShader;
+		dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                        | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+		dependency.srcAccessMask = vk::AccessFlagBits::eShaderRead;
+		dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite
+		                         | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+
+		vk::RenderPassCreateInfo rpInfo;
+		rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+		rpInfo.pAttachments = attachments.data();
+		rpInfo.subpassCount = 1;
+		rpInfo.pSubpasses = &subpass;
+		rpInfo.dependencyCount = 1;
+		rpInfo.pDependencies = &dependency;
+
+		try {
+			m_msaaResolveRenderPass = m_device.createRenderPass(rpInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create MSAA resolve render pass: %s\n", e.what()));
+			shutdownMSAA();
+			return false;
+		}
+	}
+
+	// MSAA Resolve framebuffer — references non-MSAA G-buffer images
+	// Attachment order: [0]=scene color, [1]=position, [2]=normal, [3]=specular, [4]=emissive, [5]=depth
+	{
+		std::array<vk::ImageView, 6> fbAttachments = {
+			m_sceneColor.view,
+			m_gbufPosition.view,
+			m_gbufNormal.view,
+			m_gbufSpecular.view,
+			m_gbufEmissive.view,
+			m_sceneDepth.view,
+		};
+
+		vk::FramebufferCreateInfo fbInfo;
+		fbInfo.renderPass = m_msaaResolveRenderPass;
+		fbInfo.attachmentCount = static_cast<uint32_t>(fbAttachments.size());
+		fbInfo.pAttachments = fbAttachments.data();
+		fbInfo.width = w;
+		fbInfo.height = h;
+		fbInfo.layers = 1;
+
+		try {
+			m_msaaResolveFramebuffer = m_device.createFramebuffer(fbInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create MSAA resolve framebuffer: %s\n", e.what()));
+			shutdownMSAA();
+			return false;
+		}
+	}
+
+	// Create per-frame MSAA resolve UBO (persistently mapped)
+	// Two 256-byte slots (one per frame in flight) hold {int samples; float fov;} data.
+	{
+		vk::BufferCreateInfo bufInfo;
+		bufInfo.size = MAX_FRAMES_IN_FLIGHT * 256;
+		bufInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
+		bufInfo.sharingMode = vk::SharingMode::eExclusive;
+
+		try {
+			m_msaaResolveUBO = m_device.createBuffer(bufInfo);
+		} catch (const vk::SystemError& e) {
+			mprintf(("VulkanPostProcessor: Failed to create MSAA resolve UBO: %s\n", e.what()));
+			shutdownMSAA();
+			return false;
+		}
+
+		if (!m_memoryManager->allocateBufferMemory(m_msaaResolveUBO, MemoryUsage::CpuToGpu, m_msaaResolveUBOAlloc)) {
+			mprintf(("VulkanPostProcessor: Failed to allocate MSAA resolve UBO memory!\n"));
+			m_device.destroyBuffer(m_msaaResolveUBO);
+			m_msaaResolveUBO = nullptr;
+			shutdownMSAA();
+			return false;
+		}
+
+		m_msaaResolveUBOMapped = m_memoryManager->mapMemory(m_msaaResolveUBOAlloc);
+		if (!m_msaaResolveUBOMapped) {
+			mprintf(("VulkanPostProcessor: Failed to map MSAA resolve UBO!\n"));
+			shutdownMSAA();
+			return false;
+		}
+	}
+
+	// Transition MSAA images to the render pass's initial layout at creation time.
+	// The validation layer tracks framebuffer attachment layouts from creation,
+	// so we must match the eClear render pass's initialLayout exactly.
+	{
+		auto* texMgr = getTextureManager();
+
+		RenderTarget* colorTargets[] = {
+			&m_msaaColor, &m_msaaPosition, &m_msaaNormal,
+			&m_msaaSpecular, &m_msaaEmissive,
+		};
+		for (auto* t : colorTargets) {
+			texMgr->transitionImageLayout(t->image, t->format,
+				vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal);
+		}
+
+		texMgr->transitionImageLayout(m_msaaDepthImage, m_depthFormat,
+			vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthStencilAttachmentOptimal);
+	}
+
+	m_msaaInitialized = true;
+	mprintf(("VulkanPostProcessor: MSAA initialized (%ux%u, %dx samples, 5 color + depth)\n",
+		w, h, Cmdline_msaa_enabled));
+	return true;
+}
+
+void VulkanPostProcessor::shutdownMSAA()
+{
+	if (!m_device) {
+		return;
+	}
+
+	// Destroy MSAA resolve UBO
+	if (m_msaaResolveUBOMapped) {
+		m_memoryManager->unmapMemory(m_msaaResolveUBOAlloc);
+		m_msaaResolveUBOMapped = nullptr;
+	}
+	if (m_msaaResolveUBO) {
+		m_device.destroyBuffer(m_msaaResolveUBO);
+		m_msaaResolveUBO = nullptr;
+	}
+	if (m_msaaResolveUBOAlloc.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_msaaResolveUBOAlloc);
+	}
+
+	if (m_msaaResolveFramebuffer) {
+		m_device.destroyFramebuffer(m_msaaResolveFramebuffer);
+		m_msaaResolveFramebuffer = nullptr;
+	}
+	if (m_msaaResolveRenderPass) {
+		m_device.destroyRenderPass(m_msaaResolveRenderPass);
+		m_msaaResolveRenderPass = nullptr;
+	}
+	if (m_msaaEmissiveCopyFramebuffer) {
+		m_device.destroyFramebuffer(m_msaaEmissiveCopyFramebuffer);
+		m_msaaEmissiveCopyFramebuffer = nullptr;
+	}
+	if (m_msaaEmissiveCopyRenderPass) {
+		m_device.destroyRenderPass(m_msaaEmissiveCopyRenderPass);
+		m_msaaEmissiveCopyRenderPass = nullptr;
+	}
+	if (m_msaaGbufFramebuffer) {
+		m_device.destroyFramebuffer(m_msaaGbufFramebuffer);
+		m_msaaGbufFramebuffer = nullptr;
+	}
+	if (m_msaaGbufRenderPassLoad) {
+		m_device.destroyRenderPass(m_msaaGbufRenderPassLoad);
+		m_msaaGbufRenderPassLoad = nullptr;
+	}
+	if (m_msaaGbufRenderPass) {
+		m_device.destroyRenderPass(m_msaaGbufRenderPass);
+		m_msaaGbufRenderPass = nullptr;
+	}
+
+	// Destroy MSAA depth
+	if (m_msaaDepthView) {
+		m_device.destroyImageView(m_msaaDepthView);
+		m_msaaDepthView = nullptr;
+	}
+	if (m_msaaDepthImage) {
+		m_device.destroyImage(m_msaaDepthImage);
+		m_msaaDepthImage = nullptr;
+	}
+	if (m_msaaDepthAlloc.memory != VK_NULL_HANDLE) {
+		m_memoryManager->freeAllocation(m_msaaDepthAlloc);
+	}
+
+	// Destroy MSAA color targets
+	RenderTarget* msaaTargets[] = {
+		&m_msaaColor, &m_msaaPosition, &m_msaaNormal,
+		&m_msaaSpecular, &m_msaaEmissive,
+	};
+	for (auto* rt : msaaTargets) {
+		if (rt->view) {
+			m_device.destroyImageView(rt->view);
+			rt->view = nullptr;
+		}
+		if (rt->image) {
+			m_device.destroyImage(rt->image);
+			rt->image = nullptr;
+		}
+		if (rt->allocation.memory != VK_NULL_HANDLE) {
+			m_memoryManager->freeAllocation(rt->allocation);
+		}
+	}
+
+	m_msaaInitialized = false;
+}
+
+void VulkanPostProcessor::transitionMsaaGbufForResume(vk::CommandBuffer /*cmd*/)
+{
+	// No-op: MSAA render passes use finalLayout == subpass layout (no implicit
+	// transition at endRenderPass), so color attachments remain in
+	// eColorAttachmentOptimal — exactly what the eLoad pass expects.
+}
+
+void VulkanPostProcessor::transitionMsaaGbufForBegin(vk::CommandBuffer /*cmd*/)
+{
+	// No-op: MSAA images are always in eColorAttachmentOptimal /
+	// eDepthStencilAttachmentOptimal between frames. Init-time transitions
+	// set this layout, and the post-resolve barriers in
+	// vulkan_deferred_lighting_msaa restore it after each frame's resolve pass.
 }
 
 // ===== Light Accumulation (Deferred Lighting) =====
@@ -4125,7 +4746,8 @@ void VulkanPostProcessor::shutdownShadowPass()
 bool VulkanPostProcessor::createImage(uint32_t width, uint32_t height, vk::Format format,
                                       vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect,
                                       vk::Image& outImage, vk::ImageView& outView,
-                                      VulkanAllocation& outAllocation)
+                                      VulkanAllocation& outAllocation,
+                                      vk::SampleCountFlagBits sampleCount)
 {
 	// Create image
 	vk::ImageCreateInfo imageInfo;
@@ -4136,7 +4758,7 @@ bool VulkanPostProcessor::createImage(uint32_t width, uint32_t height, vk::Forma
 	imageInfo.extent.depth = 1;
 	imageInfo.mipLevels = 1;
 	imageInfo.arrayLayers = 1;
-	imageInfo.samples = vk::SampleCountFlagBits::e1;
+	imageInfo.samples = sampleCount;
 	imageInfo.tiling = vk::ImageTiling::eOptimal;
 	imageInfo.usage = usage;
 	imageInfo.sharingMode = vk::SharingMode::eExclusive;

@@ -43,6 +43,8 @@ set(SHADERS
 	${SHADER_DIR}/fog.frag
 	${SHADER_DIR}/volumetric-fog.vert
 	${SHADER_DIR}/volumetric-fog.frag
+	${SHADER_DIR}/msaa-resolve.vert
+	${SHADER_DIR}/msaa-resolve.frag
 )
 
 # Shaders that have complex uniform blocks with vec3 members that cause struct generation issues
@@ -74,6 +76,8 @@ set(SHADERS_SKIP_STRUCT_GEN
 	${SHADER_DIR}/fog.frag
 	${SHADER_DIR}/volumetric-fog.vert
 	${SHADER_DIR}/volumetric-fog.frag
+	${SHADER_DIR}/msaa-resolve.vert
+	${SHADER_DIR}/msaa-resolve.frag
 )
 
 target_sources(code PRIVATE ${SHADERS})

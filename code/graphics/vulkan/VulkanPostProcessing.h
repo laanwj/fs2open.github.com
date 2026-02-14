@@ -366,6 +366,92 @@ public:
 	 */
 	vk::Sampler getShadowSampler() const { return m_linearSampler; }
 
+	// ========== MSAA (deferred lighting) ==========
+
+	/**
+	 * @brief Check if MSAA G-buffer resources are initialized
+	 */
+	bool isMsaaInitialized() const { return m_msaaInitialized; }
+
+	/**
+	 * @brief Get the MSAA G-buffer render pass (eClear variant)
+	 */
+	vk::RenderPass getMsaaGbufRenderPass() const { return m_msaaGbufRenderPass; }
+
+	/**
+	 * @brief Get the MSAA G-buffer render pass (eLoad variant, emissive preserving)
+	 */
+	vk::RenderPass getMsaaGbufRenderPassLoad() const { return m_msaaGbufRenderPassLoad; }
+
+	/**
+	 * @brief Get the MSAA G-buffer framebuffer
+	 */
+	vk::Framebuffer getMsaaGbufFramebuffer() const { return m_msaaGbufFramebuffer; }
+
+	/**
+	 * @brief Get the MSAA resolve render pass (writes to non-MSAA G-buffer)
+	 */
+	vk::RenderPass getMsaaResolveRenderPass() const { return m_msaaResolveRenderPass; }
+
+	/**
+	 * @brief Get the MSAA resolve framebuffer (non-MSAA G-buffer images)
+	 */
+	vk::Framebuffer getMsaaResolveFramebuffer() const { return m_msaaResolveFramebuffer; }
+
+	/**
+	 * @brief Get the emissive copy render pass (for upsampling to MSAA)
+	 */
+	vk::RenderPass getMsaaEmissiveCopyRenderPass() const { return m_msaaEmissiveCopyRenderPass; }
+
+	/**
+	 * @brief Get the emissive copy framebuffer (MSAA emissive target)
+	 */
+	vk::Framebuffer getMsaaEmissiveCopyFramebuffer() const { return m_msaaEmissiveCopyFramebuffer; }
+
+	/**
+	 * @brief Get MSAA image views for resolve shader binding
+	 */
+	vk::ImageView getMsaaColorView() const { return m_msaaColor.view; }
+	vk::ImageView getMsaaPositionView() const { return m_msaaPosition.view; }
+	vk::ImageView getMsaaNormalView() const { return m_msaaNormal.view; }
+	vk::ImageView getMsaaSpecularView() const { return m_msaaSpecular.view; }
+	vk::ImageView getMsaaEmissiveView() const { return m_msaaEmissive.view; }
+	vk::ImageView getMsaaDepthView() const { return m_msaaDepthView; }
+	vk::Image getMsaaColorImage() const { return m_msaaColor.image; }
+	vk::Image getMsaaPositionImage() const { return m_msaaPosition.image; }
+	vk::Image getMsaaNormalImage() const { return m_msaaNormal.image; }
+	vk::Image getMsaaSpecularImage() const { return m_msaaSpecular.image; }
+	vk::Image getMsaaEmissiveImage() const { return m_msaaEmissive.image; }
+	vk::Image getMsaaDepthImage() const { return m_msaaDepthImage; }
+
+	/**
+	 * @brief Get MSAA resolve UBO buffer and mapped pointer
+	 *
+	 * Per-frame slots (one per MAX_FRAMES_IN_FLIGHT) hold {samples, fov} data.
+	 * Persistently mapped. Caller writes to the current frame's slot.
+	 */
+	vk::Buffer getMsaaResolveUBO() const { return m_msaaResolveUBO; }
+	void* getMsaaResolveUBOMapped() const { return m_msaaResolveUBOMapped; }
+
+	/**
+	 * @brief Transition MSAA images to expected layout before eClear render pass
+	 *
+	 * Uses oldLayout=eUndefined so it works regardless of current layout (first
+	 * frame: UNDEFINED, subsequent: eShaderReadOnlyOptimal from resolve).
+	 * Content is discarded — caller must use eClear loadOp.
+	 */
+	void transitionMsaaGbufForBegin(vk::CommandBuffer cmd);
+
+	/**
+	 * @brief Get MSAA color attachment count (5 — no composite in MSAA pass)
+	 */
+	static constexpr uint32_t MSAA_COLOR_ATTACHMENT_COUNT = 5;
+
+	/**
+	 * @brief Transition MSAA G-buffer color attachments for render pass resume
+	 */
+	void transitionMsaaGbufForResume(vk::CommandBuffer cmd);
+
 	// ========== Fog / Volumetric Nebula ==========
 
 	/**
@@ -408,7 +494,8 @@ private:
 	bool createImage(uint32_t width, uint32_t height, vk::Format format,
 	                 vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect,
 	                 vk::Image& outImage, vk::ImageView& outView,
-	                 VulkanAllocation& outAllocation);
+	                 VulkanAllocation& outAllocation,
+	                 vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e1);
 
 	// G-buffer methods (deferred lighting)
 	bool initGBuffer();
@@ -540,6 +627,30 @@ private:
 	static constexpr uint32_t DEFERRED_UBO_SIZE = 256 * 1024;  // 256KB for light data
 
 	bool m_lightVolumesInitialized = false;
+
+	// ---- MSAA G-buffer ----
+	RenderTarget m_msaaColor;       // RGBA16F (MS)
+	RenderTarget m_msaaPosition;    // RGBA16F (MS)
+	RenderTarget m_msaaNormal;      // RGBA16F (MS)
+	RenderTarget m_msaaSpecular;    // RGBA8 (MS)
+	RenderTarget m_msaaEmissive;    // RGBA16F (MS)
+	vk::Image m_msaaDepthImage;
+	vk::ImageView m_msaaDepthView;
+	VulkanAllocation m_msaaDepthAlloc;
+	vk::RenderPass m_msaaGbufRenderPass;        // eClear, 5 MS color + MS depth
+	vk::RenderPass m_msaaGbufRenderPassLoad;    // eLoad (emissive preserved), 5 MS color + MS depth
+	vk::Framebuffer m_msaaGbufFramebuffer;
+	vk::RenderPass m_msaaResolveRenderPass;     // 5 non-MSAA color + depth (via gl_FragDepth)
+	vk::Framebuffer m_msaaResolveFramebuffer;
+	vk::RenderPass m_msaaEmissiveCopyRenderPass;   // 1 MS color att (for upsample)
+	vk::Framebuffer m_msaaEmissiveCopyFramebuffer;
+	// Per-frame UBO for MSAA resolve shader data (samples, fov)
+	vk::Buffer m_msaaResolveUBO;
+	VulkanAllocation m_msaaResolveUBOAlloc;
+	void* m_msaaResolveUBOMapped = nullptr;
+	bool m_msaaInitialized = false;
+	bool initMSAA();
+	void shutdownMSAA();
 
 	// ---- Shadow map (cascaded VSM) ----
 	RenderTarget m_shadowColor;       // RGBA16F, 2D array (4 layers)

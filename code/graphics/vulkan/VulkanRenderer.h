@@ -190,6 +190,11 @@ class VulkanRenderer {
 	void setUseGbufRenderPass(bool use) { m_useGbufRenderPass = use; }
 	bool isUsingGbufRenderPass() const { return m_useGbufRenderPass; }
 
+	/**
+	 * @brief Get the validated MSAA sample count for deferred lighting
+	 */
+	vk::SampleCountFlagBits getMsaaSampleCount() const { return m_msaaSampleCount; }
+
   private:
 	bool initDisplayDevice() const;
 
@@ -300,6 +305,7 @@ class VulkanRenderer {
 	bool m_useGbufRenderPass = false;  // True when scene uses G-buffer (deferred lighting)
 
 	bool m_supportsShaderViewportLayerOutput = false;  // VK_EXT_shader_viewport_index_layer
+	vk::SampleCountFlagBits m_msaaSampleCount = vk::SampleCountFlagBits::e1;  // Validated MSAA sample count
 
 #if SDL_SUPPORTS_VULKAN
 	bool m_debugReportEnabled = false;

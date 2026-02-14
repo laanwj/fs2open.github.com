@@ -10,6 +10,7 @@
 #include "VulkanPostProcessing.h"
 #include "gr_vulkan.h"
 
+#include "cmdline/cmdline.h"
 #include "graphics/2d.h"
 #include "graphics/matrix.h"
 #include "graphics/material.h"
@@ -19,6 +20,7 @@
 #include "mission/missionparse.h"
 #include "nebula/neb.h"
 #include "nebula/volumetrics.h"
+#include "render/3d.h"
 
 namespace graphics {
 namespace vulkan {
@@ -50,12 +52,14 @@ void vulkan_deferred_lighting_begin(bool clearNonColorBufs)
 	auto* stateTracker = getStateTracker();
 	vk::CommandBuffer cmd = stateTracker->getCommandBuffer();
 
+	const bool msaaActive = (Cmdline_msaa_enabled > 0 && pp->isMsaaInitialized());
+
 	// End the current G-buffer render pass to perform the color→emissive copy.
 	// All 6 color attachments transition to eShaderReadOnlyOptimal (finalLayout).
 	cmd.endRenderPass();
 
 	// Transition scene color (attachment 0): eShaderReadOnlyOptimal → eTransferSrc
-	// Transition emissive (attachment 4): eShaderReadOnlyOptimal → eTransferDst
+	// Transition non-MSAA emissive (attachment 4): eShaderReadOnlyOptimal → eTransferDst
 	{
 		std::array<vk::ImageMemoryBarrier, 2> barriers;
 
@@ -85,7 +89,7 @@ void vulkan_deferred_lighting_begin(bool clearNonColorBufs)
 			{}, nullptr, nullptr, barriers);
 	}
 
-	// Copy scene color → emissive (pre-deferred content becomes emissive)
+	// Copy scene color → non-MSAA emissive (pre-deferred content becomes emissive)
 	{
 		auto extent = pp->getSceneExtent();
 		vk::ImageCopy region;
@@ -98,39 +102,554 @@ void vulkan_deferred_lighting_begin(bool clearNonColorBufs)
 			region);
 	}
 
-	// Transition scene color back to eColorAttachmentOptimal.
-	// Transition emissive to eShaderReadOnlyOptimal (where transitionGbufForResume expects it).
+	if (msaaActive) {
+		// --- MSAA path ---
+		// Transition scene color: eTransferSrcOptimal → eShaderReadOnlyOptimal
+		// (will be sampled inside MSAA pass to fill emissive)
+		// Transition non-MSAA emissive: eTransferDstOptimal → eShaderReadOnlyOptimal (preserved for later)
+		{
+			std::array<vk::ImageMemoryBarrier, 2> barriers;
+
+			barriers[0].srcAccessMask = vk::AccessFlagBits::eTransferRead;
+			barriers[0].dstAccessMask = vk::AccessFlagBits::eShaderRead;
+			barriers[0].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+			barriers[0].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[0].image = pp->getSceneColorImage();
+			barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+			barriers[1].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+			barriers[1].dstAccessMask = {};
+			barriers[1].oldLayout = vk::ImageLayout::eTransferDstOptimal;
+			barriers[1].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[1].image = pp->getGbufEmissiveImage();
+			barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+			cmd.pipelineBarrier(
+				vk::PipelineStageFlagBits::eTransfer,
+				vk::PipelineStageFlagBits::eFragmentShader,
+				{}, nullptr, nullptr, barriers);
+		}
+
+		// Transition MSAA images to expected initial layouts
+		pp->transitionMsaaGbufForBegin(cmd);
+
+		// Begin MSAA G-buffer render pass (eClear — clears all attachments)
+		{
+			auto extent = pp->getSceneExtent();
+			vk::RenderPassBeginInfo rpBegin;
+			rpBegin.renderPass = pp->getMsaaGbufRenderPass();
+			rpBegin.framebuffer = pp->getMsaaGbufFramebuffer();
+			rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+			rpBegin.renderArea.extent = extent;
+			std::array<vk::ClearValue, 6> clearValues{};
+			clearValues[0].color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f});
+			clearValues[1].color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f});
+			clearValues[2].color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f});
+			clearValues[3].color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f});
+			clearValues[4].color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f});
+			clearValues[5].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+			rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+			rpBegin.pClearValues = clearValues.data();
+			cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+			stateTracker->setRenderPass(pp->getMsaaGbufRenderPass(), 0);
+			stateTracker->setColorAttachmentCount(VulkanPostProcessor::MSAA_COLOR_ATTACHMENT_COUNT);
+			stateTracker->setCurrentSampleCount(renderer->getMsaaSampleCount());
+		}
+
+		// Fill MSAA emissive with pre-deferred scene content (starfield, backgrounds).
+		// Draw a fullscreen tri sampling non-MSAA scene color, writing to all attachments.
+		// Only emissive (attachment 4) matters — the other attachments will be overwritten
+		// by model rendering. Use per-attachment color write mask to write only att 4.
+		{
+			auto* pipelineMgr = getPipelineManager();
+
+			PipelineConfig config;
+			config.shaderType = SDR_TYPE_COPY;
+			config.primitiveType = PRIM_TYPE_TRIS;
+			config.depthMode = ZBUFFER_TYPE_NONE;
+			config.blendMode = ALPHA_BLEND_NONE;
+			config.cullEnabled = false;
+			config.depthWriteEnabled = false;
+			config.renderPass = pp->getMsaaGbufRenderPass();
+			config.sampleCount = renderer->getMsaaSampleCount();
+			config.colorAttachmentCount = VulkanPostProcessor::MSAA_COLOR_ATTACHMENT_COUNT;
+
+			// Per-attachment blend: only write to attachment 4 (emissive)
+			config.perAttachmentBlendEnabled = true;
+			for (uint32_t i = 0; i < config.colorAttachmentCount; ++i) {
+				config.attachmentBlends[i].blendMode = ALPHA_BLEND_NONE;
+				config.attachmentBlends[i].writeMask = {false, false, false, false};
+			}
+			config.attachmentBlends[4].writeMask = {true, true, true, true};
+
+			vertex_layout emptyLayout;
+			vk::Pipeline pipeline = pipelineMgr->getPipeline(config, emptyLayout);
+			if (pipeline) {
+				// Use drawFullscreenTriangle pattern but inline since we're already in a render pass
+				auto* descriptorMgr = getDescriptorManager();
+				auto* bufferMgr = getBufferManager();
+				auto* texMgr = getTextureManager();
+
+				cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+
+				auto extent = pp->getSceneExtent();
+				vk::Viewport viewport;
+				viewport.x = 0.0f;
+				viewport.y = 0.0f;
+				viewport.width = static_cast<float>(extent.width);
+				viewport.height = static_cast<float>(extent.height);
+				viewport.minDepth = 0.0f;
+				viewport.maxDepth = 1.0f;
+				cmd.setViewport(0, viewport);
+				vk::Rect2D scissor;
+				scissor.offset = vk::Offset2D(0, 0);
+				scissor.extent = extent;
+				cmd.setScissor(0, scissor);
+
+				// Bind descriptors with scene color as source
+				auto fallbackBuf = bufferMgr->getFallbackUniformBuffer();
+				auto fallbackBufSize = static_cast<vk::DeviceSize>(bufferMgr->getFallbackUniformBufferSize());
+				auto fallbackView = texMgr->getFallbackTextureView2D();
+				auto fallbackSampler = texMgr->getDefaultSampler();
+
+				vk::DescriptorSet globalSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Global);
+				if (globalSet) {
+					descriptorMgr->updateUniformBuffer(globalSet, 0, fallbackBuf, 0, fallbackBufSize);
+					descriptorMgr->updateUniformBuffer(globalSet, 1, fallbackBuf, 0, fallbackBufSize);
+					if (fallbackView && fallbackSampler) {
+						descriptorMgr->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
+					}
+					auto fallbackCubeView = texMgr->getFallbackCubeView();
+					if (fallbackCubeView && fallbackSampler) {
+						descriptorMgr->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
+						descriptorMgr->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
+					}
+					cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+						pipelineMgr->getPipelineLayout(),
+						static_cast<uint32_t>(DescriptorSetIndex::Global), globalSet, {});
+				}
+
+				vk::DescriptorSet materialSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Material);
+				if (materialSet) {
+					descriptorMgr->updateUniformBuffer(materialSet, 0, fallbackBuf, 0, fallbackBufSize);
+					descriptorMgr->updateUniformBuffer(materialSet, 2, fallbackBuf, 0, fallbackBufSize);
+					descriptorMgr->updateStorageBuffer(materialSet, 3, fallbackBuf, 0, fallbackBufSize);
+
+					// Build texture array with scene color at slot 0, fallback at slots 1-15
+					SCP_vector<vk::DescriptorImageInfo> texImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS);
+					texImages[0].sampler = pp->getSceneColorSampler();
+					texImages[0].imageView = pp->getSceneColorView();
+					texImages[0].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+					for (uint32_t slot = 1; slot < VulkanDescriptorManager::MAX_TEXTURE_BINDINGS; ++slot) {
+						texImages[slot].sampler = fallbackSampler;
+						texImages[slot].imageView = fallbackView;
+						texImages[slot].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+					}
+					descriptorMgr->updateTextureArray(materialSet, 1, texImages);
+
+					if (fallbackView && fallbackSampler) {
+						descriptorMgr->updateTexture(materialSet, 4, fallbackView, fallbackSampler);
+						descriptorMgr->updateTexture(materialSet, 5, fallbackView, fallbackSampler);
+						descriptorMgr->updateTexture(materialSet, 6, fallbackView, fallbackSampler);
+					}
+					cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+						pipelineMgr->getPipelineLayout(),
+						static_cast<uint32_t>(DescriptorSetIndex::Material), materialSet, {});
+				}
+
+				vk::DescriptorSet perDrawSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::PerDraw);
+				if (perDrawSet) {
+					for (uint32_t b = 0; b < 5; ++b) {
+						descriptorMgr->updateUniformBuffer(perDrawSet, b, fallbackBuf, 0, fallbackBufSize);
+					}
+					cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+						pipelineMgr->getPipelineLayout(),
+						static_cast<uint32_t>(DescriptorSetIndex::PerDraw), perDrawSet, {});
+				}
+
+				cmd.draw(3, 1, 0, 0);
+			}
+		}
+	} else {
+		// --- Non-MSAA path (original) ---
+		// Transition scene color back to eColorAttachmentOptimal.
+		// Transition emissive to eShaderReadOnlyOptimal (where transitionGbufForResume expects it).
+		{
+			std::array<vk::ImageMemoryBarrier, 2> barriers;
+
+			barriers[0].srcAccessMask = vk::AccessFlagBits::eTransferRead;
+			barriers[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+			barriers[0].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+			barriers[0].newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+			barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[0].image = pp->getSceneColorImage();
+			barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+			barriers[1].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+			barriers[1].dstAccessMask = {};
+			barriers[1].oldLayout = vk::ImageLayout::eTransferDstOptimal;
+			barriers[1].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[1].image = pp->getGbufEmissiveImage();
+			barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+			cmd.pipelineBarrier(
+				vk::PipelineStageFlagBits::eTransfer,
+				vk::PipelineStageFlagBits::eColorAttachmentOutput,
+				{}, nullptr, nullptr, barriers);
+		}
+
+		// Transition G-buffer attachments 1-5 from eShaderReadOnlyOptimal → eColorAttachmentOptimal
+		pp->transitionGbufForResume(cmd);
+
+		// Resume G-buffer render pass with eLoad
+		{
+			auto extent = pp->getSceneExtent();
+			vk::RenderPassBeginInfo rpBegin;
+			rpBegin.renderPass = pp->getGbufRenderPassLoad();
+			rpBegin.framebuffer = pp->getGbufFramebuffer();
+			rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+			rpBegin.renderArea.extent = extent;
+			std::array<vk::ClearValue, 7> clearValues{};
+			clearValues[6].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+			rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+			rpBegin.pClearValues = clearValues.data();
+			cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+			stateTracker->setRenderPass(pp->getGbufRenderPassLoad(), 0);
+		}
+
+		// Optionally clear non-color G-buffer attachments
+		if (clearNonColorBufs) {
+			vk::ClearAttachment clearAtt;
+			clearAtt.aspectMask = vk::ImageAspectFlagBits::eColor;
+			clearAtt.clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f});
+
+			auto extent = pp->getSceneExtent();
+			vk::ClearRect clearRect;
+			clearRect.rect.offset = vk::Offset2D(0, 0);
+			clearRect.rect.extent = extent;
+			clearRect.baseArrayLayer = 0;
+			clearRect.layerCount = 1;
+
+			for (uint32_t att : {1u, 2u, 3u, 5u}) {
+				clearAtt.colorAttachment = att;
+				cmd.clearAttachments(clearAtt, clearRect);
+			}
+		}
+	}
+
+	Deferred_lighting = true;
+}
+
+void vulkan_deferred_lighting_msaa()
+{
+	if (Cmdline_msaa_enabled <= 0) {
+		return;
+	}
+
+	auto* pp = getPostProcessor();
+	if (!pp || !pp->isMsaaInitialized()) {
+		return;
+	}
+
+	auto* stateTracker = getStateTracker();
+	vk::CommandBuffer cmd = stateTracker->getCommandBuffer();
+
+	// End MSAA G-buffer render pass.
+	// With finalLayout == subpass layout, all attachments stay in their subpass layouts:
+	// colors remain eColorAttachmentOptimal, depth remains eDepthStencilAttachmentOptimal.
+	cmd.endRenderPass();
+
+	// Reset sample count to 1x (resolve and subsequent passes are non-MSAA)
+	stateTracker->setCurrentSampleCount(vk::SampleCountFlagBits::e1);
+
+	// Explicit barriers: transition all 6 MSAA images to eShaderReadOnlyOptimal
+	// for sampling by the resolve shader. We use explicit barriers instead of
+	// render pass finalLayout transitions to ensure the validation layer tracks
+	// the layout changes correctly.
 	{
-		std::array<vk::ImageMemoryBarrier, 2> barriers;
+		std::array<vk::ImageMemoryBarrier, 6> barriers;
 
-		barriers[0].srcAccessMask = vk::AccessFlagBits::eTransferRead;
-		barriers[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-		barriers[0].oldLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barriers[0].newLayout = vk::ImageLayout::eColorAttachmentOptimal;
-		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[0].image = pp->getSceneColorImage();
-		barriers[0].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		// 5 color images: eColorAttachmentOptimal → eShaderReadOnlyOptimal
+		vk::Image msaaImages[5] = {
+			pp->getMsaaColorImage(),
+			pp->getMsaaPositionImage(),
+			pp->getMsaaNormalImage(),
+			pp->getMsaaSpecularImage(),
+			pp->getMsaaEmissiveImage(),
+		};
+		for (int i = 0; i < 5; ++i) {
+			barriers[i].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+			barriers[i].dstAccessMask = vk::AccessFlagBits::eShaderRead;
+			barriers[i].oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
+			barriers[i].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barriers[i].image = msaaImages[i];
+			barriers[i].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		}
 
-		barriers[1].srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-		barriers[1].dstAccessMask = {};
-		barriers[1].oldLayout = vk::ImageLayout::eTransferDstOptimal;
-		barriers[1].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barriers[1].image = pp->getGbufEmissiveImage();
-		barriers[1].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		// Depth: eDepthStencilAttachmentOptimal → eShaderReadOnlyOptimal
+		barriers[5].srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+		barriers[5].dstAccessMask = vk::AccessFlagBits::eShaderRead;
+		barriers[5].oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+		barriers[5].newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barriers[5].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[5].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[5].image = pp->getMsaaDepthImage();
+		barriers[5].subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1};
 
 		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eLateFragmentTests,
+			vk::PipelineStageFlagBits::eFragmentShader,
 			{}, nullptr, nullptr, barriers);
 	}
 
-	// Transition G-buffer attachments 1-5 from eShaderReadOnlyOptimal → eColorAttachmentOptimal
+	// Begin resolve render pass (non-MSAA, writes to standard G-buffer images)
+	{
+		auto extent = pp->getSceneExtent();
+		vk::RenderPassBeginInfo rpBegin;
+		rpBegin.renderPass = pp->getMsaaResolveRenderPass();
+		rpBegin.framebuffer = pp->getMsaaResolveFramebuffer();
+		rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+		rpBegin.renderArea.extent = extent;
+		// 6 attachments: 5 color + depth. loadOp=eDontCare for all (fully overwritten).
+		std::array<vk::ClearValue, 6> clearValues{};
+		clearValues[5].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+		cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+
+		auto* pipelineMgr = getPipelineManager();
+		auto* descriptorMgr = getDescriptorManager();
+		auto* bufferMgr = getBufferManager();
+		auto* texMgr = getTextureManager();
+
+		PipelineConfig config;
+		config.shaderType = SDR_TYPE_MSAA_RESOLVE;
+		config.primitiveType = PRIM_TYPE_TRIS;
+		config.depthMode = ZBUFFER_TYPE_FULL;
+		config.blendMode = ALPHA_BLEND_NONE;
+		config.cullEnabled = false;
+		config.depthWriteEnabled = true;
+		config.renderPass = pp->getMsaaResolveRenderPass();
+		config.colorAttachmentCount = 5;
+
+		vertex_layout emptyLayout;
+		vk::Pipeline pipeline = pipelineMgr->getPipeline(config, emptyLayout);
+		if (pipeline) {
+			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+
+			vk::Viewport viewport;
+			viewport.x = 0.0f;
+			viewport.y = 0.0f;
+			viewport.width = static_cast<float>(extent.width);
+			viewport.height = static_cast<float>(extent.height);
+			viewport.minDepth = 0.0f;
+			viewport.maxDepth = 1.0f;
+			cmd.setViewport(0, viewport);
+			vk::Rect2D scissor;
+			scissor.offset = vk::Offset2D(0, 0);
+			scissor.extent = extent;
+			cmd.setScissor(0, scissor);
+
+			auto fallbackBuf = bufferMgr->getFallbackUniformBuffer();
+			auto fallbackBufSize = static_cast<vk::DeviceSize>(bufferMgr->getFallbackUniformBufferSize());
+			auto fallbackView = texMgr->getFallbackTextureView2D();
+			auto fallbackSampler = texMgr->getDefaultSampler();
+
+			// Global set (fallback — resolve shader doesn't use global bindings)
+			vk::DescriptorSet globalSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Global);
+			if (globalSet) {
+				descriptorMgr->updateUniformBuffer(globalSet, 0, fallbackBuf, 0, fallbackBufSize);
+				descriptorMgr->updateUniformBuffer(globalSet, 1, fallbackBuf, 0, fallbackBufSize);
+				if (fallbackView && fallbackSampler) {
+					descriptorMgr->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
+				}
+				auto fallbackCubeView = texMgr->getFallbackCubeView();
+				if (fallbackCubeView && fallbackSampler) {
+					descriptorMgr->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
+					descriptorMgr->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
+				}
+				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+					pipelineMgr->getPipelineLayout(),
+					static_cast<uint32_t>(DescriptorSetIndex::Global), globalSet, {});
+			}
+
+			// Material set: All 6 MSAA textures in binding 1 array (elements 0-5)
+			// [0]=color, [1]=position, [2]=normal, [3]=specular, [4]=emissive, [5]=depth
+			vk::DescriptorSet materialSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Material);
+			if (materialSet) {
+				descriptorMgr->updateUniformBuffer(materialSet, 0, fallbackBuf, 0, fallbackBufSize);
+				descriptorMgr->updateUniformBuffer(materialSet, 2, fallbackBuf, 0, fallbackBufSize);
+				descriptorMgr->updateStorageBuffer(materialSet, 3, fallbackBuf, 0, fallbackBufSize);
+
+				// Build texture array: elements 0-5 are MSAA textures, 6-15 are fallback
+				vk::Sampler nearestSampler = texMgr->getSampler(
+					vk::Filter::eNearest, vk::Filter::eNearest,
+					vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false);
+
+				SCP_vector<vk::DescriptorImageInfo> texImages(VulkanDescriptorManager::MAX_TEXTURE_BINDINGS);
+				// MSAA textures at slots 0-5
+				texImages[0] = {nearestSampler, pp->getMsaaColorView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+				texImages[1] = {nearestSampler, pp->getMsaaPositionView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+				texImages[2] = {nearestSampler, pp->getMsaaNormalView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+				texImages[3] = {nearestSampler, pp->getMsaaSpecularView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+				texImages[4] = {nearestSampler, pp->getMsaaEmissiveView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+				texImages[5] = {nearestSampler, pp->getMsaaDepthView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+				// Remaining slots must also be multisampled (validation checks ALL
+				// elements even though the shader only accesses 0-5). Reuse the
+				// MSAA color view — content doesn't matter, only sample count.
+				for (uint32_t slot = 6; slot < VulkanDescriptorManager::MAX_TEXTURE_BINDINGS; ++slot) {
+					texImages[slot] = {nearestSampler, pp->getMsaaColorView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+				}
+				descriptorMgr->updateTextureArray(materialSet, 1, texImages);
+
+				// Fallback for single-sampler bindings 4-6
+				if (fallbackView && fallbackSampler) {
+					descriptorMgr->updateTexture(materialSet, 4, fallbackView, fallbackSampler);
+					descriptorMgr->updateTexture(materialSet, 5, fallbackView, fallbackSampler);
+					descriptorMgr->updateTexture(materialSet, 6, fallbackView, fallbackSampler);
+				}
+
+				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+					pipelineMgr->getPipelineLayout(),
+					static_cast<uint32_t>(DescriptorSetIndex::Material), materialSet, {});
+			}
+
+			// PerDraw set: GenericData UBO with {samples, fov} at binding 0
+			vk::DescriptorSet perDrawSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::PerDraw);
+			if (perDrawSet) {
+				// Write resolve data to per-frame UBO slot
+				struct MsaaResolveData {
+					int samples;
+					float fov;
+				} resolveData;
+				resolveData.samples = Cmdline_msaa_enabled;
+				resolveData.fov = g3_get_hfov(Proj_fov);
+
+				uint32_t frame = bufferMgr->getCurrentFrame();
+				uint32_t slotOffset = frame * 256;
+				memcpy(static_cast<uint8_t*>(pp->getMsaaResolveUBOMapped()) + slotOffset,
+					&resolveData, sizeof(resolveData));
+
+				descriptorMgr->updateUniformBuffer(perDrawSet, 0,
+					pp->getMsaaResolveUBO(), slotOffset, 256);
+
+				// Fallback for remaining PerDraw UBO bindings (1-4)
+				descriptorMgr->updateUniformBuffer(perDrawSet, 1, fallbackBuf, 0, fallbackBufSize);
+				descriptorMgr->updateUniformBuffer(perDrawSet, 2, fallbackBuf, 0, fallbackBufSize);
+				descriptorMgr->updateUniformBuffer(perDrawSet, 3, fallbackBuf, 0, fallbackBufSize);
+				descriptorMgr->updateUniformBuffer(perDrawSet, 4, fallbackBuf, 0, fallbackBufSize);
+
+				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+					pipelineMgr->getPipelineLayout(),
+					static_cast<uint32_t>(DescriptorSetIndex::PerDraw), perDrawSet, {});
+			}
+
+			cmd.draw(3, 1, 0, 0);
+		}
+
+		cmd.endRenderPass();
+	}
+
+	// Transition MSAA images back to their resting layout (eColorAttachmentOptimal /
+	// eDepthStencilAttachmentOptimal) so they match the validation layer's global
+	// tracking state for the next frame. The post-G-buffer barriers moved them to
+	// eShaderReadOnlyOptimal for the resolve pass; now we restore them.
+	{
+		std::array<vk::ImageMemoryBarrier, 6> restoreBarriers;
+
+		vk::Image msaaImages[5] = {
+			pp->getMsaaColorImage(),
+			pp->getMsaaPositionImage(),
+			pp->getMsaaNormalImage(),
+			pp->getMsaaSpecularImage(),
+			pp->getMsaaEmissiveImage(),
+		};
+		for (int i = 0; i < 5; ++i) {
+			restoreBarriers[i].srcAccessMask = vk::AccessFlagBits::eShaderRead;
+			restoreBarriers[i].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+			restoreBarriers[i].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			restoreBarriers[i].newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+			restoreBarriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			restoreBarriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			restoreBarriers[i].image = msaaImages[i];
+			restoreBarriers[i].subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		}
+
+		restoreBarriers[5].srcAccessMask = vk::AccessFlagBits::eShaderRead;
+		restoreBarriers[5].dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+		restoreBarriers[5].oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		restoreBarriers[5].newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+		restoreBarriers[5].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		restoreBarriers[5].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		restoreBarriers[5].image = pp->getMsaaDepthImage();
+		restoreBarriers[5].subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eFragmentShader,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests,
+			{}, nullptr, nullptr, restoreBarriers);
+	}
+
+	// After resolve, the non-MSAA G-buffer has properly resolved data.
+	// Color attachments 0-4 are in eShaderReadOnlyOptimal (from resolve pass finalLayout).
+	// Depth is in eDepthStencilAttachmentOptimal.
+	// Subsequent deferred_lighting_end/finish operate on the non-MSAA G-buffer unchanged.
+
+	// Transition scene color from eShaderReadOnlyOptimal → eColorAttachmentOptimal
+	// (deferred_lighting_end resumes the non-MSAA gbuf pass and needs scene color writable)
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = pp->getSceneColorImage();
+		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			{}, nullptr, nullptr, barrier);
+	}
+
+	// Composite is not part of the resolve framebuffer, so its layout is
+	// indeterminate (UNDEFINED on first frame, eTransferSrcOptimal from
+	// previous frame's composite→scene copy, etc.). Use oldLayout=eUndefined
+	// to transition it regardless of current state — content will be fully
+	// overwritten by emissive→composite copy in deferred_lighting_finish().
+	{
+		vk::ImageMemoryBarrier barrier;
+		barrier.srcAccessMask = {};
+		barrier.dstAccessMask = {};
+		barrier.oldLayout = vk::ImageLayout::eUndefined;
+		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = pp->getGbufCompositeImage();
+		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTopOfPipe,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			{}, nullptr, nullptr, barrier);
+	}
+
+	// Transition G-buffer attachments 1-5 for resume
+	// (all now in eShaderReadOnlyOptimal: 1-4 from resolve finalLayout, 5 from above)
 	pp->transitionGbufForResume(cmd);
 
-	// Resume G-buffer render pass with eLoad
+	// Resume the non-MSAA G-buffer render pass with eLoad
 	{
 		auto extent = pp->getSceneExtent();
 		vk::RenderPassBeginInfo rpBegin;
@@ -144,40 +663,8 @@ void vulkan_deferred_lighting_begin(bool clearNonColorBufs)
 		rpBegin.pClearValues = clearValues.data();
 		cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
 		stateTracker->setRenderPass(pp->getGbufRenderPassLoad(), 0);
+		stateTracker->setColorAttachmentCount(VulkanPostProcessor::GBUF_COLOR_ATTACHMENT_COUNT);
 	}
-
-	// Don't clear attachment 0 — keep the pre-deferred content (starfield, backgrounds).
-	// The model shader writes fragOut0 = baseColor on top via depth test.
-	// In the full pipeline, attachment 0 will be cleared here and the
-	// background will be recovered from emissive during light accumulation.
-	//
-	// Optionally clear non-color G-buffer attachments (position, normal, specular, composite).
-	// These were already cleared by the eClear render pass but the caller may want to
-	// re-clear them (e.g. between cockpit and external rendering passes).
-	if (clearNonColorBufs) {
-		vk::ClearAttachment clearAtt;
-		clearAtt.aspectMask = vk::ImageAspectFlagBits::eColor;
-		clearAtt.clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 0.0f});
-
-		auto extent = pp->getSceneExtent();
-		vk::ClearRect clearRect;
-		clearRect.rect.offset = vk::Offset2D(0, 0);
-		clearRect.rect.extent = extent;
-		clearRect.baseArrayLayer = 0;
-		clearRect.layerCount = 1;
-
-		for (uint32_t att : {1u, 2u, 3u, 5u}) {
-			clearAtt.colorAttachment = att;
-			cmd.clearAttachments(clearAtt, clearRect);
-		}
-	}
-
-	Deferred_lighting = true;
-}
-
-void vulkan_deferred_lighting_msaa()
-{
-	// No MSAA support in Vulkan deferred yet
 }
 
 void vulkan_deferred_lighting_end()
@@ -445,6 +932,9 @@ void vulkan_shadow_map_start(matrix4* shadow_view_matrix, const matrix* light_ma
 	// End the current G-buffer render pass
 	cmd.endRenderPass();
 
+	// Shadow render pass is always non-MSAA (1x sample count)
+	stateTracker->setCurrentSampleCount(vk::SampleCountFlagBits::e1);
+
 	// Begin shadow render pass (eClear for both color and depth)
 	{
 		int shadowSize = pp->getShadowTextureSize();
@@ -515,30 +1005,50 @@ void vulkan_shadow_map_end()
 	// End shadow render pass (color transitions to eShaderReadOnlyOptimal via finalLayout)
 	cmd.endRenderPass();
 
-	// Transition scene color: eShaderReadOnlyOptimal → eColorAttachmentOptimal
-	// (Scene color was in eShaderReadOnlyOptimal from ending G-buffer pass before shadow start)
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.srcAccessMask = {};
-		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-		barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = pp->getSceneColorImage();
-		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+	const bool msaaActive = (Cmdline_msaa_enabled > 0 && pp->isMsaaInitialized());
 
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eTopOfPipe,
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			{}, nullptr, nullptr, barrier);
-	}
+	if (msaaActive) {
+		// Resume MSAA G-buffer render pass
+		pp->transitionMsaaGbufForResume(cmd);
 
-	// Transition G-buffer attachments 1-5 for resume
-	pp->transitionGbufForResume(cmd);
+		auto extent = pp->getSceneExtent();
+		vk::RenderPassBeginInfo rpBegin;
+		rpBegin.renderPass = pp->getMsaaGbufRenderPassLoad();
+		rpBegin.framebuffer = pp->getMsaaGbufFramebuffer();
+		rpBegin.renderArea.offset = vk::Offset2D(0, 0);
+		rpBegin.renderArea.extent = extent;
+		std::array<vk::ClearValue, 6> clearValues{};
+		clearValues[5].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+		rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		rpBegin.pClearValues = clearValues.data();
+		cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+		stateTracker->setRenderPass(pp->getMsaaGbufRenderPassLoad(), 0);
+		stateTracker->setColorAttachmentCount(VulkanPostProcessor::MSAA_COLOR_ATTACHMENT_COUNT);
+		stateTracker->setCurrentSampleCount(getRendererInstance()->getMsaaSampleCount());
+	} else {
+		// Transition scene color: eShaderReadOnlyOptimal → eColorAttachmentOptimal
+		// (Scene color was in eShaderReadOnlyOptimal from ending G-buffer pass before shadow start)
+		{
+			vk::ImageMemoryBarrier barrier;
+			barrier.srcAccessMask = {};
+			barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+			barrier.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.image = pp->getSceneColorImage();
+			barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
 
-	// Resume G-buffer render pass with eLoad
-	{
+			cmd.pipelineBarrier(
+				vk::PipelineStageFlagBits::eTopOfPipe,
+				vk::PipelineStageFlagBits::eColorAttachmentOutput,
+				{}, nullptr, nullptr, barrier);
+		}
+
+		// Transition G-buffer attachments 1-5 for resume
+		pp->transitionGbufForResume(cmd);
+
+		// Resume G-buffer render pass with eLoad
 		auto extent = pp->getSceneExtent();
 		vk::RenderPassBeginInfo rpBegin;
 		rpBegin.renderPass = pp->getGbufRenderPassLoad();
