@@ -31,13 +31,15 @@ void main()
 	// Vulkan depth range [0,1] — linearize directly (no 2*d-1 transform)
 	float view_depth = zNear * zFar / (zFar - depth_val * (zFar - zNear));
 
-	if (isinf(view_depth)) {
-		fragOut0.rgb = color_in.rgb;
-	} else {
-		float fog_dist = clamp(1 - pow(fog_density, view_depth - fog_start), 0.0, 1.0);
-		vec3 finalFogColor = srgb_to_linear(fog_color);
+	// Cap infinite depth: Vulkan's formula yields infinity at d=1.0 due to
+	// float precision with extreme zFar. OpenGL's formula gives finite zFar
+	// instead. Capping to zFar makes both renderers apply full fog to
+	// background pixels.
+	if (isinf(view_depth)) view_depth = zFar;
 
-		fragOut0.rgb = mix(color_in.rgb, finalFogColor, fog_dist);
-	}
+	float fog_dist = clamp(1 - pow(fog_density, view_depth - fog_start), 0.0, 1.0);
+	vec3 finalFogColor = srgb_to_linear(fog_color);
+
+	fragOut0.rgb = mix(color_in.rgb, finalFogColor, fog_dist);
 	fragOut0.a = 1.0;
 }
