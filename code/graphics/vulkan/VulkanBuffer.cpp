@@ -418,10 +418,7 @@ void VulkanBufferManager::updateBufferData(gr_buffer_handle handle, size_t size,
 		// that the GPU may still be reading).
 		size_t neededSpan = bufferObj.streamCursor + size;
 		if (neededSpan > bufferObj.spanSize || !bufferObj.buffer) {
-			if (!createOrResizeBuffer(bufferObj, neededSpan)) {
-				mprintf(("Failed to create/resize buffer for streaming update!\n"));
-				return;
-			}
+			Verify(createOrResizeBuffer(bufferObj, neededSpan));
 		}
 
 		// Write at the cursor position within this frame's span
@@ -429,13 +426,10 @@ void VulkanBufferManager::updateBufferData(gr_buffer_handle handle, size_t size,
 		size_t writeOffset = frameOffset + bufferObj.streamCursor;
 
 		void* mapped = m_memoryManager->mapMemory(bufferObj.allocation);
-		if (mapped) {
-			memcpy(static_cast<uint8_t*>(mapped) + writeOffset, data, size);
-			m_memoryManager->flushMemory(bufferObj.allocation, writeOffset, size);
-			m_memoryManager->unmapMemory(bufferObj.allocation);
-		} else {
-			mprintf(("Failed to map buffer memory for streaming update!\n"));
-		}
+		Verify(mapped);
+		memcpy(static_cast<uint8_t*>(mapped) + writeOffset, data, size);
+		m_memoryManager->flushMemory(bufferObj.allocation, writeOffset, size);
+		m_memoryManager->unmapMemory(bufferObj.allocation);
 
 		bufferObj.lastWriteStreamOffset = bufferObj.streamCursor;
 		bufferObj.streamCursor += size;
@@ -443,22 +437,16 @@ void VulkanBufferManager::updateBufferData(gr_buffer_handle handle, size_t size,
 	}
 
 	// Non-streaming path (static buffers, or null data for pre-allocation)
-	if (!createOrResizeBuffer(bufferObj, size)) {
-		mprintf(("Failed to create/resize buffer for update!\n"));
-		return;
-	}
+	Verify(createOrResizeBuffer(bufferObj, size));
 
 	// A null data pointer just allocates/resizes the buffer without writing
 	if (data) {
 		size_t frameOffset = bufferObj.getFrameOffset(m_currentFrame);
 		void* mapped = m_memoryManager->mapMemory(bufferObj.allocation);
-		if (mapped) {
-			memcpy(static_cast<uint8_t*>(mapped) + frameOffset, data, size);
-			m_memoryManager->flushMemory(bufferObj.allocation, frameOffset, size);
-			m_memoryManager->unmapMemory(bufferObj.allocation);
-		} else {
-			mprintf(("Failed to map buffer memory for update!\n"));
-		}
+		Verify(mapped);
+		memcpy(static_cast<uint8_t*>(mapped) + frameOffset, data, size);
+		m_memoryManager->flushMemory(bufferObj.allocation, frameOffset, size);
+		m_memoryManager->unmapMemory(bufferObj.allocation);
 	}
 }
 
@@ -489,13 +477,10 @@ void VulkanBufferManager::updateBufferDataOffset(gr_buffer_handle handle, size_t
 
 	// Map, update region, and unmap
 	void* mapped = m_memoryManager->mapMemory(bufferObj.allocation);
-	if (mapped) {
-		memcpy(static_cast<uint8_t*>(mapped) + totalOffset, data, size);
-		m_memoryManager->flushMemory(bufferObj.allocation, totalOffset, size);
-		m_memoryManager->unmapMemory(bufferObj.allocation);
-	} else {
-		mprintf(("Failed to map buffer memory for offset update!\n"));
-	}
+	Verify(mapped);
+	memcpy(static_cast<uint8_t*>(mapped) + totalOffset, data, size);
+	m_memoryManager->flushMemory(bufferObj.allocation, totalOffset, size);
+	m_memoryManager->unmapMemory(bufferObj.allocation);
 }
 
 void* VulkanBufferManager::mapBuffer(gr_buffer_handle handle)
@@ -667,7 +652,9 @@ void vulkan_update_buffer_data_offset(gr_buffer_handle handle, size_t offset, si
 void* vulkan_map_buffer(gr_buffer_handle handle)
 {
 	auto* bufferManager = getBufferManager();
-	return bufferManager->mapBuffer(handle);
+	void* result = bufferManager->mapBuffer(handle);
+	Verify(result);
+	return result;
 }
 
 void vulkan_flush_mapped_buffer(gr_buffer_handle handle, size_t offset, size_t size)

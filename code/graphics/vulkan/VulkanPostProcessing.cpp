@@ -2901,10 +2901,7 @@ void VulkanPostProcessor::drawFullscreenTriangle(vk::CommandBuffer cmd, vk::Rend
 
 	// Allocate Material descriptor set (Set 1)
 	vk::DescriptorSet materialSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Material);
-	if (!materialSet) {
-		cmd.endRenderPass();
-		return;
-	}
+	Verify(materialSet);
 
 	{
 		// Source texture at binding 1 element 0
@@ -3021,10 +3018,7 @@ void VulkanPostProcessor::drawFullscreenTriangle(vk::CommandBuffer cmd, vk::Rend
 
 	// Allocate PerDraw descriptor set (Set 2)
 	vk::DescriptorSet perDrawSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::PerDraw);
-	if (!perDrawSet) {
-		cmd.endRenderPass();
-		return;
-	}
+	Verify(perDrawSet);
 
 	{
 		vk::DescriptorBufferInfo uboInfo;
@@ -3835,22 +3829,18 @@ void VulkanPostProcessor::updateDistortion(vk::CommandBuffer cmd, float frametim
 			goto skip_noise;
 		}
 
-		if (!m_memoryManager->allocateBufferMemory(stagingBuf, MemoryUsage::CpuOnly, stagingAlloc)) {
-			m_device.destroyBuffer(stagingBuf);
-			goto skip_noise;
-		}
+		Verify(m_memoryManager->allocateBufferMemory(stagingBuf, MemoryUsage::CpuOnly, stagingAlloc));
 
 		{
 			auto* pixels = static_cast<uint8_t*>(m_memoryManager->mapMemory(stagingAlloc));
-			if (pixels) {
-				for (int i = 0; i < 32; i++) {
-					pixels[i * 4 + 0] = static_cast<uint8_t>(::util::Random::next(256));  // R
-					pixels[i * 4 + 1] = static_cast<uint8_t>(::util::Random::next(256));  // G
-					pixels[i * 4 + 2] = 255;  // B
-					pixels[i * 4 + 3] = 255;  // A
-				}
-				m_memoryManager->unmapMemory(stagingAlloc);
+			Verify(pixels);
+			for (int i = 0; i < 32; i++) {
+				pixels[i * 4 + 0] = static_cast<uint8_t>(::util::Random::next(256));  // R
+				pixels[i * 4 + 1] = static_cast<uint8_t>(::util::Random::next(256));  // G
+				pixels[i * 4 + 2] = 255;  // B
+				pixels[i * 4 + 3] = 255;  // A
 			}
+			m_memoryManager->unmapMemory(stagingAlloc);
 
 			// Copy staging buffer → column 0 of dst (1 pixel wide, 32 pixels tall)
 			vk::BufferImageCopy region;
@@ -3980,9 +3970,7 @@ void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 
 	// Allocate and write Material descriptor set (Set 1) with source texture
 	vk::DescriptorSet materialSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Material);
-	if (!materialSet) {
-		return;
-	}
+	Verify(materialSet);
 
 	{
 		// Bind source texture based on post-processing chain state:
@@ -4110,9 +4098,7 @@ void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 	// For now, use fallback (zero) UBO — exposure=0 would give black,
 	// so we need a valid graphics::generic_data::tonemapping_data with exposure=1.0 and tonemapper=0 (linear).
 	vk::DescriptorSet perDrawSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::PerDraw);
-	if (!perDrawSet) {
-		return;
-	}
+	Verify(perDrawSet);
 
 	{
 		// When blitting LDR, use passthrough tonemapping (exposure=1, linear)
@@ -4120,13 +4106,12 @@ void VulkanPostProcessor::blitToSwapChain(vk::CommandBuffer cmd)
 		if (useLdr) {
 			auto* mapped = static_cast<graphics::generic_data::tonemapping_data*>(
 				m_memoryManager->mapMemory(m_tonemapUBOAlloc));
-			if (mapped) {
-				memset(mapped, 0, sizeof(graphics::generic_data::tonemapping_data));
-				mapped->exposure = 1.0f;
-				mapped->tonemapper = 0;  // Linear passthrough
-				mapped->linearOut = 1;   // Skip sRGB — LDR input already has sRGB applied
-				m_memoryManager->unmapMemory(m_tonemapUBOAlloc);
-			}
+			Verify(mapped);
+			memset(mapped, 0, sizeof(graphics::generic_data::tonemapping_data));
+			mapped->exposure = 1.0f;
+			mapped->tonemapper = 0;  // Linear passthrough
+			mapped->linearOut = 1;   // Skip sRGB — LDR input already has sRGB applied
+			m_memoryManager->unmapMemory(m_tonemapUBOAlloc);
 		}
 
 		vk::DescriptorBufferInfo uboInfo;
@@ -4643,9 +4628,7 @@ void VulkanPostProcessor::renderSceneFog(vk::CommandBuffer cmd)
 
 	// Map bloom UBO for fog UBO data
 	m_bloomUBOMapped = m_memoryManager->mapMemory(m_bloomUBOAlloc);
-	if (!m_bloomUBOMapped) {
-		return;
-	}
+	Verify(m_bloomUBOMapped);
 
 	// Fill fog UBO
 	graphics::generic_data::fog_data fogData;
@@ -4711,12 +4694,7 @@ void VulkanPostProcessor::renderSceneFog(vk::CommandBuffer cmd)
 
 	// Allocate Material descriptor set (Set 1)
 	vk::DescriptorSet materialSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Material);
-	if (!materialSet) {
-		cmd.endRenderPass();
-		m_memoryManager->unmapMemory(m_bloomUBOAlloc);
-		m_bloomUBOMapped = nullptr;
-		return;
-	}
+	Verify(materialSet);
 
 	{
 		auto fallbackBuf = bufferMgr->getFallbackUniformBuffer();
@@ -4830,12 +4808,7 @@ void VulkanPostProcessor::renderSceneFog(vk::CommandBuffer cmd)
 
 	// Allocate PerDraw descriptor set (Set 2) with fog UBO
 	vk::DescriptorSet perDrawSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::PerDraw);
-	if (!perDrawSet) {
-		cmd.endRenderPass();
-		m_memoryManager->unmapMemory(m_bloomUBOAlloc);
-		m_bloomUBOMapped = nullptr;
-		return;
-	}
+	Verify(perDrawSet);
 
 	{
 		Assertion(m_bloomUBOCursor < BLOOM_UBO_MAX_SLOTS, "Fog UBO slot overflow!");
@@ -4959,11 +4932,7 @@ void VulkanPostProcessor::renderVolumetricFog(vk::CommandBuffer cmd)
 			return;
 		}
 
-		if (!m_memoryManager->allocateImageMemory(m_emissiveMipmapped.image, MemoryUsage::GpuOnly, m_emissiveMipmapped.allocation)) {
-			m_device.destroyImage(m_emissiveMipmapped.image);
-			m_emissiveMipmapped.image = nullptr;
-			return;
-		}
+		Verify(m_memoryManager->allocateImageMemory(m_emissiveMipmapped.image, MemoryUsage::GpuOnly, m_emissiveMipmapped.allocation));
 
 		// Create full-mip-chain view for LOD sampling
 		vk::ImageViewCreateInfo viewInfo;
@@ -5031,9 +5000,7 @@ void VulkanPostProcessor::renderVolumetricFog(vk::CommandBuffer cmd)
 
 	// Map bloom UBO for volumetric fog UBO data
 	m_bloomUBOMapped = m_memoryManager->mapMemory(m_bloomUBOAlloc);
-	if (!m_bloomUBOMapped) {
-		return;
-	}
+	Verify(m_bloomUBOMapped);
 
 	// Fill volumetric fog UBO
 	graphics::generic_data::volumetric_fog_data volData;
@@ -5144,12 +5111,7 @@ void VulkanPostProcessor::renderVolumetricFog(vk::CommandBuffer cmd)
 
 	// Allocate Material descriptor set (Set 1)
 	vk::DescriptorSet materialSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Material);
-	if (!materialSet) {
-		cmd.endRenderPass();
-		m_memoryManager->unmapMemory(m_bloomUBOAlloc);
-		m_bloomUBOMapped = nullptr;
-		return;
-	}
+	Verify(materialSet);
 
 	{
 		auto fallbackBuf = bufferMgr->getFallbackUniformBuffer();
@@ -5266,12 +5228,7 @@ void VulkanPostProcessor::renderVolumetricFog(vk::CommandBuffer cmd)
 
 	// Allocate PerDraw descriptor set (Set 2) with volumetric fog UBO
 	vk::DescriptorSet perDrawSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::PerDraw);
-	if (!perDrawSet) {
-		cmd.endRenderPass();
-		m_memoryManager->unmapMemory(m_bloomUBOAlloc);
-		m_bloomUBOMapped = nullptr;
-		return;
-	}
+	Verify(perDrawSet);
 
 	{
 		Assertion(m_bloomUBOCursor < BLOOM_UBO_MAX_SLOTS, "Fog UBO slot overflow!");

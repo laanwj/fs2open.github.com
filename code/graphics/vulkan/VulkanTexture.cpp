@@ -939,11 +939,10 @@ bool VulkanTextureManager::upload3DTexture(int handle, bitmap* bm, int texDepth)
 
 	// Copy data to staging buffer
 	void* mapped = m_memoryManager->mapMemory(stagingAllocation);
-	if (mapped) {
-		memcpy(mapped, reinterpret_cast<const void*>(bm->data), dataSize);
-		m_memoryManager->flushMemory(stagingAllocation, 0, dataSize);
-		m_memoryManager->unmapMemory(stagingAllocation);
-	}
+	Verify(mapped);
+	memcpy(mapped, reinterpret_cast<const void*>(bm->data), dataSize);
+	m_memoryManager->flushMemory(stagingAllocation, 0, dataSize);
+	m_memoryManager->unmapMemory(stagingAllocation);
 
 	// Record transitions + copy and submit
 	vk::CommandBuffer cmd = beginSingleTimeCommands();
@@ -1258,29 +1257,28 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 
 	// Copy data to staging buffer
 	void* mapped = m_memoryManager->mapMemory(stagingAllocation);
-	if (mapped) {
-		if (isCompressed) {
-			// Compressed data: copy raw block data directly (includes all mip levels)
-			memcpy(mapped, reinterpret_cast<const void*>(bm->data), dataSize);
-		} else if (bm->bpp == 24) {
-			// Convert BGR (3 bytes) to BGRA (4 bytes), adding alpha=255
-			const uint8_t* src = reinterpret_cast<const uint8_t*>(bm->data);
-			uint8_t* dst = static_cast<uint8_t*>(mapped);
-			size_t pixelCount = width * height;
-			for (size_t i = 0; i < pixelCount; ++i) {
-				dst[0] = src[0];  // B
-				dst[1] = src[1];  // G
-				dst[2] = src[2];  // R
-				dst[3] = 255;     // A
-				src += 3;
-				dst += 4;
-			}
-		} else {
-			memcpy(mapped, reinterpret_cast<const void*>(bm->data), dataSize);
+	Verify(mapped);
+	if (isCompressed) {
+		// Compressed data: copy raw block data directly (includes all mip levels)
+		memcpy(mapped, reinterpret_cast<const void*>(bm->data), dataSize);
+	} else if (bm->bpp == 24) {
+		// Convert BGR (3 bytes) to BGRA (4 bytes), adding alpha=255
+		const uint8_t* src = reinterpret_cast<const uint8_t*>(bm->data);
+		uint8_t* dst = static_cast<uint8_t*>(mapped);
+		size_t pixelCount = width * height;
+		for (size_t i = 0; i < pixelCount; ++i) {
+			dst[0] = src[0];  // B
+			dst[1] = src[1];  // G
+			dst[2] = src[2];  // R
+			dst[3] = 255;     // A
+			src += 3;
+			dst += 4;
 		}
-		m_memoryManager->flushMemory(stagingAllocation, 0, dataSize);
-		m_memoryManager->unmapMemory(stagingAllocation);
+	} else {
+		memcpy(mapped, reinterpret_cast<const void*>(bm->data), dataSize);
 	}
+	m_memoryManager->flushMemory(stagingAllocation, 0, dataSize);
+	m_memoryManager->unmapMemory(stagingAllocation);
 
 	// Record transitions + copy (+ optional mipmap generation) and submit async
 	vk::CommandBuffer cmd = beginSingleTimeCommands();
@@ -1617,33 +1615,29 @@ void VulkanTextureManager::update_texture(int bitmap_handle, int bpp, const ubyt
 		return;
 	}
 
-	if (!m_memoryManager->allocateBufferMemory(stagingBuffer, MemoryUsage::CpuOnly, stagingAllocation)) {
-		m_device.destroyBuffer(stagingBuffer);
-		return;
-	}
+	Verify(m_memoryManager->allocateBufferMemory(stagingBuffer, MemoryUsage::CpuOnly, stagingAllocation));
 
 	// Copy data to staging buffer
 	void* mapped = m_memoryManager->mapMemory(stagingAllocation);
-	if (mapped) {
-		if (bpp == 24) {
-			// Convert BGR (3 bytes) to BGRA (4 bytes), adding alpha=255
-			const uint8_t* src = data;
-			uint8_t* dst = static_cast<uint8_t*>(mapped);
-			size_t pixelCount = w * h;
-			for (size_t i = 0; i < pixelCount; ++i) {
-				dst[0] = src[0];
-				dst[1] = src[1];
-				dst[2] = src[2];
-				dst[3] = 255;
-				src += 3;
-				dst += 4;
-			}
-		} else {
-			memcpy(mapped, data, dataSize);
+	Verify(mapped);
+	if (bpp == 24) {
+		// Convert BGR (3 bytes) to BGRA (4 bytes), adding alpha=255
+		const uint8_t* src = data;
+		uint8_t* dst = static_cast<uint8_t*>(mapped);
+		size_t pixelCount = w * h;
+		for (size_t i = 0; i < pixelCount; ++i) {
+			dst[0] = src[0];
+			dst[1] = src[1];
+			dst[2] = src[2];
+			dst[3] = 255;
+			src += 3;
+			dst += 4;
 		}
-		m_memoryManager->flushMemory(stagingAllocation, 0, dataSize);
-		m_memoryManager->unmapMemory(stagingAllocation);
+	} else {
+		memcpy(mapped, data, dataSize);
 	}
+	m_memoryManager->flushMemory(stagingAllocation, 0, dataSize);
+	m_memoryManager->unmapMemory(stagingAllocation);
 
 	// Record transitions + copy into a single command buffer and submit async
 	vk::CommandBuffer cmd = beginSingleTimeCommands();

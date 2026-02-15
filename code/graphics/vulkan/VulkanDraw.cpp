@@ -121,21 +121,17 @@ void vulkan_update_transform_buffer(void* data, size_t size)
 			return;
 		}
 
-		if (!memManager->allocateBufferMemory(newBuffer, MemoryUsage::CpuToGpu, newAllocation)) {
-			device.destroyBuffer(newBuffer);
-			mprintf(("vulkan_update_transform_buffer: Failed to allocate memory\n"));
-			return;
-		}
+		Verify(memManager->allocateBufferMemory(newBuffer, MemoryUsage::CpuToGpu, newAllocation));
 
 		// Copy data already written this frame from old buffer
 		if (tb.buffer && tb.writeOffset > 0) {
 			void* oldMapped = memManager->mapMemory(tb.allocation);
 			void* newMapped = memManager->mapMemory(newAllocation);
-			if (oldMapped && newMapped) {
-				memcpy(newMapped, oldMapped, tb.writeOffset);
-			}
-			if (oldMapped) memManager->unmapMemory(tb.allocation);
-			if (newMapped) memManager->unmapMemory(newAllocation);
+			Verify(oldMapped);
+			Verify(newMapped);
+			memcpy(newMapped, oldMapped, tb.writeOffset);
+			memManager->unmapMemory(tb.allocation);
+			memManager->unmapMemory(newAllocation);
 		}
 
 		// Defer destruction of old buffer
@@ -151,11 +147,10 @@ void vulkan_update_transform_buffer(void* data, size_t size)
 
 	// Upload new data at the aligned offset
 	void* mapped = memManager->mapMemory(tb.allocation);
-	if (mapped) {
-		memcpy(static_cast<char*>(mapped) + alignedOffset, data, size);
-		memManager->flushMemory(tb.allocation, alignedOffset, size);
-		memManager->unmapMemory(tb.allocation);
-	}
+	Verify(mapped);
+	memcpy(static_cast<char*>(mapped) + alignedOffset, data, size);
+	memManager->flushMemory(tb.allocation, alignedOffset, size);
+	memManager->unmapMemory(tb.allocation);
 
 	tb.lastUploadOffset = alignedOffset;
 	tb.lastUploadSize = size;
@@ -1221,159 +1216,137 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 
 		// Set 0: Global - bindings: 0=Lights UBO, 1=DeferredGlobals UBO, 2=Shadow tex, 3=Env cube, 4=Irr cube
 		vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
-		Assertion(globalSet, "Failed to allocate Global descriptor set — draw would use stale descriptors!");
-		if (globalSet) {
-			// Pre-initialize ALL bindings with fallback values
-			if (fallbackUBO) {
-				descManager->updateUniformBuffer(globalSet, 0, fallbackUBO, 0, fallbackUBOSize);
-				descManager->updateUniformBuffer(globalSet, 1, fallbackUBO, 0, fallbackUBOSize);
-			}
-			if (fallbackSampler && fallbackView) {
-				descManager->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
-			}
-			// Bindings 3-4 are samplerCube — use fallback cubemap view
-			vk::ImageView fallbackCubeView = texManager->getFallbackCubeView();
-			if (fallbackSampler && fallbackCubeView) {
-				descManager->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
-				descManager->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
+		Verify(globalSet);
+		// Pre-initialize ALL bindings with fallback values
+		descManager->updateUniformBuffer(globalSet, 0, fallbackUBO, 0, fallbackUBOSize);
+		descManager->updateUniformBuffer(globalSet, 1, fallbackUBO, 0, fallbackUBOSize);
+		descManager->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
+		// Bindings 3-4 are samplerCube — use fallback cubemap view
+		vk::ImageView fallbackCubeView = texManager->getFallbackCubeView();
+		descManager->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
+		descManager->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
+
+		// Overwrite with actual pending uniform bindings
+		for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
+			if (!m_pendingUniformBindings[i].valid) {
+				continue;
 			}
 
-			// Overwrite with actual pending uniform bindings
-			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
-				if (!m_pendingUniformBindings[i].valid) {
-					continue;
-				}
+			uniform_block_type blockType = static_cast<uniform_block_type>(i);
+			DescriptorSetIndex setIndex;
+			uint32_t binding;
 
-				uniform_block_type blockType = static_cast<uniform_block_type>(i);
-				DescriptorSetIndex setIndex;
-				uint32_t binding;
-
-				if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
-				    setIndex == DescriptorSetIndex::Global) {
-					descManager->updateUniformBuffer(globalSet, binding,
-					                                  getBuffer(m_pendingUniformBindings[i]),
-					                                  getResolvedOffset(m_pendingUniformBindings[i]),
-					                                  m_pendingUniformBindings[i].size);
-				}
+			if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
+			    setIndex == DescriptorSetIndex::Global) {
+				descManager->updateUniformBuffer(globalSet, binding,
+				                                  getBuffer(m_pendingUniformBindings[i]),
+				                                  getResolvedOffset(m_pendingUniformBindings[i]),
+				                                  m_pendingUniformBindings[i].size);
 			}
-			stateTracker->bindDescriptorSet(DescriptorSetIndex::Global, globalSet);
 		}
+		stateTracker->bindDescriptorSet(DescriptorSetIndex::Global, globalSet);
 
 		// Set 1: Material - bindings: 0=ModelData UBO, 1=Texture array, 2=DecalGlobals UBO
 		vk::DescriptorSet materialSet = descManager->allocateFrameSet(DescriptorSetIndex::Material);
-		Assertion(materialSet, "Failed to allocate Material descriptor set — draw would use stale descriptors!");
-		if (materialSet) {
-			// Pre-initialize UBO bindings with fallback
-			if (fallbackUBO) {
-				descManager->updateUniformBuffer(materialSet, 0, fallbackUBO, 0, fallbackUBOSize);
-				descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
-				// Binding 3: Transform buffer SSBO — fallback to the zero UBO
-				descManager->updateStorageBuffer(materialSet, 3, fallbackUBO, 0, fallbackUBOSize);
-			}
+		Verify(materialSet);
+		// Pre-initialize UBO bindings with fallback
+		descManager->updateUniformBuffer(materialSet, 0, fallbackUBO, 0, fallbackUBOSize);
+		descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
+		// Binding 3: Transform buffer SSBO — fallback to the zero UBO
+		descManager->updateStorageBuffer(materialSet, 3, fallbackUBO, 0, fallbackUBOSize);
 
-			// Binding 4: depth map for soft particles — use override if set, else fallback
-			{
-				vk::ImageView depthView = m_depthTextureOverride ? m_depthTextureOverride
-				                                                  : texManager->getFallbackTextureView2D();
-				vk::Sampler depthSampler = m_depthSamplerOverride ? m_depthSamplerOverride
-				                                                   : texManager->getDefaultSampler();
-				if (depthView && depthSampler) {
-					descManager->updateTexture(materialSet, 4, depthView, depthSampler);
-				}
-			}
-
-			// Binding 5: scene color / frameBuffer for distortion — use override if set, else fallback
-			{
-				vk::ImageView sceneView = m_sceneColorOverride ? m_sceneColorOverride
-				                                                : texManager->getFallbackTextureView2D();
-				vk::Sampler sceneSampler = m_sceneColorSamplerOverride ? m_sceneColorSamplerOverride
-				                                                       : texManager->getDefaultSampler();
-				if (sceneView && sceneSampler) {
-					descManager->updateTexture(materialSet, 5, sceneView, sceneSampler);
-				}
-			}
-
-			// Binding 6: distortion map — use override if set, else fallback
-			{
-				vk::ImageView distView = m_distMapOverride ? m_distMapOverride
-				                                            : texManager->getFallbackTextureView2D();
-				vk::Sampler distSampler = m_distMapSamplerOverride ? m_distMapSamplerOverride
-				                                                    : texManager->getDefaultSampler();
-				if (distView && distSampler) {
-					descManager->updateTexture(materialSet, 6, distView, distSampler);
-				}
-			}
-
-			// Bind actual transform buffer if available (with per-upload offset)
-			{
-				uint32_t tfIdx = descManager->getCurrentFrame();
-				auto& tf = g_transformBuffers[tfIdx];
-				if (tf.buffer && tf.lastUploadSize > 0) {
-					descManager->updateStorageBuffer(materialSet, 3, tf.buffer,
-					                                  static_cast<vk::DeviceSize>(tf.lastUploadOffset),
-					                                  static_cast<vk::DeviceSize>(tf.lastUploadSize));
-				}
-			}
-
-			// Bind textures (already handles fallback textures for unbound slots)
-			bindMaterialTextures(mat, materialSet);
-
-			// Overwrite with actual pending uniform bindings
-			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
-				if (!m_pendingUniformBindings[i].valid) {
-					continue;
-				}
-
-				uniform_block_type blockType = static_cast<uniform_block_type>(i);
-				DescriptorSetIndex setIndex;
-				uint32_t binding;
-
-				if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
-				    setIndex == DescriptorSetIndex::Material) {
-					descManager->updateUniformBuffer(materialSet, binding,
-					                                  getBuffer(m_pendingUniformBindings[i]),
-					                                  getResolvedOffset(m_pendingUniformBindings[i]),
-					                                  m_pendingUniformBindings[i].size);
-				}
-			}
-
-			stateTracker->bindDescriptorSet(DescriptorSetIndex::Material, materialSet);
+		// Binding 4: depth map for soft particles — use override if set, else fallback
+		{
+			vk::ImageView depthView = m_depthTextureOverride ? m_depthTextureOverride
+			                                                  : texManager->getFallbackTextureView2D();
+			vk::Sampler depthSampler = m_depthSamplerOverride ? m_depthSamplerOverride
+			                                                   : texManager->getDefaultSampler();
+			descManager->updateTexture(materialSet, 4, depthView, depthSampler);
 		}
+
+		// Binding 5: scene color / frameBuffer for distortion — use override if set, else fallback
+		{
+			vk::ImageView sceneView = m_sceneColorOverride ? m_sceneColorOverride
+			                                                : texManager->getFallbackTextureView2D();
+			vk::Sampler sceneSampler = m_sceneColorSamplerOverride ? m_sceneColorSamplerOverride
+			                                                       : texManager->getDefaultSampler();
+			descManager->updateTexture(materialSet, 5, sceneView, sceneSampler);
+		}
+
+		// Binding 6: distortion map — use override if set, else fallback
+		{
+			vk::ImageView distView = m_distMapOverride ? m_distMapOverride
+			                                            : texManager->getFallbackTextureView2D();
+			vk::Sampler distSampler = m_distMapSamplerOverride ? m_distMapSamplerOverride
+			                                                    : texManager->getDefaultSampler();
+			descManager->updateTexture(materialSet, 6, distView, distSampler);
+		}
+
+		// Bind actual transform buffer if available (with per-upload offset)
+		{
+			uint32_t tfIdx = descManager->getCurrentFrame();
+			auto& tf = g_transformBuffers[tfIdx];
+			if (tf.buffer && tf.lastUploadSize > 0) {
+				descManager->updateStorageBuffer(materialSet, 3, tf.buffer,
+				                                  static_cast<vk::DeviceSize>(tf.lastUploadOffset),
+				                                  static_cast<vk::DeviceSize>(tf.lastUploadSize));
+			}
+		}
+
+		// Bind textures (already handles fallback textures for unbound slots)
+		bindMaterialTextures(mat, materialSet);
+
+		// Overwrite with actual pending uniform bindings
+		for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
+			if (!m_pendingUniformBindings[i].valid) {
+				continue;
+			}
+
+			uniform_block_type blockType = static_cast<uniform_block_type>(i);
+			DescriptorSetIndex setIndex;
+			uint32_t binding;
+
+			if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
+			    setIndex == DescriptorSetIndex::Material) {
+				descManager->updateUniformBuffer(materialSet, binding,
+				                                  getBuffer(m_pendingUniformBindings[i]),
+				                                  getResolvedOffset(m_pendingUniformBindings[i]),
+				                                  m_pendingUniformBindings[i].size);
+			}
+		}
+
+		stateTracker->bindDescriptorSet(DescriptorSetIndex::Material, materialSet);
 
 		// Set 2: PerDraw - bindings: 0=GenericData, 1=Matrices, 2=NanoVGData, 3=DecalInfo, 4=MovieData
 		vk::DescriptorSet perDrawSet = descManager->allocateFrameSet(DescriptorSetIndex::PerDraw);
-		Assertion(perDrawSet, "Failed to allocate PerDraw descriptor set — draw would use stale descriptors!");
-		if (perDrawSet) {
-			// Pre-initialize ALL UBO bindings with fallback
-			if (fallbackUBO) {
-				descManager->updateUniformBuffer(perDrawSet, 0, fallbackUBO, 0, fallbackUBOSize);
-				descManager->updateUniformBuffer(perDrawSet, 1, fallbackUBO, 0, fallbackUBOSize);
-				descManager->updateUniformBuffer(perDrawSet, 2, fallbackUBO, 0, fallbackUBOSize);
-				descManager->updateUniformBuffer(perDrawSet, 3, fallbackUBO, 0, fallbackUBOSize);
-				descManager->updateUniformBuffer(perDrawSet, 4, fallbackUBO, 0, fallbackUBOSize);
+		Verify(perDrawSet);
+		// Pre-initialize ALL UBO bindings with fallback
+		descManager->updateUniformBuffer(perDrawSet, 0, fallbackUBO, 0, fallbackUBOSize);
+		descManager->updateUniformBuffer(perDrawSet, 1, fallbackUBO, 0, fallbackUBOSize);
+		descManager->updateUniformBuffer(perDrawSet, 2, fallbackUBO, 0, fallbackUBOSize);
+		descManager->updateUniformBuffer(perDrawSet, 3, fallbackUBO, 0, fallbackUBOSize);
+		descManager->updateUniformBuffer(perDrawSet, 4, fallbackUBO, 0, fallbackUBOSize);
+
+		// Overwrite with actual pending uniform bindings
+		for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
+			if (!m_pendingUniformBindings[i].valid) {
+				continue;
 			}
 
-			// Overwrite with actual pending uniform bindings
-			for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
-				if (!m_pendingUniformBindings[i].valid) {
-					continue;
-				}
+			uniform_block_type blockType = static_cast<uniform_block_type>(i);
+			DescriptorSetIndex setIndex;
+			uint32_t binding;
 
-				uniform_block_type blockType = static_cast<uniform_block_type>(i);
-				DescriptorSetIndex setIndex;
-				uint32_t binding;
-
-				if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
-				    setIndex == DescriptorSetIndex::PerDraw) {
-					descManager->updateUniformBuffer(perDrawSet, binding,
-					                                  getBuffer(m_pendingUniformBindings[i]),
-					                                  getResolvedOffset(m_pendingUniformBindings[i]),
-					                                  m_pendingUniformBindings[i].size);
-				}
+			if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
+			    setIndex == DescriptorSetIndex::PerDraw) {
+				descManager->updateUniformBuffer(perDrawSet, binding,
+				                                  getBuffer(m_pendingUniformBindings[i]),
+				                                  getResolvedOffset(m_pendingUniformBindings[i]),
+				                                  m_pendingUniformBindings[i].size);
 			}
-
-			stateTracker->bindDescriptorSet(DescriptorSetIndex::PerDraw, perDrawSet);
 		}
+
+		stateTracker->bindDescriptorSet(DescriptorSetIndex::PerDraw, perDrawSet);
 	}
 
 	// Update tracked state for FSO compatibility
@@ -2237,109 +2210,96 @@ void vulkan_calculate_irrmap()
 
 		// Set 0: Global (all fallback)
 		vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
-		if (globalSet) {
-			if (fallbackUBO) {
-				descManager->updateUniformBuffer(globalSet, 0, fallbackUBO, 0, fallbackUBOSize);
-				descManager->updateUniformBuffer(globalSet, 1, fallbackUBO, 0, fallbackUBOSize);
-			}
-			if (defaultSampler && fallbackView) {
-				descManager->updateTexture(globalSet, 2, fallbackView, defaultSampler);
-			}
-			if (defaultSampler && fallbackCubeView) {
-				descManager->updateTexture(globalSet, 3, fallbackCubeView, defaultSampler);
-				descManager->updateTexture(globalSet, 4, fallbackCubeView, defaultSampler);
-			}
-		}
+		Verify(globalSet);
+		descManager->updateUniformBuffer(globalSet, 0, fallbackUBO, 0, fallbackUBOSize);
+		descManager->updateUniformBuffer(globalSet, 1, fallbackUBO, 0, fallbackUBOSize);
+		descManager->updateTexture(globalSet, 2, fallbackView, defaultSampler);
+		descManager->updateTexture(globalSet, 3, fallbackCubeView, defaultSampler);
+		descManager->updateTexture(globalSet, 4, fallbackCubeView, defaultSampler);
 
 		// Set 1: Material (envmap cubemap at binding 1)
 		vk::DescriptorSet materialSet = descManager->allocateFrameSet(DescriptorSetIndex::Material);
-		if (materialSet) {
-			// Binding 0: ModelData UBO (fallback)
-			if (fallbackUBO) {
-				descManager->updateUniformBuffer(materialSet, 0, fallbackUBO, 0, fallbackUBOSize);
-				descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
+		Verify(materialSet);
+		// Binding 0: ModelData UBO (fallback)
+		descManager->updateUniformBuffer(materialSet, 0, fallbackUBO, 0, fallbackUBOSize);
+		descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
+
+		// Binding 1: envmap cubemap (element 0) + fallback for rest of array
+		{
+			vk::DescriptorImageInfo envInfo;
+			envInfo.sampler = defaultSampler;
+			envInfo.imageView = envmapView;
+			envInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+			vk::WriteDescriptorSet envWrite;
+			envWrite.dstSet = materialSet;
+			envWrite.dstBinding = 1;
+			envWrite.dstArrayElement = 0;
+			envWrite.descriptorCount = 1;
+			envWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+			envWrite.pImageInfo = &envInfo;
+
+			// Fill remaining texture array elements with fallback 2D
+			std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1> fallbackImages;
+			for (auto& fi : fallbackImages) {
+				fi.sampler = defaultSampler;
+				fi.imageView = fallbackView2D;
+				fi.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 			}
 
-			// Binding 1: envmap cubemap (element 0) + fallback for rest of array
-			{
-				vk::DescriptorImageInfo envInfo;
-				envInfo.sampler = defaultSampler;
-				envInfo.imageView = envmapView;
-				envInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			vk::WriteDescriptorSet fallbackTexWrite;
+			fallbackTexWrite.dstSet = materialSet;
+			fallbackTexWrite.dstBinding = 1;
+			fallbackTexWrite.dstArrayElement = 1;
+			fallbackTexWrite.descriptorCount = static_cast<uint32_t>(fallbackImages.size());
+			fallbackTexWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+			fallbackTexWrite.pImageInfo = fallbackImages.data();
 
-				vk::WriteDescriptorSet envWrite;
-				envWrite.dstSet = materialSet;
-				envWrite.dstBinding = 1;
-				envWrite.dstArrayElement = 0;
-				envWrite.descriptorCount = 1;
-				envWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-				envWrite.pImageInfo = &envInfo;
+			// Binding 3: SSBO (fallback)
+			vk::DescriptorBufferInfo ssboBufInfo;
+			ssboBufInfo.buffer = fallbackUBO;
+			ssboBufInfo.offset = 0;
+			ssboBufInfo.range = fallbackUBOSize;
 
-				// Fill remaining texture array elements with fallback 2D
-				std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS - 1> fallbackImages;
-				for (auto& fi : fallbackImages) {
-					fi.sampler = defaultSampler;
-					fi.imageView = fallbackView2D;
-					fi.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-				}
+			vk::WriteDescriptorSet ssboWrite;
+			ssboWrite.dstSet = materialSet;
+			ssboWrite.dstBinding = 3;
+			ssboWrite.dstArrayElement = 0;
+			ssboWrite.descriptorCount = 1;
+			ssboWrite.descriptorType = vk::DescriptorType::eStorageBuffer;
+			ssboWrite.pBufferInfo = &ssboBufInfo;
 
-				vk::WriteDescriptorSet fallbackTexWrite;
-				fallbackTexWrite.dstSet = materialSet;
-				fallbackTexWrite.dstBinding = 1;
-				fallbackTexWrite.dstArrayElement = 1;
-				fallbackTexWrite.descriptorCount = static_cast<uint32_t>(fallbackImages.size());
-				fallbackTexWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-				fallbackTexWrite.pImageInfo = fallbackImages.data();
+			// Bindings 4-6: fallback textures
+			vk::DescriptorImageInfo fallbackImgInfo;
+			fallbackImgInfo.sampler = defaultSampler;
+			fallbackImgInfo.imageView = fallbackView2D;
+			fallbackImgInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
-				// Binding 3: SSBO (fallback)
-				vk::DescriptorBufferInfo ssboBufInfo;
-				ssboBufInfo.buffer = fallbackUBO;
-				ssboBufInfo.offset = 0;
-				ssboBufInfo.range = fallbackUBOSize;
+			vk::WriteDescriptorSet b4Write, b5Write, b6Write;
+			b4Write.dstSet = materialSet; b4Write.dstBinding = 4; b4Write.dstArrayElement = 0;
+			b4Write.descriptorCount = 1; b4Write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+			b4Write.pImageInfo = &fallbackImgInfo;
 
-				vk::WriteDescriptorSet ssboWrite;
-				ssboWrite.dstSet = materialSet;
-				ssboWrite.dstBinding = 3;
-				ssboWrite.dstArrayElement = 0;
-				ssboWrite.descriptorCount = 1;
-				ssboWrite.descriptorType = vk::DescriptorType::eStorageBuffer;
-				ssboWrite.pBufferInfo = &ssboBufInfo;
+			b5Write = b4Write; b5Write.dstBinding = 5;
+			b6Write = b4Write; b6Write.dstBinding = 6;
 
-				// Bindings 4-6: fallback textures
-				vk::DescriptorImageInfo fallbackImgInfo;
-				fallbackImgInfo.sampler = defaultSampler;
-				fallbackImgInfo.imageView = fallbackView2D;
-				fallbackImgInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-
-				vk::WriteDescriptorSet b4Write, b5Write, b6Write;
-				b4Write.dstSet = materialSet; b4Write.dstBinding = 4; b4Write.dstArrayElement = 0;
-				b4Write.descriptorCount = 1; b4Write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-				b4Write.pImageInfo = &fallbackImgInfo;
-
-				b5Write = b4Write; b5Write.dstBinding = 5;
-				b6Write = b4Write; b6Write.dstBinding = 6;
-
-				std::array<vk::WriteDescriptorSet, 6> writes = {envWrite, fallbackTexWrite, ssboWrite, b4Write, b5Write, b6Write};
-				device.updateDescriptorSets(writes, {});
-			}
+			std::array<vk::WriteDescriptorSet, 6> writes = {envWrite, fallbackTexWrite, ssboWrite, b4Write, b5Write, b6Write};
+			device.updateDescriptorSets(writes, {});
 		}
 
 		// Set 2: PerDraw (face UBO at binding 0)
 		vk::DescriptorSet perDrawSet = descManager->allocateFrameSet(DescriptorSetIndex::PerDraw);
-		if (perDrawSet) {
-			descManager->updateUniformBuffer(perDrawSet, 0, faceUBO,
-				static_cast<vk::DeviceSize>(face) * UBO_SLOT_SIZE, UBO_SLOT_SIZE);
-			// Fill remaining per-draw bindings with fallback
-			for (uint32_t b = 1; b <= 4; ++b) {
-				descManager->updateUniformBuffer(perDrawSet, b, fallbackUBO, 0, fallbackUBOSize);
-			}
+		Verify(perDrawSet);
+		descManager->updateUniformBuffer(perDrawSet, 0, faceUBO,
+			static_cast<vk::DeviceSize>(face) * UBO_SLOT_SIZE, UBO_SLOT_SIZE);
+		// Fill remaining per-draw bindings with fallback
+		for (uint32_t b = 1; b <= 4; ++b) {
+			descManager->updateUniformBuffer(perDrawSet, b, fallbackUBO, 0, fallbackUBOSize);
 		}
 
 		// Bind all descriptor sets
-		if (globalSet && materialSet && perDrawSet) {
-			cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout,
-				0, {globalSet, materialSet, perDrawSet}, {});
-		}
+		cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout,
+			0, {globalSet, materialSet, perDrawSet}, {});
 
 		// Draw fullscreen triangle
 		cmd.draw(3, 1, 0, 0);

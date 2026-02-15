@@ -183,59 +183,50 @@ void vulkan_deferred_lighting_begin(bool clearNonColorBufs)
 				auto fallbackSampler = texMgr->getDefaultSampler();
 
 				vk::DescriptorSet globalSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Global);
-				if (globalSet) {
-					descriptorMgr->updateUniformBuffer(globalSet, 0, fallbackBuf, 0, fallbackBufSize);
-					descriptorMgr->updateUniformBuffer(globalSet, 1, fallbackBuf, 0, fallbackBufSize);
-					if (fallbackView && fallbackSampler) {
-						descriptorMgr->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
-					}
-					auto fallbackCubeView = texMgr->getFallbackCubeView();
-					if (fallbackCubeView && fallbackSampler) {
-						descriptorMgr->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
-						descriptorMgr->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
-					}
-					cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-						pipelineMgr->getPipelineLayout(),
-						static_cast<uint32_t>(DescriptorSetIndex::Global), globalSet, {});
-				}
+				Verify(globalSet);
+				descriptorMgr->updateUniformBuffer(globalSet, 0, fallbackBuf, 0, fallbackBufSize);
+				descriptorMgr->updateUniformBuffer(globalSet, 1, fallbackBuf, 0, fallbackBufSize);
+				descriptorMgr->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
+				auto fallbackCubeView = texMgr->getFallbackCubeView();
+				descriptorMgr->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
+				descriptorMgr->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
+				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+					pipelineMgr->getPipelineLayout(),
+					static_cast<uint32_t>(DescriptorSetIndex::Global), globalSet, {});
 
 				vk::DescriptorSet materialSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Material);
-				if (materialSet) {
-					descriptorMgr->updateUniformBuffer(materialSet, 0, fallbackBuf, 0, fallbackBufSize);
-					descriptorMgr->updateUniformBuffer(materialSet, 2, fallbackBuf, 0, fallbackBufSize);
-					descriptorMgr->updateStorageBuffer(materialSet, 3, fallbackBuf, 0, fallbackBufSize);
+				Verify(materialSet);
+				descriptorMgr->updateUniformBuffer(materialSet, 0, fallbackBuf, 0, fallbackBufSize);
+				descriptorMgr->updateUniformBuffer(materialSet, 2, fallbackBuf, 0, fallbackBufSize);
+				descriptorMgr->updateStorageBuffer(materialSet, 3, fallbackBuf, 0, fallbackBufSize);
 
-					// Build texture array with scene color at slot 0, fallback at slots 1-15
-					std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS> texImages;
-					texImages[0].sampler = pp->getSceneColorSampler();
-					texImages[0].imageView = pp->getSceneColorView();
-					texImages[0].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-					for (uint32_t slot = 1; slot < VulkanDescriptorManager::MAX_TEXTURE_BINDINGS; ++slot) {
-						texImages[slot].sampler = fallbackSampler;
-						texImages[slot].imageView = fallbackView;
-						texImages[slot].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-					}
-					descriptorMgr->updateTextureArray(materialSet, 1, texImages.data(), static_cast<uint32_t>(texImages.size()));
-
-					if (fallbackView && fallbackSampler) {
-						descriptorMgr->updateTexture(materialSet, 4, fallbackView, fallbackSampler);
-						descriptorMgr->updateTexture(materialSet, 5, fallbackView, fallbackSampler);
-						descriptorMgr->updateTexture(materialSet, 6, fallbackView, fallbackSampler);
-					}
-					cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-						pipelineMgr->getPipelineLayout(),
-						static_cast<uint32_t>(DescriptorSetIndex::Material), materialSet, {});
+				// Build texture array with scene color at slot 0, fallback at slots 1-15
+				std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS> texImages;
+				texImages[0].sampler = pp->getSceneColorSampler();
+				texImages[0].imageView = pp->getSceneColorView();
+				texImages[0].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+				for (uint32_t slot = 1; slot < VulkanDescriptorManager::MAX_TEXTURE_BINDINGS; ++slot) {
+					texImages[slot].sampler = fallbackSampler;
+					texImages[slot].imageView = fallbackView;
+					texImages[slot].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 				}
+				descriptorMgr->updateTextureArray(materialSet, 1, texImages.data(), static_cast<uint32_t>(texImages.size()));
+
+				descriptorMgr->updateTexture(materialSet, 4, fallbackView, fallbackSampler);
+				descriptorMgr->updateTexture(materialSet, 5, fallbackView, fallbackSampler);
+				descriptorMgr->updateTexture(materialSet, 6, fallbackView, fallbackSampler);
+				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+					pipelineMgr->getPipelineLayout(),
+					static_cast<uint32_t>(DescriptorSetIndex::Material), materialSet, {});
 
 				vk::DescriptorSet perDrawSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::PerDraw);
-				if (perDrawSet) {
-					for (uint32_t b = 0; b < 5; ++b) {
-						descriptorMgr->updateUniformBuffer(perDrawSet, b, fallbackBuf, 0, fallbackBufSize);
-					}
-					cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-						pipelineMgr->getPipelineLayout(),
-						static_cast<uint32_t>(DescriptorSetIndex::PerDraw), perDrawSet, {});
+				Verify(perDrawSet);
+				for (uint32_t b = 0; b < 5; ++b) {
+					descriptorMgr->updateUniformBuffer(perDrawSet, b, fallbackBuf, 0, fallbackBufSize);
 				}
+				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+					pipelineMgr->getPipelineLayout(),
+					static_cast<uint32_t>(DescriptorSetIndex::PerDraw), perDrawSet, {});
 
 				cmd.draw(3, 1, 0, 0);
 			}
@@ -432,92 +423,83 @@ void vulkan_deferred_lighting_msaa()
 
 			// Global set (fallback — resolve shader doesn't use global bindings)
 			vk::DescriptorSet globalSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Global);
-			if (globalSet) {
-				descriptorMgr->updateUniformBuffer(globalSet, 0, fallbackBuf, 0, fallbackBufSize);
-				descriptorMgr->updateUniformBuffer(globalSet, 1, fallbackBuf, 0, fallbackBufSize);
-				if (fallbackView && fallbackSampler) {
-					descriptorMgr->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
-				}
-				auto fallbackCubeView = texMgr->getFallbackCubeView();
-				if (fallbackCubeView && fallbackSampler) {
-					descriptorMgr->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
-					descriptorMgr->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
-				}
-				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-					pipelineMgr->getPipelineLayout(),
-					static_cast<uint32_t>(DescriptorSetIndex::Global), globalSet, {});
-			}
+			Verify(globalSet);
+			descriptorMgr->updateUniformBuffer(globalSet, 0, fallbackBuf, 0, fallbackBufSize);
+			descriptorMgr->updateUniformBuffer(globalSet, 1, fallbackBuf, 0, fallbackBufSize);
+			descriptorMgr->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
+			auto fallbackCubeView = texMgr->getFallbackCubeView();
+			descriptorMgr->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
+			descriptorMgr->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
+			cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+				pipelineMgr->getPipelineLayout(),
+				static_cast<uint32_t>(DescriptorSetIndex::Global), globalSet, {});
 
 			// Material set: All 6 MSAA textures in binding 1 array (elements 0-5)
 			// [0]=color, [1]=position, [2]=normal, [3]=specular, [4]=emissive, [5]=depth
 			vk::DescriptorSet materialSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::Material);
-			if (materialSet) {
-				descriptorMgr->updateUniformBuffer(materialSet, 0, fallbackBuf, 0, fallbackBufSize);
-				descriptorMgr->updateUniformBuffer(materialSet, 2, fallbackBuf, 0, fallbackBufSize);
-				descriptorMgr->updateStorageBuffer(materialSet, 3, fallbackBuf, 0, fallbackBufSize);
+			Verify(materialSet);
+			descriptorMgr->updateUniformBuffer(materialSet, 0, fallbackBuf, 0, fallbackBufSize);
+			descriptorMgr->updateUniformBuffer(materialSet, 2, fallbackBuf, 0, fallbackBufSize);
+			descriptorMgr->updateStorageBuffer(materialSet, 3, fallbackBuf, 0, fallbackBufSize);
 
-				// Build texture array: elements 0-5 are MSAA textures, 6-15 are fallback
-				vk::Sampler nearestSampler = texMgr->getSampler(
-					vk::Filter::eNearest, vk::Filter::eNearest,
-					vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false);
+			// Build texture array: elements 0-5 are MSAA textures, 6-15 are fallback
+			vk::Sampler nearestSampler = texMgr->getSampler(
+				vk::Filter::eNearest, vk::Filter::eNearest,
+				vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false);
 
-				std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS> texImages;
-				// MSAA textures at slots 0-5
-				texImages[0] = {nearestSampler, pp->getMsaaColorView(), vk::ImageLayout::eShaderReadOnlyOptimal};
-				texImages[1] = {nearestSampler, pp->getMsaaPositionView(), vk::ImageLayout::eShaderReadOnlyOptimal};
-				texImages[2] = {nearestSampler, pp->getMsaaNormalView(), vk::ImageLayout::eShaderReadOnlyOptimal};
-				texImages[3] = {nearestSampler, pp->getMsaaSpecularView(), vk::ImageLayout::eShaderReadOnlyOptimal};
-				texImages[4] = {nearestSampler, pp->getMsaaEmissiveView(), vk::ImageLayout::eShaderReadOnlyOptimal};
-				texImages[5] = {nearestSampler, pp->getMsaaDepthView(), vk::ImageLayout::eShaderReadOnlyOptimal};
-				// Remaining slots must also be multisampled (validation checks ALL
-				// elements even though the shader only accesses 0-5). Reuse the
-				// MSAA color view — content doesn't matter, only sample count.
-				for (uint32_t slot = 6; slot < VulkanDescriptorManager::MAX_TEXTURE_BINDINGS; ++slot) {
-					texImages[slot] = {nearestSampler, pp->getMsaaColorView(), vk::ImageLayout::eShaderReadOnlyOptimal};
-				}
-				descriptorMgr->updateTextureArray(materialSet, 1, texImages.data(), static_cast<uint32_t>(texImages.size()));
-
-				// Fallback for single-sampler bindings 4-6
-				if (fallbackView && fallbackSampler) {
-					descriptorMgr->updateTexture(materialSet, 4, fallbackView, fallbackSampler);
-					descriptorMgr->updateTexture(materialSet, 5, fallbackView, fallbackSampler);
-					descriptorMgr->updateTexture(materialSet, 6, fallbackView, fallbackSampler);
-				}
-
-				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-					pipelineMgr->getPipelineLayout(),
-					static_cast<uint32_t>(DescriptorSetIndex::Material), materialSet, {});
+			std::array<vk::DescriptorImageInfo, VulkanDescriptorManager::MAX_TEXTURE_BINDINGS> texImages;
+			// MSAA textures at slots 0-5
+			texImages[0] = {nearestSampler, pp->getMsaaColorView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+			texImages[1] = {nearestSampler, pp->getMsaaPositionView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+			texImages[2] = {nearestSampler, pp->getMsaaNormalView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+			texImages[3] = {nearestSampler, pp->getMsaaSpecularView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+			texImages[4] = {nearestSampler, pp->getMsaaEmissiveView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+			texImages[5] = {nearestSampler, pp->getMsaaDepthView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+			// Remaining slots must also be multisampled (validation checks ALL
+			// elements even though the shader only accesses 0-5). Reuse the
+			// MSAA color view — content doesn't matter, only sample count.
+			for (uint32_t slot = 6; slot < VulkanDescriptorManager::MAX_TEXTURE_BINDINGS; ++slot) {
+				texImages[slot] = {nearestSampler, pp->getMsaaColorView(), vk::ImageLayout::eShaderReadOnlyOptimal};
 			}
+			descriptorMgr->updateTextureArray(materialSet, 1, texImages.data(), static_cast<uint32_t>(texImages.size()));
+
+			// Fallback for single-sampler bindings 4-6
+			descriptorMgr->updateTexture(materialSet, 4, fallbackView, fallbackSampler);
+			descriptorMgr->updateTexture(materialSet, 5, fallbackView, fallbackSampler);
+			descriptorMgr->updateTexture(materialSet, 6, fallbackView, fallbackSampler);
+
+			cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+				pipelineMgr->getPipelineLayout(),
+				static_cast<uint32_t>(DescriptorSetIndex::Material), materialSet, {});
 
 			// PerDraw set: GenericData UBO with {samples, fov} at binding 0
 			vk::DescriptorSet perDrawSet = descriptorMgr->allocateFrameSet(DescriptorSetIndex::PerDraw);
-			if (perDrawSet) {
-				// Write resolve data to per-frame UBO slot
-				struct MsaaResolveData {
-					int samples;
-					float fov;
-				} resolveData;
-				resolveData.samples = Cmdline_msaa_enabled;
-				resolveData.fov = g3_get_hfov(Proj_fov);
+			Verify(perDrawSet);
+			// Write resolve data to per-frame UBO slot
+			struct MsaaResolveData {
+				int samples;
+				float fov;
+			} resolveData;
+			resolveData.samples = Cmdline_msaa_enabled;
+			resolveData.fov = g3_get_hfov(Proj_fov);
 
-				uint32_t frame = bufferMgr->getCurrentFrame();
-				uint32_t slotOffset = frame * 256;
-				memcpy(static_cast<uint8_t*>(pp->getMsaaResolveUBOMapped()) + slotOffset,
-					&resolveData, sizeof(resolveData));
+			uint32_t frame = bufferMgr->getCurrentFrame();
+			uint32_t slotOffset = frame * 256;
+			memcpy(static_cast<uint8_t*>(pp->getMsaaResolveUBOMapped()) + slotOffset,
+				&resolveData, sizeof(resolveData));
 
-				descriptorMgr->updateUniformBuffer(perDrawSet, 0,
-					pp->getMsaaResolveUBO(), slotOffset, 256);
+			descriptorMgr->updateUniformBuffer(perDrawSet, 0,
+				pp->getMsaaResolveUBO(), slotOffset, 256);
 
-				// Fallback for remaining PerDraw UBO bindings (1-4)
-				descriptorMgr->updateUniformBuffer(perDrawSet, 1, fallbackBuf, 0, fallbackBufSize);
-				descriptorMgr->updateUniformBuffer(perDrawSet, 2, fallbackBuf, 0, fallbackBufSize);
-				descriptorMgr->updateUniformBuffer(perDrawSet, 3, fallbackBuf, 0, fallbackBufSize);
-				descriptorMgr->updateUniformBuffer(perDrawSet, 4, fallbackBuf, 0, fallbackBufSize);
+			// Fallback for remaining PerDraw UBO bindings (1-4)
+			descriptorMgr->updateUniformBuffer(perDrawSet, 1, fallbackBuf, 0, fallbackBufSize);
+			descriptorMgr->updateUniformBuffer(perDrawSet, 2, fallbackBuf, 0, fallbackBufSize);
+			descriptorMgr->updateUniformBuffer(perDrawSet, 3, fallbackBuf, 0, fallbackBufSize);
+			descriptorMgr->updateUniformBuffer(perDrawSet, 4, fallbackBuf, 0, fallbackBufSize);
 
-				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-					pipelineMgr->getPipelineLayout(),
-					static_cast<uint32_t>(DescriptorSetIndex::PerDraw), perDrawSet, {});
-			}
+			cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+				pipelineMgr->getPipelineLayout(),
+				static_cast<uint32_t>(DescriptorSetIndex::PerDraw), perDrawSet, {});
 
 			cmd.draw(3, 1, 0, 0);
 		}
@@ -1093,118 +1075,103 @@ void vulkan_render_decals(decal_material* material_info,
 
 	// Set 0: Global
 	vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
-	if (globalSet) {
-		if (fallbackUBO) {
-			descManager->updateUniformBuffer(globalSet, 0, fallbackUBO, 0, fallbackUBOSize);
-			descManager->updateUniformBuffer(globalSet, 1, fallbackUBO, 0, fallbackUBOSize);
-		}
-		if (fallbackSampler && fallbackView) {
-			descManager->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
-		}
-		// Bindings 3-4 are samplerCube — use fallback cubemap view
-		vk::ImageView fallbackCubeView = texManager->getFallbackCubeView();
-		if (fallbackSampler && fallbackCubeView) {
-			descManager->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
-			descManager->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
-		}
-		stateTracker->bindDescriptorSet(DescriptorSetIndex::Global, globalSet);
-	}
+	Verify(globalSet);
+	descManager->updateUniformBuffer(globalSet, 0, fallbackUBO, 0, fallbackUBOSize);
+	descManager->updateUniformBuffer(globalSet, 1, fallbackUBO, 0, fallbackUBOSize);
+	descManager->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
+	// Bindings 3-4 are samplerCube — use fallback cubemap view
+	vk::ImageView fallbackCubeView = texManager->getFallbackCubeView();
+	descManager->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
+	descManager->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
+	stateTracker->bindDescriptorSet(DescriptorSetIndex::Global, globalSet);
 
 	// Set 1: Material
 	vk::DescriptorSet materialSet = descManager->allocateFrameSet(DescriptorSetIndex::Material);
-	if (materialSet) {
-		// Binding 0: ModelData UBO (fallback)
-		if (fallbackUBO) {
-			descManager->updateUniformBuffer(materialSet, 0, fallbackUBO, 0, fallbackUBOSize);
-			descManager->updateStorageBuffer(materialSet, 3, fallbackUBO, 0, fallbackUBOSize);
+	Verify(materialSet);
+	// Binding 0: ModelData UBO (fallback)
+	descManager->updateUniformBuffer(materialSet, 0, fallbackUBO, 0, fallbackUBOSize);
+	descManager->updateStorageBuffer(materialSet, 3, fallbackUBO, 0, fallbackUBOSize);
+
+	// Binding 1: decal textures (diffuse, glow, normal as texture array)
+	drawManager->bindMaterialTextures(material_info, materialSet);
+
+	// Binding 2: DecalGlobals UBO
+	{
+		size_t idx = static_cast<size_t>(uniform_block_type::DecalGlobals);
+		const auto& binding = drawManager->getPendingUniformBinding(idx);
+		if (binding.valid) {
+			descManager->updateUniformBuffer(materialSet, 2,
+				bufferManager->getVkBuffer(binding.bufferHandle),
+				binding.offset, binding.size);
+		} else {
+			descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
 		}
-
-		// Binding 1: decal textures (diffuse, glow, normal as texture array)
-		drawManager->bindMaterialTextures(material_info, materialSet);
-
-		// Binding 2: DecalGlobals UBO
-		{
-			size_t idx = static_cast<size_t>(uniform_block_type::DecalGlobals);
-			const auto& binding = drawManager->getPendingUniformBinding(idx);
-			if (binding.valid) {
-				descManager->updateUniformBuffer(materialSet, 2,
-					bufferManager->getVkBuffer(binding.bufferHandle),
-					binding.offset, binding.size);
-			} else if (fallbackUBO) {
-				descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
-			}
-		}
-
-		// Binding 4: scene depth copy (for fragment depth reconstruction)
-		{
-			vk::Sampler nearestSampler = texManager->getSampler(
-				vk::Filter::eNearest, vk::Filter::eNearest,
-				vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false);
-			vk::ImageView depthView = pp->getSceneDepthCopyView();
-			if (depthView && nearestSampler) {
-				descManager->updateTexture(materialSet, 4, depthView, nearestSampler);
-			} else if (fallbackView2D && fallbackSampler) {
-				descManager->updateTexture(materialSet, 4, fallbackView2D, fallbackSampler);
-			}
-		}
-
-		// Binding 5: scene color (fallback — not used by decals)
-		if (fallbackView2D && fallbackSampler) {
-			descManager->updateTexture(materialSet, 5, fallbackView2D, fallbackSampler);
-		}
-
-		// Binding 6: G-buffer normal copy (for angle rejection)
-		{
-			vk::Sampler nearestSampler = texManager->getSampler(
-				vk::Filter::eNearest, vk::Filter::eNearest,
-				vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false);
-			vk::ImageView normalView = pp->getGbufNormalCopyView();
-			if (normalView && nearestSampler) {
-				descManager->updateTexture(materialSet, 6, normalView, nearestSampler);
-			} else if (fallbackView2D && fallbackSampler) {
-				descManager->updateTexture(materialSet, 6, fallbackView2D, fallbackSampler);
-			}
-		}
-
-		stateTracker->bindDescriptorSet(DescriptorSetIndex::Material, materialSet);
 	}
+
+	// Binding 4: scene depth copy (for fragment depth reconstruction)
+	{
+		vk::Sampler nearestSampler = texManager->getSampler(
+			vk::Filter::eNearest, vk::Filter::eNearest,
+			vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false);
+		vk::ImageView depthView = pp->getSceneDepthCopyView();
+		if (depthView && nearestSampler) {
+			descManager->updateTexture(materialSet, 4, depthView, nearestSampler);
+		} else {
+			descManager->updateTexture(materialSet, 4, fallbackView2D, fallbackSampler);
+		}
+	}
+
+	// Binding 5: scene color (fallback — not used by decals)
+	descManager->updateTexture(materialSet, 5, fallbackView2D, fallbackSampler);
+
+	// Binding 6: G-buffer normal copy (for angle rejection)
+	{
+		vk::Sampler nearestSampler = texManager->getSampler(
+			vk::Filter::eNearest, vk::Filter::eNearest,
+			vk::SamplerAddressMode::eClampToEdge, false, 0.0f, false);
+		vk::ImageView normalView = pp->getGbufNormalCopyView();
+		if (normalView && nearestSampler) {
+			descManager->updateTexture(materialSet, 6, normalView, nearestSampler);
+		} else {
+			descManager->updateTexture(materialSet, 6, fallbackView2D, fallbackSampler);
+		}
+	}
+
+	stateTracker->bindDescriptorSet(DescriptorSetIndex::Material, materialSet);
 
 	// Set 2: PerDraw
 	vk::DescriptorSet perDrawSet = descManager->allocateFrameSet(DescriptorSetIndex::PerDraw);
-	if (perDrawSet) {
-		// Pre-initialize all bindings with fallback
-		if (fallbackUBO) {
-			descManager->updateUniformBuffer(perDrawSet, 0, fallbackUBO, 0, fallbackUBOSize);
-			descManager->updateUniformBuffer(perDrawSet, 1, fallbackUBO, 0, fallbackUBOSize);
-			descManager->updateUniformBuffer(perDrawSet, 2, fallbackUBO, 0, fallbackUBOSize);
-			descManager->updateUniformBuffer(perDrawSet, 3, fallbackUBO, 0, fallbackUBOSize);
-			descManager->updateUniformBuffer(perDrawSet, 4, fallbackUBO, 0, fallbackUBOSize);
-		}
+	Verify(perDrawSet);
+	// Pre-initialize all bindings with fallback
+	descManager->updateUniformBuffer(perDrawSet, 0, fallbackUBO, 0, fallbackUBOSize);
+	descManager->updateUniformBuffer(perDrawSet, 1, fallbackUBO, 0, fallbackUBOSize);
+	descManager->updateUniformBuffer(perDrawSet, 2, fallbackUBO, 0, fallbackUBOSize);
+	descManager->updateUniformBuffer(perDrawSet, 3, fallbackUBO, 0, fallbackUBOSize);
+	descManager->updateUniformBuffer(perDrawSet, 4, fallbackUBO, 0, fallbackUBOSize);
 
-		// Binding 1: Matrices UBO
-		{
-			size_t idx = static_cast<size_t>(uniform_block_type::Matrices);
-			const auto& binding = drawManager->getPendingUniformBinding(idx);
-			if (binding.valid) {
-				descManager->updateUniformBuffer(perDrawSet, 1,
-					bufferManager->getVkBuffer(binding.bufferHandle),
-					binding.offset, binding.size);
-			}
+	// Binding 1: Matrices UBO
+	{
+		size_t idx = static_cast<size_t>(uniform_block_type::Matrices);
+		const auto& binding = drawManager->getPendingUniformBinding(idx);
+		if (binding.valid) {
+			descManager->updateUniformBuffer(perDrawSet, 1,
+				bufferManager->getVkBuffer(binding.bufferHandle),
+				binding.offset, binding.size);
 		}
-
-		// Binding 3: DecalInfo UBO
-		{
-			size_t idx = static_cast<size_t>(uniform_block_type::DecalInfo);
-			const auto& binding = drawManager->getPendingUniformBinding(idx);
-			if (binding.valid) {
-				descManager->updateUniformBuffer(perDrawSet, 3,
-					bufferManager->getVkBuffer(binding.bufferHandle),
-					binding.offset, binding.size);
-			}
-		}
-
-		stateTracker->bindDescriptorSet(DescriptorSetIndex::PerDraw, perDrawSet);
 	}
+
+	// Binding 3: DecalInfo UBO
+	{
+		size_t idx = static_cast<size_t>(uniform_block_type::DecalInfo);
+		const auto& binding = drawManager->getPendingUniformBinding(idx);
+		if (binding.valid) {
+			descManager->updateUniformBuffer(perDrawSet, 3,
+				bufferManager->getVkBuffer(binding.bufferHandle),
+				binding.offset, binding.size);
+		}
+	}
+
+	stateTracker->bindDescriptorSet(DescriptorSetIndex::PerDraw, perDrawSet);
 
 	// Bind vertex buffers: binding 0 = box VBO, binding 1 = instance buffer
 	vk::Buffer boxVBO = bufferManager->getVkBuffer(buffers.Vbuffer_handle);
