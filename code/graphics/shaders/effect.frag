@@ -39,7 +39,9 @@ void main()
 	float sceneDepthLinear;
 	float fragDepthLinear;
 	if ( linear_depth == 1 ) {
-		sceneDepthLinear = -sceneDepth.z;
+		// Background pixels have position (0,0,0) from G-buffer clear;
+		// treat as infinitely far so particles remain visible against background
+		sceneDepthLinear = sceneDepth.z != 0.0 ? -sceneDepth.z : farZ;
 		fragDepthLinear = -fragPosition.z;
 	} else {
 		sceneDepthLinear = ( 2.0 * farZ * nearZ ) / ( farZ + nearZ - sceneDepth.x * (farZ-nearZ) );
