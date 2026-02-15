@@ -230,12 +230,6 @@ private:
 	                           vk::ImageType imageType = vk::ImageType::e2D);
 
 	/**
-	 * @brief Copy buffer data to image
-	 */
-	void copyBufferToImage(vk::Buffer buffer, vk::Image image,
-	                       uint32_t width, uint32_t height);
-
-	/**
 	 * @brief Begin single-time command buffer
 	 */
 	vk::CommandBuffer beginSingleTimeCommands();

@@ -151,8 +151,7 @@ struct DescriptorBindingInfo {
  * @brief Manages Vulkan descriptor sets, pools, and layouts
  *
  * Provides descriptor set allocation and update functionality.
- * Uses per-frame pools for transient descriptors and a persistent pool
- * for long-lived descriptors.
+ * Uses per-frame pools for transient descriptors.
  */
 class VulkanDescriptorManager {
 public:
@@ -194,13 +193,6 @@ public:
 	 * @return Allocated descriptor set, or null handle on failure
 	 */
 	vk::DescriptorSet allocateFrameSet(DescriptorSetIndex setIndex);
-
-	/**
-	 * @brief Allocate a persistent descriptor set
-	 * @param setIndex Which set type to allocate
-	 * @return Allocated descriptor set
-	 */
-	vk::DescriptorSet allocatePersistentSet(DescriptorSetIndex setIndex);
 
 	/**
 	 * @brief Begin a new frame - reset current frame's pool
@@ -260,9 +252,6 @@ private:
 
 	// Per-frame descriptor pools (growable - new pools added on demand)
 	std::array<SCP_vector<vk::UniqueDescriptorPool>, MAX_FRAMES_IN_FLIGHT> m_framePools;
-
-	// Persistent descriptor pool (for long-lived sets)
-	vk::UniqueDescriptorPool m_persistentPool;
 
 	uint32_t m_currentFrame = 0;
 	bool m_initialized = false;

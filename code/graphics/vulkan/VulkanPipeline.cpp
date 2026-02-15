@@ -251,12 +251,6 @@ bool VulkanPipelineManager::savePipelineCache(const SCP_string& filename)
 	return success;
 }
 
-void VulkanPipelineManager::clearPipelineCache()
-{
-	m_pipelines.clear();
-	m_vertexFormatCache.clear();
-}
-
 bool VulkanPipelineManager::needsFallbackAttribute(const vertex_layout& vertexLayout, shader_type shaderType,
                                                      VertexAttributeLocation location)
 {

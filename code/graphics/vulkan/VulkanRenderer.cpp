@@ -882,16 +882,6 @@ bool VulkanRenderer::createSwapChain(const PhysicalDeviceValues& deviceValues, v
 
 	return true;
 }
-vk::UniqueShaderModule VulkanRenderer::loadShader(const SCP_string& name)
-{
-	const auto def_file = defaults_get_file(name.c_str());
-
-	vk::ShaderModuleCreateInfo createInfo;
-	createInfo.codeSize = def_file.size;
-	createInfo.pCode = static_cast<const uint32_t*>(def_file.data);
-
-	return m_device->createShaderModuleUnique(createInfo);
-}
 void VulkanRenderer::createFrameBuffers()
 {
 	m_swapChainFramebuffers.reserve(m_swapChainImageViews.size());

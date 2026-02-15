@@ -140,11 +140,6 @@ public:
 	}
 
 	/**
-	 * @brief TEST: Set command buffer without resetting state
-	 */
-	void setCommandBufferForTest(vk::CommandBuffer cmdBuffer) { m_cmdBuffer = cmdBuffer; }
-
-	/**
 	 * @brief Check if scissor test is enabled
 	 */
 	bool isScissorEnabled() const { return m_scissorEnabled; }

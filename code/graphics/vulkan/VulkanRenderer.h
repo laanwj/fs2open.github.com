@@ -208,10 +208,6 @@ class VulkanRenderer {
 
 	bool createSwapChain(const PhysicalDeviceValues& deviceValues, vk::SwapchainKHR oldSwapchain = nullptr);
 
-	vk::UniqueShaderModule loadShader(const SCP_string& name);
-
-	void createGraphicsPipeline();
-
 	void createRenderPass();
 
 	void createFrameBuffers();

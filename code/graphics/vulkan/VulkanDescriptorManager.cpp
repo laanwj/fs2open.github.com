@@ -43,7 +43,6 @@ void VulkanDescriptorManager::shutdown()
 	m_device.waitIdle();
 
 	// Destroy pools (automatically frees allocated sets)
-	m_persistentPool.reset();
 	for (auto& poolChain : m_framePools) {
 		poolChain.clear();
 	}
@@ -115,27 +114,6 @@ vk::DescriptorSet VulkanDescriptorManager::allocateFrameSet(DescriptorSetIndex s
 		return sets[0];
 	} catch (const vk::SystemError& e) {
 		mprintf(("VulkanDescriptorManager: Failed to allocate frame descriptor set after pool growth: %s\n", e.what()));
-		return {};
-	}
-}
-
-vk::DescriptorSet VulkanDescriptorManager::allocatePersistentSet(DescriptorSetIndex setIndex)
-{
-	if (!m_initialized) {
-		return {};
-	}
-
-	vk::DescriptorSetAllocateInfo allocInfo;
-	allocInfo.descriptorPool = m_persistentPool.get();
-	allocInfo.descriptorSetCount = 1;
-	vk::DescriptorSetLayout layout = m_setLayouts[static_cast<size_t>(setIndex)].get();
-	allocInfo.pSetLayouts = &layout;
-
-	try {
-		auto sets = m_device.allocateDescriptorSets(allocInfo);
-		return sets[0];
-	} catch (const vk::SystemError& e) {
-		mprintf(("VulkanDescriptorManager: Failed to allocate persistent descriptor set: %s\n", e.what()));
 		return {};
 	}
 }
@@ -346,25 +324,7 @@ void VulkanDescriptorManager::createDescriptorPools()
 		m_framePools[i].push_back(createFramePool());
 	}
 
-	// Create persistent pool (for long-lived sets)
-	constexpr uint32_t PERSISTENT_MAX_SETS = 100;
-	constexpr uint32_t PERSISTENT_UBOS = 500;
-	constexpr uint32_t PERSISTENT_SAMPLERS = 500;
-
-	SCP_vector<vk::DescriptorPoolSize> persistentSizes = {
-		{ vk::DescriptorType::eUniformBuffer, PERSISTENT_UBOS },
-		{ vk::DescriptorType::eCombinedImageSampler, PERSISTENT_SAMPLERS },
-	};
-
-	vk::DescriptorPoolCreateInfo persistentPoolInfo;
-	persistentPoolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-	persistentPoolInfo.maxSets = PERSISTENT_MAX_SETS;
-	persistentPoolInfo.poolSizeCount = static_cast<uint32_t>(persistentSizes.size());
-	persistentPoolInfo.pPoolSizes = persistentSizes.data();
-
-	m_persistentPool = m_device.createDescriptorPoolUnique(persistentPoolInfo);
-
-	mprintf(("VulkanDescriptorManager: Created %u frame pool chains + 1 persistent pool\n",
+	mprintf(("VulkanDescriptorManager: Created %u frame pool chains\n",
 		MAX_FRAMES_IN_FLIGHT));
 }
 

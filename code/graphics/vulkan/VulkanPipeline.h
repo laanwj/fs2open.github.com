@@ -154,11 +154,6 @@ public:
 	bool needsFallbackAttribute(const vertex_layout& vertexLayout, shader_type shaderType,
 	                             VertexAttributeLocation location);
 
-	/**
-	 * @brief Clear all cached pipelines
-	 */
-	void clearPipelineCache();
-
 private:
 	/**
 	 * @brief Create the common pipeline layout
