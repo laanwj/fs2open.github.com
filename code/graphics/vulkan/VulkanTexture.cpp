@@ -1857,60 +1857,20 @@ void VulkanTextureManager::transitionImageLayout(vk::Image image, vk::Format for
 	endSingleTimeCommands(commandBuffer);
 }
 
-void VulkanTextureManager::generateMipmaps(int handle)
+void vulkan_generate_mipmap_chain(vk::CommandBuffer cmd, vk::Image image,
+                                  uint32_t width, uint32_t height,
+                                  uint32_t mipLevels, uint32_t arrayLayers)
 {
-	auto* ts = getTextureSlot(handle);
-	if (!ts || !ts->image || ts->mipLevels <= 1) {
+	if (mipLevels <= 1) {
 		return;
-	}
-
-	// Check format supports linear blit filter
-	vk::FormatProperties formatProperties = m_physicalDevice.getFormatProperties(ts->format);
-	if (!(formatProperties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear)) {
-		mprintf(("VulkanTextureManager::generateMipmaps: Format %d does not support linear blitting\n",
-		         static_cast<int>(ts->format)));
-		return;
-	}
-
-	vk::CommandBuffer cmd = beginSingleTimeCommands();
-
-	// Transition mip 0 from current layout to eTransferSrcOptimal
-	{
-		vk::ImageMemoryBarrier barrier;
-		barrier.oldLayout = ts->currentLayout;
-		barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = ts->image;
-		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		vk::PipelineStageFlags srcStage;
-		if (ts->currentLayout == vk::ImageLayout::eColorAttachmentOptimal) {
-			barrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-			srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-		} else if (ts->currentLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
-			barrier.srcAccessMask = vk::AccessFlagBits::eShaderRead;
-			srcStage = vk::PipelineStageFlagBits::eFragmentShader;
-		} else {
-			barrier.srcAccessMask = vk::AccessFlagBits::eMemoryWrite;
-			srcStage = vk::PipelineStageFlagBits::eAllCommands;
-		}
-		barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
-
-		cmd.pipelineBarrier(srcStage, vk::PipelineStageFlagBits::eTransfer,
-		                    {}, {}, {}, barrier);
 	}
 
 	// Generate each mip level via blit from the previous level
-	for (uint32_t i = 1; i < ts->mipLevels; i++) {
-		uint32_t srcW = std::max(1u, ts->width >> (i - 1));
-		uint32_t srcH = std::max(1u, ts->height >> (i - 1));
-		uint32_t dstW = std::max(1u, ts->width >> i);
-		uint32_t dstH = std::max(1u, ts->height >> i);
+	for (uint32_t i = 1; i < mipLevels; i++) {
+		uint32_t srcW = std::max(1u, width >> (i - 1));
+		uint32_t srcH = std::max(1u, height >> (i - 1));
+		uint32_t dstW = std::max(1u, width >> i);
+		uint32_t dstH = std::max(1u, height >> i);
 
 		// Transition mip i from eUndefined to eTransferDstOptimal
 		{
@@ -1921,12 +1881,12 @@ void VulkanTextureManager::generateMipmaps(int handle)
 			barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
 			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.image = ts->image;
+			barrier.image = image;
 			barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
 			barrier.subresourceRange.baseMipLevel = i;
 			barrier.subresourceRange.levelCount = 1;
 			barrier.subresourceRange.baseArrayLayer = 0;
-			barrier.subresourceRange.layerCount = 1;
+			barrier.subresourceRange.layerCount = arrayLayers;
 
 			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
 			                    vk::PipelineStageFlagBits::eTransfer,
@@ -1938,19 +1898,19 @@ void VulkanTextureManager::generateMipmaps(int handle)
 		blit.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
 		blit.srcSubresource.mipLevel = i - 1;
 		blit.srcSubresource.baseArrayLayer = 0;
-		blit.srcSubresource.layerCount = 1;
+		blit.srcSubresource.layerCount = arrayLayers;
 		blit.srcOffsets[0] = vk::Offset3D(0, 0, 0);
 		blit.srcOffsets[1] = vk::Offset3D(static_cast<int32_t>(srcW), static_cast<int32_t>(srcH), 1);
 
 		blit.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
 		blit.dstSubresource.mipLevel = i;
 		blit.dstSubresource.baseArrayLayer = 0;
-		blit.dstSubresource.layerCount = 1;
+		blit.dstSubresource.layerCount = arrayLayers;
 		blit.dstOffsets[0] = vk::Offset3D(0, 0, 0);
 		blit.dstOffsets[1] = vk::Offset3D(static_cast<int32_t>(dstW), static_cast<int32_t>(dstH), 1);
 
-		cmd.blitImage(ts->image, vk::ImageLayout::eTransferSrcOptimal,
-		              ts->image, vk::ImageLayout::eTransferDstOptimal,
+		cmd.blitImage(image, vk::ImageLayout::eTransferSrcOptimal,
+		              image, vk::ImageLayout::eTransferDstOptimal,
 		              blit, vk::Filter::eLinear);
 
 		// Transition mip i to eTransferSrcOptimal (source for next blit)
@@ -1962,12 +1922,12 @@ void VulkanTextureManager::generateMipmaps(int handle)
 			barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
 			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.image = ts->image;
+			barrier.image = image;
 			barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
 			barrier.subresourceRange.baseMipLevel = i;
 			barrier.subresourceRange.levelCount = 1;
 			barrier.subresourceRange.baseArrayLayer = 0;
-			barrier.subresourceRange.layerCount = 1;
+			barrier.subresourceRange.layerCount = arrayLayers;
 
 			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
 			                    vk::PipelineStageFlagBits::eTransfer,
@@ -1984,20 +1944,17 @@ void VulkanTextureManager::generateMipmaps(int handle)
 		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = ts->image;
+		barrier.image = image;
 		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
 		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = ts->mipLevels;
+		barrier.subresourceRange.levelCount = mipLevels;
 		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
+		barrier.subresourceRange.layerCount = arrayLayers;
 
 		cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
 		                    vk::PipelineStageFlagBits::eFragmentShader,
 		                    {}, {}, {}, barrier);
 	}
-
-	endSingleTimeCommands(cmd);
-	ts->currentLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 }
 
 void VulkanTextureManager::frameStart()
@@ -2301,77 +2258,7 @@ void VulkanTextureManager::recordUploadCommands(vk::CommandBuffer cmd, vk::Image
 			                    {}, {}, {}, barrier);
 		}
 
-		// Generate each mip level via blit from the previous level
-		for (uint32_t i = 1; i < mipLevels; i++) {
-			uint32_t srcW = std::max(1u, width >> (i - 1));
-			uint32_t srcH = std::max(1u, height >> (i - 1));
-			uint32_t dstW = std::max(1u, width >> i);
-			uint32_t dstH = std::max(1u, height >> i);
-
-			// Mip i is already in eTransferDstOptimal from barrier 1
-
-			// Blit from mip i-1 to mip i
-			vk::ImageBlit blit;
-			blit.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-			blit.srcSubresource.mipLevel = i - 1;
-			blit.srcSubresource.baseArrayLayer = 0;
-			blit.srcSubresource.layerCount = arrayLayers;
-			blit.srcOffsets[0] = vk::Offset3D(0, 0, 0);
-			blit.srcOffsets[1] = vk::Offset3D(static_cast<int32_t>(srcW), static_cast<int32_t>(srcH), 1);
-
-			blit.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-			blit.dstSubresource.mipLevel = i;
-			blit.dstSubresource.baseArrayLayer = 0;
-			blit.dstSubresource.layerCount = arrayLayers;
-			blit.dstOffsets[0] = vk::Offset3D(0, 0, 0);
-			blit.dstOffsets[1] = vk::Offset3D(static_cast<int32_t>(dstW), static_cast<int32_t>(dstH), 1);
-
-			cmd.blitImage(image, vk::ImageLayout::eTransferSrcOptimal,
-			              image, vk::ImageLayout::eTransferDstOptimal,
-			              blit, vk::Filter::eLinear);
-
-			// Transition mip i to eTransferSrcOptimal (source for next blit)
-			{
-				vk::ImageMemoryBarrier barrier;
-				barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-				barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
-				barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
-				barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
-				barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-				barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-				barrier.image = image;
-				barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-				barrier.subresourceRange.baseMipLevel = i;
-				barrier.subresourceRange.levelCount = 1;
-				barrier.subresourceRange.baseArrayLayer = 0;
-				barrier.subresourceRange.layerCount = arrayLayers;
-
-				cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-				                    vk::PipelineStageFlagBits::eTransfer,
-				                    {}, {}, {}, barrier);
-			}
-		}
-
-		// Final transition: all mips from eTransferSrcOptimal to eShaderReadOnlyOptimal
-		{
-			vk::ImageMemoryBarrier barrier;
-			barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
-			barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-			barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
-			barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.image = image;
-			barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-			barrier.subresourceRange.baseMipLevel = 0;
-			barrier.subresourceRange.levelCount = mipLevels;
-			barrier.subresourceRange.baseArrayLayer = 0;
-			barrier.subresourceRange.layerCount = arrayLayers;
-
-			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-			                    vk::PipelineStageFlagBits::eFragmentShader,
-			                    {}, {}, {}, barrier);
-		}
+		vulkan_generate_mipmap_chain(cmd, image, width, height, mipLevels, arrayLayers);
 	} else {
 		// Simple transition: all mips from eTransferDstOptimal to eShaderReadOnlyOptimal
 		{

@@ -190,12 +190,6 @@ public:
 	                           uint32_t mipLevels = 1, uint32_t arrayLayers = 1);
 
 	/**
-	 * @brief Generate mipmaps for a texture
-	 */
-	void generateMipmaps(int handle);
-
-
-	/**
 	 * @brief Called at start of frame
 	 */
 	void frameStart();
@@ -348,6 +342,16 @@ private:
 // Global texture manager instance
 VulkanTextureManager* getTextureManager();
 void setTextureManager(VulkanTextureManager* manager);
+
+/**
+ * @brief Generate mip levels 1..mipLevels-1 via blit chain from the previous level.
+ *
+ * Prerequisite: mip 0 must already be in eTransferSrcOptimal.
+ * Result: ALL mip levels transitioned to eShaderReadOnlyOptimal.
+ */
+void vulkan_generate_mipmap_chain(vk::CommandBuffer cmd, vk::Image image,
+                                  uint32_t width, uint32_t height,
+                                  uint32_t mipLevels, uint32_t arrayLayers = 1);
 
 // ========== gr_screen function pointer implementations ==========
 
