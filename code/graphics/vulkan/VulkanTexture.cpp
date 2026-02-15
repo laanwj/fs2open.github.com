@@ -383,7 +383,7 @@ bool VulkanTextureManager::uploadAnimationFrames(int handle, bitmap* bm, int com
 	uint32_t mipLevels = 1;
 
 	if (isCompressed) {
-		blockSize = (compType == DDS_DXT1) ? 8 : 16;
+		blockSize = dds_block_size(compType);
 		mipLevels = static_cast<uint32_t>(bm_get_num_mipmaps(handle));
 		if (mipLevels < 1) {
 			mipLevels = 1;
@@ -393,9 +393,7 @@ bool VulkanTextureManager::uploadAnimationFrames(int handle, bitmap* bm, int com
 		uint32_t mipW = width;
 		uint32_t mipH = height;
 		for (uint32_t i = 0; i < mipLevels; i++) {
-			uint32_t blocksW = (mipW + 3) / 4;
-			uint32_t blocksH = (mipH + 3) / 4;
-			layerDataSize += blocksW * blocksH * blockSize;
+			layerDataSize += dds_compressed_mip_size(mipW, mipH, blockSize);
 			mipW = std::max(1u, mipW / 2);
 			mipH = std::max(1u, mipH / 2);
 		}
@@ -1124,7 +1122,7 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 			return false;
 		}
 
-		blockSize = (compType == DDS_DXT1) ? 8 : 16;
+		blockSize = dds_block_size(compType);
 
 		// Get pre-baked mipmap count from DDS file
 		mipLevels = static_cast<uint32_t>(bm_get_num_mipmaps(handle));
@@ -1137,9 +1135,7 @@ bool VulkanTextureManager::bm_data(int handle, bitmap* bm, int compType)
 		uint32_t mipW = width;
 		uint32_t mipH = height;
 		for (uint32_t i = 0; i < mipLevels; i++) {
-			uint32_t blocksW = (mipW + 3) / 4;
-			uint32_t blocksH = (mipH + 3) / 4;
-			size_t mipSize = blocksW * blocksH * blockSize;
+			size_t mipSize = dds_compressed_mip_size(mipW, mipH, blockSize);
 
 			vk::BufferImageCopy region;
 			region.bufferOffset = static_cast<vk::DeviceSize>(dataSize);
