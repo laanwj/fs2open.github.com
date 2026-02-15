@@ -240,6 +240,18 @@ private:
 	uint32_t m_colorAttachmentCount = 1;
 	vk::SampleCountFlagBits m_currentSampleCount = vk::SampleCountFlagBits::e1;
 
+	// Vertex/index buffer binding cache
+	static constexpr uint32_t MAX_VERTEX_BINDINGS = 16;
+	struct VertexBufferBinding {
+		vk::Buffer buffer;
+		vk::DeviceSize offset = 0;
+	};
+	std::array<VertexBufferBinding, MAX_VERTEX_BINDINGS> m_boundVertexBuffers{};
+
+	vk::Buffer m_boundIndexBuffer;
+	vk::DeviceSize m_boundIndexOffset = 0;
+	vk::IndexType m_boundIndexType = vk::IndexType::eUint16;
+
 	bool m_initialized = false;
 };
 
