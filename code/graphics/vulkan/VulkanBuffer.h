@@ -10,55 +10,52 @@ namespace graphics {
 namespace vulkan {
 
 /**
+ * @brief Per-frame bump allocator for streaming/dynamic buffers
+ *
+ * Two of these exist (one per frame-in-flight). At frame start the cursor
+ * resets to 0. Each streaming upload bumps the cursor forward.
+ * The buffer is persistently mapped for the lifetime of the allocator.
+ */
+struct FrameBumpAllocator {
+	vk::Buffer buffer;
+	VulkanAllocation allocation = {};
+	void* mappedPtr = nullptr;
+	size_t capacity = 0;
+	size_t cursor = 0;
+};
+
+/**
  * @brief Internal representation of a Vulkan buffer
  *
- * For streaming buffers (BufferUsageHint::Streaming), we use a ring buffer
- * approach: a single VkBuffer with separate spans per frame in flight.
- * This avoids race conditions where the GPU is still reading while CPU writes.
- *
- * Ring buffer layout for streaming buffers:
- *   [Frame 0 span][Frame 1 span]
- *   |<- spanSize ->|<- spanSize ->|
- *   |<-------- totalSize -------->|
+ * Static buffers own their own VkBuffer. Streaming/Dynamic buffers are
+ * sub-allocated from a shared FrameBumpAllocator each frame.
  */
 struct VulkanBufferObject {
-	vk::Buffer buffer = nullptr;           // Single VkBuffer
-	VulkanAllocation allocation = {};      // Single allocation
-	size_t spanSize = 0;                   // Size of each frame's span (0 for static)
-	size_t totalSize = 0;                  // Total buffer size
-
 	BufferType type = BufferType::Vertex;
 	BufferUsageHint usage = BufferUsageHint::Static;
 	bool valid = false;
+	size_t dataSize = 0; // Usable data size. Static: total VkBuffer allocation. Streaming: current frame allocation.
 
-	// Stream sub-allocation state (for orphaning semantics within a frame)
-	// When a streaming buffer is updated multiple times per frame, each upload
-	// writes at an advancing cursor instead of overwriting offset 0.
-	// This replicates OpenGL's glBufferData(GL_STREAM_DRAW) orphaning behavior.
-	size_t streamCursor = 0;           // Next write position within the frame span (bytes)
-	size_t lastWriteStreamOffset = 0;  // Byte offset of the most recent upload
-	uint32_t lastResetFrame = UINT32_MAX; // Frame index when cursor was last reset
+	// Static buffer fields (unused for streaming)
+	vk::Buffer buffer = nullptr;
+	VulkanAllocation allocation = {};
 
-	// Helper to check if this buffer uses ring buffer spans
+	// Frame bump allocator sub-allocation (streaming/dynamic only)
+	vk::Buffer frameAllocBuffer;       // VkBuffer at upload time (may be old allocator buffer after growth)
+	size_t frameAllocOffset = 0;       // Byte offset within the frame allocator buffer
+	uint32_t frameAllocFrame = UINT32_MAX; // Frame index when last allocated
+
 	bool isStreaming() const {
 		return usage == BufferUsageHint::Streaming || usage == BufferUsageHint::Dynamic;
-	}
-
-	// Get the byte offset for a specific frame's span
-	size_t getFrameOffset(uint32_t frameIndex) const {
-		if (!isStreaming()) return 0;
-		return frameIndex * spanSize;
 	}
 };
 
 /**
  * @brief Manages GPU buffer creation, updates, and destruction
  *
- * This class handles all buffer operations for the Vulkan renderer including
- * vertex buffers, index buffers, and uniform buffers.
- *
- * Streaming buffers are automatically double-buffered to prevent GPU/CPU
- * race conditions when MAX_FRAMES_IN_FLIGHT > 1.
+ * Streaming/Dynamic buffers are sub-allocated from a global per-frame bump
+ * allocator (two large VkBuffers, one per frame-in-flight). Static buffers
+ * keep their own VkBuffer. PersistentMapping buffers are handled separately.
  */
 class VulkanBufferManager {
 public:
@@ -75,12 +72,14 @@ public:
 	 * @param memoryManager The memory manager for allocations
 	 * @param graphicsQueueFamily Graphics queue family index
 	 * @param transferQueueFamily Transfer queue family index
+	 * @param minUboAlignment Minimum uniform buffer offset alignment from device limits
 	 * @return true on success
 	 */
 	bool init(vk::Device device,
 	          VulkanMemoryManager* memoryManager,
 	          uint32_t graphicsQueueFamily,
-	          uint32_t transferQueueFamily);
+	          uint32_t transferQueueFamily,
+	          uint32_t minUboAlignment);
 
 	/**
 	 * @brief Shutdown and free all buffers
@@ -88,7 +87,7 @@ public:
 	void shutdown();
 
 	/**
-	 * @brief Set the current frame index for per-frame buffer selection
+	 * @brief Set the current frame index and reset the bump allocator cursor
 	 * Must be called at the start of each frame before any buffer updates
 	 * @param frameIndex The current frame index (0 to MAX_FRAMES_IN_FLIGHT-1)
 	 */
@@ -167,18 +166,20 @@ public:
 	vk::Buffer getVkBuffer(gr_buffer_handle handle) const;
 
 	/**
-	 * @brief Get buffer size for the current frame's span
+	 * @brief Get buffer size
+	 * For streaming buffers, returns the current frame allocation size.
+	 * For static buffers, returns the total buffer size.
 	 * @param handle The buffer handle
 	 * @return Size in bytes, or 0 if invalid
 	 */
 	size_t getBufferSize(gr_buffer_handle handle) const;
 
 	/**
-	 * @brief Get the base offset for the current frame's span
-	 * For streaming buffers, returns frameIndex * spanSize
-	 * For static buffers, returns 0
+	 * @brief Get the base offset for the current frame's allocation
+	 * For streaming buffers, returns the bump allocator offset.
+	 * For static buffers, returns 0.
 	 * @param handle The buffer handle
-	 * @return Byte offset for current frame's span
+	 * @return Byte offset for current frame's allocation
 	 */
 	size_t getFrameBaseOffset(gr_buffer_handle handle) const;
 
@@ -234,18 +235,28 @@ private:
 	MemoryUsage getMemoryUsage(BufferUsageHint hint) const;
 
 	/**
-	 * @brief Create or resize a buffer to fit the required span size
-	 * For streaming buffers, ensures total size >= spanSize * MAX_FRAMES_IN_FLIGHT
-	 * @param bufferObj The buffer object
-	 * @param spanSize Required size per frame span
+	 * @brief Create or resize a static buffer
+	 * Streaming buffers must NOT call this — they use the frame bump allocator.
 	 */
-	bool createOrResizeBuffer(VulkanBufferObject& bufferObj, size_t spanSize);
+	bool createOrResizeBuffer(VulkanBufferObject& bufferObj, size_t size);
 
 	/**
 	 * @brief Get buffer object from handle
 	 */
 	VulkanBufferObject* getBufferObject(gr_buffer_handle handle);
 	const VulkanBufferObject* getBufferObject(gr_buffer_handle handle) const;
+
+	// Frame bump allocator
+	static constexpr size_t FRAME_ALLOC_INITIAL_SIZE = 4 * 1024 * 1024;
+
+	bool createFrameAllocBuffer(FrameBumpAllocator& alloc, size_t size);
+	void initFrameAllocators();
+	void shutdownFrameAllocators();
+	size_t bumpAllocate(size_t size);
+	void growFrameAllocator();
+
+	FrameBumpAllocator m_frameAllocs[MAX_FRAMES_IN_FLIGHT];
+	uint32_t m_uboAlignment = 256;
 
 	vk::Device m_device;
 	VulkanMemoryManager* m_memoryManager = nullptr;

@@ -752,7 +752,8 @@ bool VulkanRenderer::createLogicalDevice(const PhysicalDeviceValues& deviceValue
 	// Initialize buffer manager
 	m_bufferManager = std::unique_ptr<VulkanBufferManager>(new VulkanBufferManager());
 	if (!m_bufferManager->init(m_device.get(), m_memoryManager.get(),
-	                           m_graphicsQueueFamilyIndex, m_transferQueueFamilyIndex)) {
+	                           m_graphicsQueueFamilyIndex, m_transferQueueFamilyIndex,
+	                           getMinUniformBufferOffsetAlignment())) {
 		mprintf(("Failed to initialize Vulkan buffer manager!\n"));
 		return false;
 	}
