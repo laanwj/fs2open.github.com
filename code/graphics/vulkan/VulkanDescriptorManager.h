@@ -4,10 +4,120 @@
 #include "graphics/2d.h"
 #include "VulkanConstants.h"
 
+#include <array>
 #include <vulkan/vulkan.hpp>
 
 namespace graphics {
 namespace vulkan {
+
+/**
+ * @brief Stack-allocated batch writer for descriptor set updates.
+ *
+ * Accumulates WriteDescriptorSet entries with stable backing storage,
+ * then submits them all in a single vkUpdateDescriptorSets call.
+ * All storage is on the stack — no heap allocations.
+ */
+class DescriptorWriter {
+public:
+	static constexpr uint32_t MAX_WRITES = 32;
+	static constexpr uint32_t MAX_BUFFER_INFOS = 20;
+	static constexpr uint32_t MAX_IMAGE_INFOS = 24;
+
+	void reset(vk::Device device) {
+		m_device = device;
+		m_writeCount = 0;
+		m_bufferInfoCount = 0;
+		m_imageInfoCount = 0;
+	}
+
+	void writeUniformBuffer(vk::DescriptorSet set, uint32_t binding,
+	                        vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range) {
+		Verify(buffer);
+		Verify(m_writeCount < MAX_WRITES && m_bufferInfoCount < MAX_BUFFER_INFOS);
+		auto& buf = m_bufferInfos[m_bufferInfoCount++];
+		buf.buffer = buffer;
+		buf.offset = offset;
+		buf.range = range;
+
+		auto& w = m_writes[m_writeCount++];
+		w = vk::WriteDescriptorSet();
+		w.dstSet = set;
+		w.dstBinding = binding;
+		w.descriptorCount = 1;
+		w.descriptorType = vk::DescriptorType::eUniformBuffer;
+		w.pBufferInfo = &buf;
+	}
+
+	void writeStorageBuffer(vk::DescriptorSet set, uint32_t binding,
+	                        vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range) {
+		Verify(buffer);
+		Verify(m_writeCount < MAX_WRITES && m_bufferInfoCount < MAX_BUFFER_INFOS);
+		auto& buf = m_bufferInfos[m_bufferInfoCount++];
+		buf.buffer = buffer;
+		buf.offset = offset;
+		buf.range = range;
+
+		auto& w = m_writes[m_writeCount++];
+		w = vk::WriteDescriptorSet();
+		w.dstSet = set;
+		w.dstBinding = binding;
+		w.descriptorCount = 1;
+		w.descriptorType = vk::DescriptorType::eStorageBuffer;
+		w.pBufferInfo = &buf;
+	}
+
+	void writeTexture(vk::DescriptorSet set, uint32_t binding,
+	                  vk::ImageView imageView, vk::Sampler sampler,
+	                  vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal) {
+		Verify(m_writeCount < MAX_WRITES && m_imageInfoCount < MAX_IMAGE_INFOS);
+		auto& img = m_imageInfos[m_imageInfoCount++];
+		img.imageView = imageView;
+		img.sampler = sampler;
+		img.imageLayout = layout;
+
+		auto& w = m_writes[m_writeCount++];
+		w = vk::WriteDescriptorSet();
+		w.dstSet = set;
+		w.dstBinding = binding;
+		w.descriptorCount = 1;
+		w.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		w.pImageInfo = &img;
+	}
+
+	void writeTextureArray(vk::DescriptorSet set, uint32_t binding,
+	                       const vk::DescriptorImageInfo* images, uint32_t count) {
+		if (count == 0) {
+			return;
+		}
+		Verify(m_writeCount < MAX_WRITES && m_imageInfoCount + count <= MAX_IMAGE_INFOS);
+		auto* dst = &m_imageInfos[m_imageInfoCount];
+		memcpy(dst, images, count * sizeof(vk::DescriptorImageInfo));
+		m_imageInfoCount += count;
+
+		auto& w = m_writes[m_writeCount++];
+		w = vk::WriteDescriptorSet();
+		w.dstSet = set;
+		w.dstBinding = binding;
+		w.descriptorCount = count;
+		w.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		w.pImageInfo = dst;
+	}
+
+	void flush() {
+		if (m_writeCount > 0) {
+			m_device.updateDescriptorSets(m_writeCount, m_writes.data(), 0, nullptr);
+		}
+	}
+
+private:
+	vk::Device m_device;
+	std::array<vk::WriteDescriptorSet, MAX_WRITES> m_writes;
+	std::array<vk::DescriptorBufferInfo, MAX_BUFFER_INFOS> m_bufferInfos;
+	std::array<vk::DescriptorImageInfo, MAX_IMAGE_INFOS> m_imageInfos;
+	uint32_t m_writeCount = 0;
+	uint32_t m_bufferInfoCount = 0;
+	uint32_t m_imageInfoCount = 0;
+};
 
 /**
  * @brief Descriptor set indices for the 3-tier layout
@@ -128,6 +238,11 @@ public:
 	 * @brief Get current frame index
 	 */
 	uint32_t getCurrentFrame() const { return m_currentFrame; }
+
+	/**
+	 * @brief Get the Vulkan device (for DescriptorWriter)
+	 */
+	vk::Device getDevice() const { return m_device; }
 
 	/**
 	 * @brief Map uniform_block_type to descriptor set and binding

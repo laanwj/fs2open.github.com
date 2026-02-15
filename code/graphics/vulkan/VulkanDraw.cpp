@@ -932,7 +932,8 @@ PipelineConfig VulkanDrawManager::buildPipelineConfig(material* mat, primitive_t
 	return config;
 }
 
-bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet materialSet)
+bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet materialSet,
+                                              DescriptorWriter* writer)
 {
 	auto* texManager = getTextureManager();
 	auto* descManager = getDescriptorManager();
@@ -985,7 +986,11 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 		loadYuvTexture(movieMat->getUtex(), 1);  // U at index 1
 		loadYuvTexture(movieMat->getVtex(), 2);  // V at index 2
 
-		descManager->updateTextureArray(materialSet, 1, textureInfos.data(), static_cast<uint32_t>(textureInfos.size()));
+		if (writer) {
+			writer->writeTextureArray(materialSet, 1, textureInfos.data(), static_cast<uint32_t>(textureInfos.size()));
+		} else {
+			descManager->updateTextureArray(materialSet, 1, textureInfos.data(), static_cast<uint32_t>(textureInfos.size()));
+		}
 		return true;
 	}
 
@@ -1131,7 +1136,11 @@ bool VulkanDrawManager::bindMaterialTextures(material* mat, vk::DescriptorSet ma
 
 	// Update the texture array in the descriptor set
 	// All slots now have valid views (either actual texture or fallback)
-	descManager->updateTextureArray(materialSet, 1, textureInfos.data(), static_cast<uint32_t>(textureInfos.size()));
+	if (writer) {
+		writer->writeTextureArray(materialSet, 1, textureInfos.data(), static_cast<uint32_t>(textureInfos.size()));
+	} else {
+		descManager->updateTextureArray(materialSet, 1, textureInfos.data(), static_cast<uint32_t>(textureInfos.size()));
+	}
 
 	return true;
 }
@@ -1202,11 +1211,15 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 		}
 	}
 
-	// Allocate and bind descriptor sets for this draw
+	// Allocate and bind descriptor sets for this draw.
 	// Vulkan requires all bindings in a descriptor set to be valid before use.
 	// After pool reset, descriptors contain undefined data. We MUST pre-initialize
 	// ALL bindings with fallback values, then overwrite with actual pending data.
+	// All writes are batched into a single vkUpdateDescriptorSets call.
 	{
+		DescriptorWriter writer;
+		writer.reset(descManager->getDevice());
+
 		// Get fallback resources for uninitialized bindings
 		vk::Buffer fallbackUBO = bufferManager->getFallbackUniformBuffer();
 		vk::DeviceSize fallbackUBOSize = static_cast<vk::DeviceSize>(bufferManager->getFallbackUniformBufferSize());
@@ -1214,138 +1227,113 @@ bool VulkanDrawManager::applyMaterial(material* mat, primitive_type prim_type, v
 		vk::Sampler fallbackSampler = texManager->getDefaultSampler();
 		vk::ImageView fallbackView = texManager->getFallback2DArrayView();
 
+		// Helper: write a pending UBO or fallback if the buffer is null/invalid
+		auto writeUBOOrFallback = [&](DescriptorWriter& w, vk::DescriptorSet set,
+		                              uint32_t binding, size_t blockIdx) {
+			if (m_pendingUniformBindings[blockIdx].valid) {
+				vk::Buffer buf = getBuffer(m_pendingUniformBindings[blockIdx]);
+				if (buf) {
+					w.writeUniformBuffer(set, binding, buf,
+					                     getResolvedOffset(m_pendingUniformBindings[blockIdx]),
+					                     m_pendingUniformBindings[blockIdx].size);
+					return;
+				}
+			}
+			w.writeUniformBuffer(set, binding, fallbackUBO, 0, fallbackUBOSize);
+		};
+
 		// Set 0: Global - bindings: 0=Lights UBO, 1=DeferredGlobals UBO, 2=Shadow tex, 3=Env cube, 4=Irr cube
 		vk::DescriptorSet globalSet = descManager->allocateFrameSet(DescriptorSetIndex::Global);
 		Verify(globalSet);
-		// Pre-initialize ALL bindings with fallback values
-		descManager->updateUniformBuffer(globalSet, 0, fallbackUBO, 0, fallbackUBOSize);
-		descManager->updateUniformBuffer(globalSet, 1, fallbackUBO, 0, fallbackUBOSize);
-		descManager->updateTexture(globalSet, 2, fallbackView, fallbackSampler);
-		// Bindings 3-4 are samplerCube — use fallback cubemap view
-		vk::ImageView fallbackCubeView = texManager->getFallbackCubeView();
-		descManager->updateTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
-		descManager->updateTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
-
-		// Overwrite with actual pending uniform bindings
+		// UBO bindings: write real pending buffer or fallback (one write per binding)
 		for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
-			if (!m_pendingUniformBindings[i].valid) {
-				continue;
-			}
-
 			uniform_block_type blockType = static_cast<uniform_block_type>(i);
 			DescriptorSetIndex setIndex;
 			uint32_t binding;
-
 			if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
 			    setIndex == DescriptorSetIndex::Global) {
-				descManager->updateUniformBuffer(globalSet, binding,
-				                                  getBuffer(m_pendingUniformBindings[i]),
-				                                  getResolvedOffset(m_pendingUniformBindings[i]),
-				                                  m_pendingUniformBindings[i].size);
+				writeUBOOrFallback(writer, globalSet, binding, i);
 			}
 		}
+		// Texture bindings
+		writer.writeTexture(globalSet, 2, fallbackView, fallbackSampler);
+		vk::ImageView fallbackCubeView = texManager->getFallbackCubeView();
+		writer.writeTexture(globalSet, 3, fallbackCubeView, fallbackSampler);
+		writer.writeTexture(globalSet, 4, fallbackCubeView, fallbackSampler);
+		writer.flush();
+		writer.reset(descManager->getDevice());
 		stateTracker->bindDescriptorSet(DescriptorSetIndex::Global, globalSet);
 
-		// Set 1: Material - bindings: 0=ModelData UBO, 1=Texture array, 2=DecalGlobals UBO
+		// Set 1: Material - bindings: 0=ModelData UBO, 1=Texture array, 2=DecalGlobals UBO,
+		//                   3=Transform SSBO, 4=depth, 5=scene color, 6=dist map
 		vk::DescriptorSet materialSet = descManager->allocateFrameSet(DescriptorSetIndex::Material);
 		Verify(materialSet);
-		// Pre-initialize UBO bindings with fallback
-		descManager->updateUniformBuffer(materialSet, 0, fallbackUBO, 0, fallbackUBOSize);
-		descManager->updateUniformBuffer(materialSet, 2, fallbackUBO, 0, fallbackUBOSize);
-		// Binding 3: Transform buffer SSBO — fallback to the zero UBO
-		descManager->updateStorageBuffer(materialSet, 3, fallbackUBO, 0, fallbackUBOSize);
-
-		// Binding 4: depth map for soft particles — use override if set, else fallback
+		// UBO bindings: write real pending buffer or fallback (one write per binding)
+		for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
+			uniform_block_type blockType = static_cast<uniform_block_type>(i);
+			DescriptorSetIndex setIndex;
+			uint32_t binding;
+			if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
+			    setIndex == DescriptorSetIndex::Material) {
+				writeUBOOrFallback(writer, materialSet, binding, i);
+			}
+		}
+		// Binding 3: Transform buffer SSBO — real if available, else fallback
+		{
+			uint32_t tfIdx = descManager->getCurrentFrame();
+			auto& tf = g_transformBuffers[tfIdx];
+			if (tf.buffer && tf.lastUploadSize > 0) {
+				writer.writeStorageBuffer(materialSet, 3, tf.buffer,
+				                          static_cast<vk::DeviceSize>(tf.lastUploadOffset),
+				                          static_cast<vk::DeviceSize>(tf.lastUploadSize));
+			} else {
+				writer.writeStorageBuffer(materialSet, 3, fallbackUBO, 0, fallbackUBOSize);
+			}
+		}
+		// Binding 4: depth map for soft particles
 		{
 			vk::ImageView depthView = m_depthTextureOverride ? m_depthTextureOverride
 			                                                  : texManager->getFallbackTextureView2D();
 			vk::Sampler depthSampler = m_depthSamplerOverride ? m_depthSamplerOverride
 			                                                   : texManager->getDefaultSampler();
-			descManager->updateTexture(materialSet, 4, depthView, depthSampler);
+			writer.writeTexture(materialSet, 4, depthView, depthSampler);
 		}
-
-		// Binding 5: scene color / frameBuffer for distortion — use override if set, else fallback
+		// Binding 5: scene color / frameBuffer for distortion
 		{
 			vk::ImageView sceneView = m_sceneColorOverride ? m_sceneColorOverride
 			                                                : texManager->getFallbackTextureView2D();
 			vk::Sampler sceneSampler = m_sceneColorSamplerOverride ? m_sceneColorSamplerOverride
 			                                                       : texManager->getDefaultSampler();
-			descManager->updateTexture(materialSet, 5, sceneView, sceneSampler);
+			writer.writeTexture(materialSet, 5, sceneView, sceneSampler);
 		}
-
-		// Binding 6: distortion map — use override if set, else fallback
+		// Binding 6: distortion map
 		{
 			vk::ImageView distView = m_distMapOverride ? m_distMapOverride
 			                                            : texManager->getFallbackTextureView2D();
 			vk::Sampler distSampler = m_distMapSamplerOverride ? m_distMapSamplerOverride
 			                                                    : texManager->getDefaultSampler();
-			descManager->updateTexture(materialSet, 6, distView, distSampler);
+			writer.writeTexture(materialSet, 6, distView, distSampler);
 		}
-
-		// Bind actual transform buffer if available (with per-upload offset)
-		{
-			uint32_t tfIdx = descManager->getCurrentFrame();
-			auto& tf = g_transformBuffers[tfIdx];
-			if (tf.buffer && tf.lastUploadSize > 0) {
-				descManager->updateStorageBuffer(materialSet, 3, tf.buffer,
-				                                  static_cast<vk::DeviceSize>(tf.lastUploadOffset),
-				                                  static_cast<vk::DeviceSize>(tf.lastUploadSize));
-			}
-		}
-
-		// Bind textures (already handles fallback textures for unbound slots)
-		bindMaterialTextures(mat, materialSet);
-
-		// Overwrite with actual pending uniform bindings
-		for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
-			if (!m_pendingUniformBindings[i].valid) {
-				continue;
-			}
-
-			uniform_block_type blockType = static_cast<uniform_block_type>(i);
-			DescriptorSetIndex setIndex;
-			uint32_t binding;
-
-			if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
-			    setIndex == DescriptorSetIndex::Material) {
-				descManager->updateUniformBuffer(materialSet, binding,
-				                                  getBuffer(m_pendingUniformBindings[i]),
-				                                  getResolvedOffset(m_pendingUniformBindings[i]),
-				                                  m_pendingUniformBindings[i].size);
-			}
-		}
-
+		// Binding 1: Texture array
+		bindMaterialTextures(mat, materialSet, &writer);
+		writer.flush();
+		writer.reset(descManager->getDevice());
 		stateTracker->bindDescriptorSet(DescriptorSetIndex::Material, materialSet);
 
 		// Set 2: PerDraw - bindings: 0=GenericData, 1=Matrices, 2=NanoVGData, 3=DecalInfo, 4=MovieData
 		vk::DescriptorSet perDrawSet = descManager->allocateFrameSet(DescriptorSetIndex::PerDraw);
 		Verify(perDrawSet);
-		// Pre-initialize ALL UBO bindings with fallback
-		descManager->updateUniformBuffer(perDrawSet, 0, fallbackUBO, 0, fallbackUBOSize);
-		descManager->updateUniformBuffer(perDrawSet, 1, fallbackUBO, 0, fallbackUBOSize);
-		descManager->updateUniformBuffer(perDrawSet, 2, fallbackUBO, 0, fallbackUBOSize);
-		descManager->updateUniformBuffer(perDrawSet, 3, fallbackUBO, 0, fallbackUBOSize);
-		descManager->updateUniformBuffer(perDrawSet, 4, fallbackUBO, 0, fallbackUBOSize);
-
-		// Overwrite with actual pending uniform bindings
+		// UBO bindings: write real pending buffer or fallback (one write per binding)
 		for (size_t i = 0; i < NUM_UNIFORM_BLOCK_TYPES; ++i) {
-			if (!m_pendingUniformBindings[i].valid) {
-				continue;
-			}
-
 			uniform_block_type blockType = static_cast<uniform_block_type>(i);
 			DescriptorSetIndex setIndex;
 			uint32_t binding;
-
 			if (VulkanDescriptorManager::getUniformBlockBinding(blockType, setIndex, binding) &&
 			    setIndex == DescriptorSetIndex::PerDraw) {
-				descManager->updateUniformBuffer(perDrawSet, binding,
-				                                  getBuffer(m_pendingUniformBindings[i]),
-				                                  getResolvedOffset(m_pendingUniformBindings[i]),
-				                                  m_pendingUniformBindings[i].size);
+				writeUBOOrFallback(writer, perDrawSet, binding, i);
 			}
 		}
-
+		writer.flush();
 		stateTracker->bindDescriptorSet(DescriptorSetIndex::PerDraw, perDrawSet);
 	}
 
