@@ -273,7 +273,7 @@ public:
 	 * @param writer If non-null, texture array write is batched into writer instead of flushed immediately
 	 */
 	bool bindMaterialTextures(material* mat, vk::DescriptorSet materialSet,
-	                          DescriptorWriter* writer = nullptr);
+	                          DescriptorWriter* writer);
 
 	/**
 	 * @brief Reset per-frame diagnostic counters (called at start of frame)

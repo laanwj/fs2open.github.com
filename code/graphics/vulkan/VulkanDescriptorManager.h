@@ -107,6 +107,9 @@ public:
 		if (m_writeCount > 0) {
 			m_device.updateDescriptorSets(m_writeCount, m_writes.data(), 0, nullptr);
 		}
+		m_writeCount = 0;
+		m_bufferInfoCount = 0;
+		m_imageInfoCount = 0;
 	}
 
 private:
@@ -198,31 +201,6 @@ public:
 	 * @return Allocated descriptor set
 	 */
 	vk::DescriptorSet allocatePersistentSet(DescriptorSetIndex setIndex);
-
-	/**
-	 * @brief Update a uniform buffer binding in a descriptor set
-	 */
-	void updateUniformBuffer(vk::DescriptorSet set, uint32_t binding,
-	                         vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range);
-
-	/**
-	 * @brief Update a storage buffer binding in a descriptor set
-	 */
-	void updateStorageBuffer(vk::DescriptorSet set, uint32_t binding,
-	                         vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range);
-
-	/**
-	 * @brief Update a combined image sampler binding
-	 */
-	void updateTexture(vk::DescriptorSet set, uint32_t binding,
-	                   vk::ImageView imageView, vk::Sampler sampler,
-	                   vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal);
-
-	/**
-	 * @brief Update a texture array binding
-	 */
-	void updateTextureArray(vk::DescriptorSet set, uint32_t binding,
-	                        const vk::DescriptorImageInfo* images, uint32_t count);
 
 	/**
 	 * @brief Begin a new frame - reset current frame's pool
