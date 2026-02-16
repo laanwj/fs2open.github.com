@@ -2,7 +2,6 @@
 
 #include "osapi/osapi.h"
 
-#include "RenderFrame.h"
 #include "VulkanMemory.h"
 #include "VulkanBuffer.h"
 #include "VulkanTexture.h"
@@ -14,6 +13,7 @@
 #include "VulkanDeletionQueue.h"
 #include "VulkanPostProcessing.h"
 #include "VulkanQuery.h"
+#include "VulkanRenderFrame.h"
 
 #include <vulkan/vulkan.hpp>
 
@@ -247,7 +247,7 @@ class VulkanRenderer {
 	SCP_vector<vk::Image> m_swapChainImages;
 	SCP_vector<vk::UniqueImageView> m_swapChainImageViews;
 	SCP_vector<vk::UniqueFramebuffer> m_swapChainFramebuffers;
-	SCP_vector<RenderFrame*> m_swapChainImageRenderImage;
+	SCP_vector<VulkanRenderFrame*> m_swapChainImageRenderImage;
 
 	uint32_t m_currentSwapChainImage = 0;
 	uint32_t m_previousSwapChainImage = UINT32_MAX;  // For saveScreen() readback of previous frame
@@ -264,7 +264,7 @@ class VulkanRenderer {
 
 	uint32_t m_currentFrame = 0;
 	uint64_t m_frameNumber = 0;  // Total frames rendered (for sync tracking)
-	std::array<std::unique_ptr<RenderFrame>, MAX_FRAMES_IN_FLIGHT> m_frames;
+	std::array<std::unique_ptr<VulkanRenderFrame>, MAX_FRAMES_IN_FLIGHT> m_frames;
 
 	vk::UniqueCommandPool m_graphicsCommandPool;
 

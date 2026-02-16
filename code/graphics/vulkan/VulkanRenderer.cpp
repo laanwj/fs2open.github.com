@@ -1049,7 +1049,7 @@ void VulkanRenderer::createCommandPool(const PhysicalDeviceValues& values)
 void VulkanRenderer::createPresentSyncObjects()
 {
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-		m_frames[i].reset(new RenderFrame(m_device.get(), m_swapChain.get(), m_graphicsQueue, m_presentQueue));
+		m_frames[i].reset(new VulkanRenderFrame(m_device.get(), m_swapChain.get(), m_graphicsQueue, m_presentQueue));
 	}
 
 	m_swapChainImageRenderImage.resize(m_swapChainImages.size(), nullptr);
@@ -1848,7 +1848,7 @@ bool VulkanRenderer::recreateSwapChain()
 	createSwapChain(freshValues, m_swapChain.get());
 	createFrameBuffers();
 
-	// Update RenderFrame handles to point to the new swap chain
+	// Update VulkanRenderFrame handles to point to the new swap chain
 	for (auto& frame : m_frames) {
 		frame->updateSwapChain(m_swapChain.get());
 	}

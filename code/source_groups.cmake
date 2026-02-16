@@ -575,8 +575,6 @@ if (FSO_BUILD_WITH_VULKAN)
 	add_file_folder("Graphics\\\\Vulkan"
 		graphics/vulkan/gr_vulkan.cpp
 		graphics/vulkan/gr_vulkan.h
-		graphics/vulkan/RenderFrame.cpp
-		graphics/vulkan/RenderFrame.h
 		graphics/vulkan/VulkanBuffer.cpp
 		graphics/vulkan/VulkanBuffer.h
 		graphics/vulkan/VulkanDeferred.cpp
@@ -597,6 +595,8 @@ if (FSO_BUILD_WITH_VULKAN)
 		graphics/vulkan/VulkanQuery.h
 		graphics/vulkan/VulkanRenderer.cpp
 		graphics/vulkan/VulkanRenderer.h
+		graphics/vulkan/VulkanRenderFrame.cpp
+		graphics/vulkan/VulkanRenderFrame.h
 		graphics/vulkan/VulkanRenderState.cpp
 		graphics/vulkan/VulkanRenderState.h
 		graphics/vulkan/VulkanShader.cpp

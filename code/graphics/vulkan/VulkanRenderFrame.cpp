@@ -1,10 +1,10 @@
 
-#include "RenderFrame.h"
+#include "VulkanRenderFrame.h"
 
 namespace graphics {
 namespace vulkan {
 
-RenderFrame::RenderFrame(vk::Device device, vk::SwapchainKHR swapChain, vk::Queue graphicsQueue, vk::Queue presentQueue)
+VulkanRenderFrame::VulkanRenderFrame(vk::Device device, vk::SwapchainKHR swapChain, vk::Queue graphicsQueue, vk::Queue presentQueue)
 	: m_device(device), m_swapChain(swapChain), m_graphicsQueue(graphicsQueue), m_presentQueue(presentQueue)
 {
 	constexpr vk::SemaphoreCreateInfo semaphoreCreateInfo;
@@ -14,7 +14,7 @@ RenderFrame::RenderFrame(vk::Device device, vk::SwapchainKHR swapChain, vk::Queu
 	m_renderingFinishedSemaphore = device.createSemaphoreUnique(semaphoreCreateInfo);
 	m_frameInFlightFence = device.createFenceUnique(fenceCreateInfo);
 }
-void RenderFrame::waitForFinish()
+void VulkanRenderFrame::waitForFinish()
 {
 	if (!m_inFlight) {
 		return;
@@ -34,11 +34,11 @@ void RenderFrame::waitForFinish()
 	// Our fence has been signaled so we are no longer in flight and ready to be reused
 	m_inFlight = false;
 }
-void RenderFrame::onFrameFinished(std::function<void()> finishFunc)
+void VulkanRenderFrame::onFrameFinished(std::function<void()> finishFunc)
 {
 	m_frameFinishedCallbacks.push_back(std::move(finishFunc));
 }
-SwapChainStatus RenderFrame::acquireSwapchainImage(uint32_t& outImageIndex)
+SwapChainStatus VulkanRenderFrame::acquireSwapchainImage(uint32_t& outImageIndex)
 {
 	Assertion(!m_inFlight, "Cannot acquire swapchain image when frame is still in flight.");
 
@@ -62,7 +62,7 @@ SwapChainStatus RenderFrame::acquireSwapchainImage(uint32_t& outImageIndex)
 	}
 	return SwapChainStatus::eSuccess;
 }
-SwapChainStatus RenderFrame::submitAndPresent(const SCP_vector<vk::CommandBuffer>& cmdBuffers)
+SwapChainStatus VulkanRenderFrame::submitAndPresent(const SCP_vector<vk::CommandBuffer>& cmdBuffers)
 {
 	Assertion(!m_inFlight, "Cannot submit a frame for presentation when it is still in flight.");
 
@@ -110,7 +110,7 @@ SwapChainStatus RenderFrame::submitAndPresent(const SCP_vector<vk::CommandBuffer
 	}
 	return SwapChainStatus::eSuccess;
 }
-void RenderFrame::updateSwapChain(vk::SwapchainKHR swapChain)
+void VulkanRenderFrame::updateSwapChain(vk::SwapchainKHR swapChain)
 {
 	m_swapChain = swapChain;
 }

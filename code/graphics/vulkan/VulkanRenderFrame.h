@@ -13,9 +13,9 @@ enum class SwapChainStatus {
 	eOutOfDate,    // Must recreate before next use
 };
 
-class RenderFrame {
+class VulkanRenderFrame {
   public:
-	RenderFrame(vk::Device device, vk::SwapchainKHR swapChain, vk::Queue graphicsQueue, vk::Queue presentQueue);
+	VulkanRenderFrame(vk::Device device, vk::SwapchainKHR swapChain, vk::Queue graphicsQueue, vk::Queue presentQueue);
 
 	void waitForFinish();
 
