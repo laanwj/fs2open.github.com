@@ -117,7 +117,7 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 			// mat4 requires 4 vec4 attributes at consecutive locations
 			for (uint32_t row = 0; row < 4; ++row) {
 				vk::VertexInputAttributeDescription attr;
-				attr.location = static_cast<uint32_t>(VertexAttributeLocation::ModelMatrix) + row;
+				attr.location = static_cast<uint32_t>(mapping->location) + row;
 				attr.binding = bindingIndex;
 				attr.format = vk::Format::eR32G32B32A32Sfloat;
 				attr.offset = static_cast<uint32_t>(component->offset) + (row * 16);
@@ -147,7 +147,6 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 		colorBinding.inputRate = vk::VertexInputRate::eInstance;  // Same color for all vertices
 		config.bindings.push_back(colorBinding);
 
-		// Add attribute for color at location 1
 		vk::VertexInputAttributeDescription colorAttr;
 		colorAttr.location = static_cast<uint32_t>(VertexAttributeLocation::Color);
 		colorAttr.binding = FALLBACK_COLOR_BINDING;
@@ -160,6 +159,7 @@ VertexInputConfig VulkanVertexFormatCache::createVertexInputConfig(const vertex_
 	// In OpenGL, missing vertex attributes default to (0,0,0,1); Vulkan requires explicit input
 	uint32_t texCoordBit = 1u << static_cast<uint32_t>(VertexAttributeLocation::TexCoord);
 	if (!(config.providedInputMask & texCoordBit) && numComponents > 0) {
+		// Add binding for fallback texcoord buffer (instanced so one value applies to all vertices)
 		vk::VertexInputBindingDescription texCoordBinding;
 		texCoordBinding.binding = FALLBACK_TEXCOORD_BINDING;
 		texCoordBinding.stride = 16;  // vec4 = 16 bytes
