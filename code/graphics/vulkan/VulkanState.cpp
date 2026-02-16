@@ -80,15 +80,6 @@ void VulkanStateTracker::beginFrame(vk::CommandBuffer cmdBuffer)
 		set = nullptr;
 	}
 
-	// Reset buffer binding cache
-	for (auto& vb : m_boundVertexBuffers) {
-		vb.buffer = nullptr;
-		vb.offset = 0;
-	}
-	m_boundIndexBuffer = nullptr;
-	m_boundIndexOffset = 0;
-	m_boundIndexType = vk::IndexType::eUint16;
-
 	// Mark all dynamic state as dirty
 	m_viewportDirty = true;
 	m_scissorDirty = true;
@@ -230,15 +221,6 @@ void VulkanStateTracker::bindVertexBuffer(uint32_t binding, vk::Buffer buffer, v
 {
 	Assertion(m_cmdBuffer, "bindVertexBuffer called without active command buffer!");
 	Assertion(buffer, "bindVertexBuffer called with null buffer!");
-	Assertion(binding < MAX_VERTEX_BINDINGS, "bindVertexBuffer binding %u exceeds max %u!", binding, MAX_VERTEX_BINDINGS);
-
-	auto& cached = m_boundVertexBuffers[binding];
-	if (cached.buffer == buffer && cached.offset == offset) {
-		return;
-	}
-	cached.buffer = buffer;
-	cached.offset = offset;
-
 	m_cmdBuffer.bindVertexBuffers(binding, 1, &buffer, &offset);
 }
 
@@ -246,14 +228,6 @@ void VulkanStateTracker::bindIndexBuffer(vk::Buffer buffer, vk::DeviceSize offse
 {
 	Assertion(m_cmdBuffer, "bindIndexBuffer called without active command buffer!");
 	Assertion(buffer, "bindIndexBuffer called with null buffer!");
-
-	if (m_boundIndexBuffer == buffer && m_boundIndexOffset == offset && m_boundIndexType == indexType) {
-		return;
-	}
-	m_boundIndexBuffer = buffer;
-	m_boundIndexOffset = offset;
-	m_boundIndexType = indexType;
-
 	m_cmdBuffer.bindIndexBuffer(buffer, offset, indexType);
 }
 
