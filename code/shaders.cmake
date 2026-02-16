@@ -43,6 +43,8 @@ set(SHADERS
 	${SHADER_DIR}/fog.frag
 	${SHADER_DIR}/volumetric-fog.vert
 	${SHADER_DIR}/volumetric-fog.frag
+	${SHADER_DIR}/copy.frag
+	${SHADER_DIR}/copy.vert
 	${SHADER_DIR}/msaa-resolve.vert
 	${SHADER_DIR}/msaa-resolve.frag
 )
