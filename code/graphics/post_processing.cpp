@@ -266,7 +266,7 @@ bool gr_lightshafts_enabled()
 		return false;
 	}
 
-	if (graphics::Post_processing_manager == nullptr || !graphics::Post_processing_manager->getLightshaftParams().on) {
+	if (!graphics::Post_processing_manager->getLightshaftParams().on) {
 		return false;
 	}
 
