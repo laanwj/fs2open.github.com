@@ -4,11 +4,6 @@
 
 using SPIRV_FLOAT_MAT_4x4 = matrix4;
 using SPIRV_FLOAT_VEC4 = vec4;
-using SPIRV_FLOAT_VEC2 = vec2d;
-
-// std140 mat3: 3 columns, each padded to vec4 (16 bytes) = 48 bytes total
-// Stored as float[12] in C++ to match the padded layout
-struct SPIRV_FLOAT_MAT_3x3 { float data[12]; };
 
 #include "shader_structs.h"
 
