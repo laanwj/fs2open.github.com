@@ -1866,8 +1866,9 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 	auto* descriptorMgr = getDescriptorManager();
 	auto* bufferMgr = getBufferManager();
 	auto* texMgr = getTextureManager();
+	auto* stateTracker = getStateTracker();
 
-	if (!pipelineMgr || !descriptorMgr || !bufferMgr || !texMgr) {
+	if (!pipelineMgr || !descriptorMgr || !bufferMgr || !texMgr || !stateTracker) {
 		return;
 	}
 
@@ -2377,7 +2378,7 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 	// Bind sphere VBO as dummy — shader ignores vertex data for these light types.
 	lightIdx = 0;
 	if (!full_frame_lights.empty()) {
-		cmd.bindVertexBuffers(0, m_sphereMesh.vbo, vk::DeviceSize(0));
+		stateTracker->bindVertexBuffer(0, m_sphereMesh.vbo, vk::DeviceSize(0));
 		for (size_t i = 0; i < full_frame_lights.size(); ++i) {
 			if (bindLightDescriptors(lightIdx)) {
 				cmd.draw(3, 1, 0, 0);
@@ -2388,8 +2389,8 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 
 	// Draw sphere lights (point + cone)
 	if (!sphere_lights.empty()) {
-		cmd.bindVertexBuffers(0, m_sphereMesh.vbo, vk::DeviceSize(0));
-		cmd.bindIndexBuffer(m_sphereMesh.ibo, 0, vk::IndexType::eUint16);
+		stateTracker->bindVertexBuffer(0, m_sphereMesh.vbo, vk::DeviceSize(0));
+		stateTracker->bindIndexBuffer(m_sphereMesh.ibo, 0, vk::IndexType::eUint16);
 		for (size_t i = 0; i < sphere_lights.size(); ++i) {
 			if (bindLightDescriptors(lightIdx)) {
 				cmd.drawIndexed(m_sphereMesh.indexCount, 1, 0, 0, 0);
@@ -2400,8 +2401,8 @@ void VulkanPostProcessor::renderDeferredLights(vk::CommandBuffer cmd)
 
 	// Draw cylinder lights (tube)
 	if (!cylinder_lights.empty()) {
-		cmd.bindVertexBuffers(0, m_cylinderMesh.vbo, vk::DeviceSize(0));
-		cmd.bindIndexBuffer(m_cylinderMesh.ibo, 0, vk::IndexType::eUint16);
+		stateTracker->bindVertexBuffer(0, m_cylinderMesh.vbo, vk::DeviceSize(0));
+		stateTracker->bindIndexBuffer(m_cylinderMesh.ibo, 0, vk::IndexType::eUint16);
 		for (size_t i = 0; i < cylinder_lights.size(); ++i) {
 			if (bindLightDescriptors(lightIdx)) {
 				cmd.drawIndexed(m_cylinderMesh.indexCount, 1, 0, 0, 0);
