@@ -334,14 +334,6 @@ vk::UniquePipeline VulkanPipelineManager::createPipeline(const PipelineConfig& c
 	fragStage.pName = "main";
 	shaderStages.push_back(fragStage);
 
-	if (shader->hasGeometryShader()) {
-		vk::PipelineShaderStageCreateInfo geomStage;
-		geomStage.stage = vk::ShaderStageFlagBits::eGeometry;
-		geomStage.module = shader->geometryModule.get();
-		geomStage.pName = "main";
-		shaderStages.push_back(geomStage);
-	}
-
 	// Vertex input state — filter out attributes the shader doesn't consume.
 	// The vertex format cache may add fallback color/texcoord attributes that
 	// shaders like NanoVG don't declare; the SPIR-V compiler strips unused

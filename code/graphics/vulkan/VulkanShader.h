@@ -12,14 +12,13 @@ namespace vulkan {
 /**
  * @brief Holds SPIR-V shader modules for a single shader program
  *
- * Corresponds to an OpenGL shader program (vertex + fragment + optional geometry).
+ * Corresponds to an OpenGL shader program (vertex + fragment).
  * Vulkan uses pre-compiled SPIR-V with no runtime variants — all conditional
  * behavior is handled via UBO runtime flags (not compile-time defines).
  */
 struct VulkanShaderModule {
 	vk::UniqueShaderModule vertexModule;
 	vk::UniqueShaderModule fragmentModule;
-	vk::UniqueShaderModule geometryModule;  // May be null
 
 	shader_type type = SDR_TYPE_NONE;
 
@@ -30,9 +29,6 @@ struct VulkanShaderModule {
 	// Used at pipeline creation to filter out fallback attributes the shader
 	// doesn't consume. Copied from VulkanShaderTypeInfo at load time.
 	uint32_t vertexInputMask = 0;
-
-	// Check if this shader uses geometry shader
-	bool hasGeometryShader() const { return static_cast<bool>(geometryModule); }
 };
 
 /**
@@ -44,7 +40,6 @@ struct VulkanShaderTypeInfo {
 	shader_type type;
 	const char* vertexFile;      // Vertex shader SPIR-V filename (without .spv)
 	const char* fragmentFile;    // Fragment shader SPIR-V filename
-	const char* geometryFile;    // Geometry shader filename (may be null)
 	const char* description;
 	uint32_t vertexInputMask;    // Bitmask of vertex input locations (bit N = location N)
 };

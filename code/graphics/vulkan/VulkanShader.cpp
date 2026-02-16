@@ -51,38 +51,38 @@ static constexpr uint32_t VTX_NONE     = 0;
 
 // Filenames match the compiled SPIR-V files: {basename}.{stage}.spv
 const VulkanShaderTypeInfo VULKAN_SHADER_TYPES[] = {
-	{ SDR_TYPE_MODEL,                              "main",           "main",           nullptr,         "Model rendering",              VTX_POSITION | VTX_TEXCOORD | VTX_NORMAL | VTX_TANGENT | VTX_MODELID },
-	{ SDR_TYPE_EFFECT_PARTICLE,                    "effect",         "effect",         "effect",        "Particle effects",             VTX_POSITION | VTX_COLOR | VTX_TEXCOORD | VTX_RADIUS },
-	{ SDR_TYPE_EFFECT_DISTORTION,                  "effect-distort", "effect-distort", nullptr,         "Distortion effects",           VTX_POSITION | VTX_COLOR | VTX_TEXCOORD | VTX_RADIUS },
-	{ SDR_TYPE_POST_PROCESS_MAIN,                  "postprocess",    "post",           nullptr,         "Post-processing main",         VTX_NONE },
-	{ SDR_TYPE_POST_PROCESS_BLUR,                  "postprocess",    "blur",           nullptr,         "Gaussian blur",                VTX_NONE },
-	{ SDR_TYPE_POST_PROCESS_BLOOM_COMP,            "postprocess",    "bloom-comp",     nullptr,         "Bloom composition",            VTX_NONE },
-	{ SDR_TYPE_POST_PROCESS_BRIGHTPASS,            "postprocess",    "brightpass",     nullptr,         "Bright pass filter",           VTX_NONE },
-	{ SDR_TYPE_POST_PROCESS_FXAA,                  "postprocess",    "fxaa",           nullptr,         "FXAA anti-aliasing",           VTX_NONE },
-	{ SDR_TYPE_POST_PROCESS_FXAA_PREPASS,          "postprocess",    "fxaapre",        nullptr,         "FXAA luma prepass",            VTX_NONE },
-	{ SDR_TYPE_POST_PROCESS_LIGHTSHAFTS,           "postprocess",    "lightshafts",    nullptr,         "Light shafts",                 VTX_NONE },
-	{ SDR_TYPE_POST_PROCESS_TONEMAPPING,           "postprocess",    "tonemapping",    nullptr,         "Tonemapping",                  VTX_NONE },
-	{ SDR_TYPE_DEFERRED_LIGHTING,                  "deferred",       "deferred",       nullptr,         "Deferred lighting",            VTX_POSITION },
-	{ SDR_TYPE_DEFERRED_CLEAR,                     "deferred-clear", "deferred-clear", nullptr,         "Deferred clear",               VTX_NONE },
-	{ SDR_TYPE_VIDEO_PROCESS,                      "video",          "video",          nullptr,         "Video playback",               VTX_POSITION | VTX_TEXCOORD },
-	{ SDR_TYPE_PASSTHROUGH_RENDER,                 "passthrough",    "passthrough",    nullptr,         "Passthrough rendering",        VTX_POSITION | VTX_TEXCOORD },
-	{ SDR_TYPE_SHIELD_DECAL,                       "shield-impact",  "shield-impact",  nullptr,         "Shield impact",                VTX_NONE },
-	{ SDR_TYPE_BATCHED_BITMAP,                     "batched",        "batched",        nullptr,         "Batched bitmaps",              VTX_POSITION | VTX_COLOR | VTX_TEXCOORD },
-	{ SDR_TYPE_DEFAULT_MATERIAL,                   "default-material", "default-material", nullptr,     "Default material",             VTX_POSITION | VTX_COLOR | VTX_TEXCOORD },
-	{ SDR_TYPE_NANOVG,                             "nanovg",         "nanovg",         nullptr,         "NanoVG UI",                    VTX_POSITION | VTX_TEXCOORD },
-	{ SDR_TYPE_DECAL,                              "decal",          "decal",          nullptr,         "Decals",                       VTX_POSITION | VTX_MATRIX },
-	{ SDR_TYPE_SCENE_FOG,                          "fog",            "fog",            nullptr,         "Scene fog",                    VTX_NONE },
-	{ SDR_TYPE_VOLUMETRIC_FOG,                     "volumetric-fog", "volumetric-fog", nullptr,         "Volumetric fog",               VTX_NONE },
-	{ SDR_TYPE_ROCKET_UI,                          "rocketui",       "rocketui",       nullptr,         "Rocket UI",                    VTX_POSITION | VTX_COLOR | VTX_TEXCOORD },
-	{ SDR_TYPE_COPY,                               "copy",           "copy",           nullptr,         "Texture copy",                 VTX_NONE },
-	{ SDR_TYPE_COPY_WORLD,                         "copy-world",     "copy-world",     nullptr,         "World copy",                   VTX_NONE },
-	{ SDR_TYPE_MSAA_RESOLVE,                       "msaa-resolve",   "msaa-resolve",   nullptr,         "MSAA resolve",                 VTX_NONE },
-	{ SDR_TYPE_POST_PROCESS_SMAA_EDGE,             "smaa-edge",      "smaa-edge",      nullptr,         "SMAA edge detection",          VTX_NONE },
-	{ SDR_TYPE_POST_PROCESS_SMAA_BLENDING_WEIGHT,  "smaa-blend",     "smaa-blend",     nullptr,         "SMAA blending weight",         VTX_NONE },
-	{ SDR_TYPE_POST_PROCESS_SMAA_NEIGHBORHOOD_BLENDING, "smaa-neighbor", "smaa-neighbor", nullptr,      "SMAA neighborhood blending",   VTX_NONE },
-	{ SDR_TYPE_ENVMAP_SPHERE_WARP,                 "envmap-warp",    "envmap-warp",    nullptr,         "Environment map warp",         VTX_NONE },
-	{ SDR_TYPE_IRRADIANCE_MAP_GEN,                 "irradiance",     "irradiance",     nullptr,         "Irradiance map generation",    VTX_NONE },
-	{ SDR_TYPE_SHADOW_MAP,                         "shadow",         "shadow",         nullptr,         "Shadow map generation",        VTX_POSITION | VTX_MODELID },
+	{ SDR_TYPE_MODEL,                              "main",           "main",           "Model rendering",              VTX_POSITION | VTX_TEXCOORD | VTX_NORMAL | VTX_TANGENT | VTX_MODELID },
+	{ SDR_TYPE_EFFECT_PARTICLE,                    "effect",         "effect",         "Particle effects",             VTX_POSITION | VTX_COLOR | VTX_TEXCOORD | VTX_RADIUS },
+	{ SDR_TYPE_EFFECT_DISTORTION,                  "effect-distort", "effect-distort", "Distortion effects",           VTX_POSITION | VTX_COLOR | VTX_TEXCOORD | VTX_RADIUS },
+	{ SDR_TYPE_POST_PROCESS_MAIN,                  "postprocess",    "post",           "Post-processing main",         VTX_NONE },
+	{ SDR_TYPE_POST_PROCESS_BLUR,                  "postprocess",    "blur",           "Gaussian blur",                VTX_NONE },
+	{ SDR_TYPE_POST_PROCESS_BLOOM_COMP,            "postprocess",    "bloom-comp",     "Bloom composition",            VTX_NONE },
+	{ SDR_TYPE_POST_PROCESS_BRIGHTPASS,            "postprocess",    "brightpass",     "Bright pass filter",           VTX_NONE },
+	{ SDR_TYPE_POST_PROCESS_FXAA,                  "postprocess",    "fxaa",           "FXAA anti-aliasing",           VTX_NONE },
+	{ SDR_TYPE_POST_PROCESS_FXAA_PREPASS,          "postprocess",    "fxaapre",        "FXAA luma prepass",            VTX_NONE },
+	{ SDR_TYPE_POST_PROCESS_LIGHTSHAFTS,           "postprocess",    "lightshafts",    "Light shafts",                 VTX_NONE },
+	{ SDR_TYPE_POST_PROCESS_TONEMAPPING,           "postprocess",    "tonemapping",    "Tonemapping",                  VTX_NONE },
+	{ SDR_TYPE_DEFERRED_LIGHTING,                  "deferred",       "deferred",       "Deferred lighting",            VTX_POSITION },
+	{ SDR_TYPE_DEFERRED_CLEAR,                     "deferred-clear", "deferred-clear", "Deferred clear",               VTX_NONE },
+	{ SDR_TYPE_VIDEO_PROCESS,                      "video",          "video",          "Video playback",               VTX_POSITION | VTX_TEXCOORD },
+	{ SDR_TYPE_PASSTHROUGH_RENDER,                 "passthrough",    "passthrough",    "Passthrough rendering",        VTX_POSITION | VTX_TEXCOORD },
+	{ SDR_TYPE_SHIELD_DECAL,                       "shield-impact",  "shield-impact",  "Shield impact",                VTX_NONE },
+	{ SDR_TYPE_BATCHED_BITMAP,                     "batched",        "batched",        "Batched bitmaps",              VTX_POSITION | VTX_COLOR | VTX_TEXCOORD },
+	{ SDR_TYPE_DEFAULT_MATERIAL,                   "default-material", "default-material", "Default material",             VTX_POSITION | VTX_COLOR | VTX_TEXCOORD },
+	{ SDR_TYPE_NANOVG,                             "nanovg",         "nanovg",         "NanoVG UI",                    VTX_POSITION | VTX_TEXCOORD },
+	{ SDR_TYPE_DECAL,                              "decal",          "decal",          "Decals",                       VTX_POSITION | VTX_MATRIX },
+	{ SDR_TYPE_SCENE_FOG,                          "fog",            "fog",            "Scene fog",                    VTX_NONE },
+	{ SDR_TYPE_VOLUMETRIC_FOG,                     "volumetric-fog", "volumetric-fog", "Volumetric fog",               VTX_NONE },
+	{ SDR_TYPE_ROCKET_UI,                          "rocketui",       "rocketui",       "Rocket UI",                    VTX_POSITION | VTX_COLOR | VTX_TEXCOORD },
+	{ SDR_TYPE_COPY,                               "copy",           "copy",           "Texture copy",                 VTX_NONE },
+	{ SDR_TYPE_COPY_WORLD,                         "copy-world",     "copy-world",     "World copy",                   VTX_NONE },
+	{ SDR_TYPE_MSAA_RESOLVE,                       "msaa-resolve",   "msaa-resolve",   "MSAA resolve",                 VTX_NONE },
+	{ SDR_TYPE_POST_PROCESS_SMAA_EDGE,             "smaa-edge",      "smaa-edge",      "SMAA edge detection",          VTX_NONE },
+	{ SDR_TYPE_POST_PROCESS_SMAA_BLENDING_WEIGHT,  "smaa-blend",     "smaa-blend",     "SMAA blending weight",         VTX_NONE },
+	{ SDR_TYPE_POST_PROCESS_SMAA_NEIGHBORHOOD_BLENDING, "smaa-neighbor", "smaa-neighbor", "SMAA neighborhood blending",   VTX_NONE },
+	{ SDR_TYPE_ENVMAP_SPHERE_WARP,                 "envmap-warp",    "envmap-warp",    "Environment map warp",         VTX_NONE },
+	{ SDR_TYPE_IRRADIANCE_MAP_GEN,                 "irradiance",     "irradiance",     "Irradiance map generation",    VTX_NONE },
+	{ SDR_TYPE_SHADOW_MAP,                         "shadow",         "shadow",         "Shadow map generation",        VTX_POSITION | VTX_MODELID },
 };
 
 const size_t VULKAN_SHADER_TYPES_COUNT = sizeof(VULKAN_SHADER_TYPES) / sizeof(VULKAN_SHADER_TYPES[0]);
@@ -148,7 +148,6 @@ void VulkanShaderManager::recompileAllShaders(const std::function<void(size_t, s
 			// Release old modules
 			shader.vertexModule.reset();
 			shader.fragmentModule.reset();
-			shader.geometryModule.reset();
 			shader.valid = false;
 
 			const VulkanShaderTypeInfo* typeInfo = getShaderTypeInfo(type);
@@ -159,11 +158,6 @@ void VulkanShaderManager::recompileAllShaders(const std::function<void(size_t, s
 
 				SCP_string fragFile = SCP_string(typeInfo->fragmentFile) + ".frag";
 				shader.fragmentModule = loadSpirvModule(fragFile);
-
-				if (typeInfo->geometryFile) {
-					SCP_string geomFile = SCP_string(typeInfo->geometryFile) + ".geom";
-					shader.geometryModule = loadSpirvModule(geomFile);
-				}
 
 				shader.valid = shader.vertexModule && shader.fragmentModule;
 			}
@@ -262,12 +256,6 @@ int VulkanShaderManager::loadShader(shader_type type)
 	// Load fragment shader
 	SCP_string fragFile = SCP_string(typeInfo->fragmentFile) + ".frag";
 	shader.fragmentModule = loadSpirvModule(fragFile);
-
-	// Load geometry shader if specified
-	if (typeInfo->geometryFile) {
-		SCP_string geomFile = SCP_string(typeInfo->geometryFile) + ".geom";
-		shader.geometryModule = loadSpirvModule(geomFile);
-	}
 
 	// Check if essential modules loaded
 	shader.valid = shader.vertexModule && shader.fragmentModule;
