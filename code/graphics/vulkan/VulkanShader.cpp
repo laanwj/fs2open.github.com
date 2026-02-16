@@ -49,7 +49,6 @@ static constexpr uint32_t VTX_UVEC     = 1u << static_cast<uint32_t>(VertexAttri
 static constexpr uint32_t VTX_MATRIX   = (15u << static_cast<uint32_t>(VertexAttributeLocation::ModelMatrix)); // Four consecutive locations
 static constexpr uint32_t VTX_NONE     = 0;
 
-// Based on GL_shader_types in gropenglshader.cpp
 // Filenames match the compiled SPIR-V files: {basename}.{stage}.spv
 const VulkanShaderTypeInfo VULKAN_SHADER_TYPES[] = {
 	{ SDR_TYPE_MODEL,                              "main",           "main",           nullptr,         "Model rendering",              VTX_POSITION | VTX_TEXCOORD | VTX_NORMAL | VTX_TANGENT | VTX_MODELID },
