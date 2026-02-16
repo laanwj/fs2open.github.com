@@ -403,7 +403,7 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 		mprintf(("VulkanPostProcessor: LDR target initialization failed (non-fatal)\n"));
 	}
 
-	// Initialize distortion ping-pong textures (32x32 RGBA8, non-fatal)
+	// Initialize distortion ping-pong textures (non-fatal if it fails)
 	{
 		bool distOk = true;
 		for (int i = 0; i < 2; i++) {
@@ -442,7 +442,7 @@ bool VulkanPostProcessor::init(vk::Device device, vk::PhysicalDevice physDevice,
 			try {
 				m_distortionSampler = m_device.createSampler(samplerInfo);
 				m_distortionInitialized = true;
-				mprintf(("VulkanPostProcessor: Distortion textures initialized (2x 32x32 RGBA8)\n"));
+				mprintf(("VulkanPostProcessor: Distortion textures initialized\n"));
 			} catch (const vk::SystemError& e) {
 				mprintf(("VulkanPostProcessor: Failed to create distortion sampler: %s\n", e.what()));
 			}
