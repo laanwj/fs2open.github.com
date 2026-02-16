@@ -138,11 +138,8 @@ void gr_end_instance_matrix()
 // the projection matrix; fov, aspect ratio, near, far
 void gr_set_proj_matrix(fov_t fov, float aspect, float z_near, float z_far) {
 	if (gr_screen.rendering_to_texture != -1) {
-		// RTT uses top-left origin, same as FSO's coordinate system
 		gr_set_viewport(gr_screen.offset_x, gr_screen.offset_y, gr_screen.clip_width, gr_screen.clip_height);
 	} else {
-		// Screen rendering uses bottom-left origin (OpenGL convention)
-		// Vulkan handles this via negative viewport height (VK_KHR_maintenance1)
 		gr_set_viewport(gr_screen.offset_x, (gr_screen.max_h - gr_screen.offset_y - gr_screen.clip_height), gr_screen.clip_width, gr_screen.clip_height);
 	}
 
