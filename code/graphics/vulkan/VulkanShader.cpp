@@ -203,7 +203,7 @@ vk::UniqueShaderModule VulkanShaderManager::loadSpirvModule(const SCP_string& fi
 	// Try to load from def_files
 	SCP_string fullName = filename + ".spv";
 
-	const auto def_file = defaults_try_get_file(fullName.c_str());
+	const auto def_file = defaults_get_file(fullName.c_str());
 	if (def_file.data == nullptr || def_file.size == 0) {
 		mprintf(("VulkanShaderManager: Could not load SPIR-V file: %s\n", fullName.c_str()));
 		return {};
