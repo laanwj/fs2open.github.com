@@ -13,6 +13,7 @@
 #include "VulkanDraw.h"
 #include "VulkanDeletionQueue.h"
 #include "VulkanPostProcessing.h"
+#include "VulkanQuery.h"
 
 #include <vulkan/vulkan.hpp>
 
@@ -275,6 +276,9 @@ class VulkanRenderer {
 	std::unique_ptr<VulkanStateTracker> m_stateTracker;
 	std::unique_ptr<VulkanDrawManager> m_drawManager;
 
+	// Query management (GPU timestamp profiling)
+	std::unique_ptr<VulkanQueryManager> m_queryManager;
+
 	// Post-processing
 	std::unique_ptr<VulkanPostProcessor> m_postProcessor;
 	bool m_sceneRendering = false;
@@ -284,6 +288,7 @@ class VulkanRenderer {
 	bool m_debugReportEnabled = false;
 	bool m_debugUtilsEnabled = false;
 #endif
+
 };
 
 } // namespace vulkan

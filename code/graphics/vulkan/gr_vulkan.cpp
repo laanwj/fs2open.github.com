@@ -6,6 +6,7 @@
 #include "VulkanShader.h"
 #include "VulkanDescriptorManager.h"
 #include "VulkanPipeline.h"
+#include "VulkanQuery.h"
 #include "VulkanState.h"
 #include "VulkanDraw.h"
 
@@ -78,8 +79,7 @@ bool vulkan_is_capable(gr_capability capability)
 	case gr_capability::CAPABILITY_BATCHED_SUBMODELS:
 		return true;
 	case gr_capability::CAPABILITY_TIMESTAMP_QUERY:
-		// Query objects not yet implemented
-		return false;
+		return getQueryManager() != nullptr;
 	case gr_capability::CAPABILITY_SEPARATE_BLEND_FUNCTIONS:
 		// Vulkan supports per-attachment blend by spec
 		return true;
@@ -96,6 +96,10 @@ bool vulkan_is_capable(gr_capability capability)
 		return true;
 	case gr_capability::CAPABILITY_INSTANCED_RENDERING:
 		// Gates the decal system which requires render_decals (not yet implemented)
+		return false;
+	case gr_capability::CAPABILITY_QUERIES_REUSABLE:
+		// Vulkan queries require explicit reset between read and write.
+		// The backend manages this lifecycle internally via deleteQueryObject.
 		return false;
 	}
 	return false;
@@ -362,11 +366,6 @@ void stub_render_decals(decal_material* /*material_info*/,
                        const indexed_vertex_source& /*buffers*/,
                        const gr_buffer_handle& /*instance_buffer*/,
                        int /*num_instances*/) {}
-int stub_create_query_object() { return -1; }
-void stub_query_value(int /*obj*/, QueryType /*type*/) {}
-bool stub_query_value_available(int /*obj*/) { return false; }
-std::uint64_t stub_get_query_value(int /*obj*/) { return 0; }
-void stub_delete_query_object(int /*obj*/) {}
 std::unique_ptr<os::Viewport> stub_create_viewport(const os::ViewPortProperties& /*props*/)
 {
 	return std::unique_ptr<os::Viewport>();
@@ -499,11 +498,11 @@ void init_function_pointers()
 	gr_screen.gf_push_debug_group = vulkan_push_debug_group;
 	gr_screen.gf_pop_debug_group = vulkan_pop_debug_group;
 
-	gr_screen.gf_create_query_object = stub_create_query_object;
-	gr_screen.gf_query_value = stub_query_value;
-	gr_screen.gf_query_value_available = stub_query_value_available;
-	gr_screen.gf_get_query_value = stub_get_query_value;
-	gr_screen.gf_delete_query_object = stub_delete_query_object;
+	gr_screen.gf_create_query_object = vulkan_create_query_object;
+	gr_screen.gf_query_value = vulkan_query_value;
+	gr_screen.gf_query_value_available = vulkan_query_value_available;
+	gr_screen.gf_get_query_value = vulkan_get_query_value;
+	gr_screen.gf_delete_query_object = vulkan_delete_query_object;
 
 	gr_screen.gf_create_viewport = stub_create_viewport;
 	gr_screen.gf_use_viewport = stub_use_viewport;

@@ -405,6 +405,16 @@ bool VulkanRenderer::initialize()
 		setPostProcessor(m_postProcessor.get());
 	}
 
+	// Initialize query manager for GPU timestamp profiling
+	m_queryManager = std::unique_ptr<VulkanQueryManager>(new VulkanQueryManager());
+	if (!m_queryManager->init(m_device.get(), m_physicalDevice.getProperties().limits.timestampPeriod,
+	                          m_graphicsCommandPool.get(), m_graphicsQueue)) {
+		mprintf(("Warning: Failed to initialize Vulkan query manager, GPU profiling will be disabled\n"));
+		m_queryManager.reset();
+	} else {
+		setQueryManager(m_queryManager.get());
+	}
+
 	// Prepare the rendering state by acquiring our first swap chain image
 	acquireNextSwapChainImage();
 
@@ -683,6 +693,7 @@ bool VulkanRenderer::createLogicalDevice(const PhysicalDeviceValues& deviceValue
 	m_physicalDevice = deviceValues.device;
 	m_graphicsQueueFamilyIndex = deviceValues.graphicsQueueIndex.index;
 	m_transferQueueFamilyIndex = deviceValues.transferQueueIndex.index;
+
 
 	// Initialize memory manager
 	m_memoryManager = std::unique_ptr<VulkanMemoryManager>(new VulkanMemoryManager());
@@ -1005,6 +1016,11 @@ void VulkanRenderer::setupFrame()
 	Assertion(m_stateTracker, "Vulkan StateTracker not initialized in setupFrame!");
 	m_stateTracker->beginFrame(m_currentCommandBuffer);
 
+	// Reset timestamp queries that were written last frame (must be outside render pass)
+	if (m_queryManager) {
+		m_queryManager->beginFrame(m_currentCommandBuffer);
+	}
+
 	// Reset per-frame flags
 	m_sceneDepthCopiedThisFrame = false;
 
@@ -1067,6 +1083,11 @@ void VulkanRenderer::flip()
 
 	// Submit and present
 	m_frames[m_currentFrame]->submitAndPresent(m_currentCommandBuffers);
+
+	// Notify query manager that this frame's command buffer was submitted
+	if (m_queryManager) {
+		m_queryManager->notifySubmission();
+	}
 
 	// Track which swap chain image was just presented so saveScreen() can read it
 	m_previousSwapChainImage = m_currentSwapChainImage;
@@ -1629,6 +1650,12 @@ void VulkanRenderer::shutdown()
 	shutdownImGui();
 
 	// Shutdown managers in reverse order of initialization
+	if (m_queryManager) {
+		setQueryManager(nullptr);
+		m_queryManager->shutdown();
+		m_queryManager.reset();
+	}
+
 	if (m_postProcessor) {
 		setPostProcessor(nullptr);
 		m_postProcessor->shutdown();
