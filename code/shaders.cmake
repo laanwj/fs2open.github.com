@@ -45,6 +45,8 @@ set(SHADERS
 	${SHADER_DIR}/volumetric-fog.frag
 	${SHADER_DIR}/copy.frag
 	${SHADER_DIR}/copy.vert
+	${SHADER_DIR}/shield-impact.frag
+	${SHADER_DIR}/shield-impact.vert
 	${SHADER_DIR}/msaa-resolve.vert
 	${SHADER_DIR}/msaa-resolve.frag
 )
