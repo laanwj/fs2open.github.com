@@ -51,23 +51,9 @@ layout (set = 2, binding = 3, std140) uniform decalInfoData {
 	int glow_blend_mode;
 };
 
-// Inline gamma conversion (matching gamma.sdr)
-const float SRGB_GAMMA = 2.2;
-vec3 srgb_to_linear(vec3 val) {
-	return pow(val, vec3(SRGB_GAMMA));
-}
-
-// Inline glow constants (matching lighting.sdr)
-const float GLOW_MAP_INTENSITY = 1.5;
-const float GLOW_MAP_SRGB_MULTIPLIER = 3.0;
-
-// Inline normal unpacking (matching normals.sdr)
-vec3 unpackNormal(vec2 normal_sample) {
-	vec3 n;
-	n.xy = normal_sample * 2.0 - 1.0;
-	n.z = sqrt(max(0.0, 1.0 - n.x * n.x - n.y * n.y));
-	return n;
-}
+#include "gamma.sdr"
+#include "lighting.sdr"
+#include "normals.sdr"
 
 vec3 computeViewPosition(vec2 textureCoord) {
 	vec4 clipSpaceLocation;
