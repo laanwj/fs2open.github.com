@@ -398,10 +398,8 @@ void gr_matrix_on_frame()
 }
 void gr_matrix_set_uniforms()
 {
-	// For Vulkan, we can't use the matrix_uniform_up_to_date optimization because
-	// pending uniform bindings may be cleared between draws within the same frame.
-	// Always upload and bind for Vulkan; use the optimization for other backends.
-	if (matrix_uniform_up_to_date && gr_screen.mode != GR_VULKAN) {
+	if (matrix_uniform_up_to_date) {
+		// No changes since last time, no need to update
 		return;
 	}
 
