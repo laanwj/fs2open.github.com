@@ -24,9 +24,6 @@ struct default_file
 //Used to retrieve pointer to file data from def_files.cpp
 default_file defaults_get_file(const char *filename);
 
-// Like defaults_get_file but returns empty default_file if not found (no fatal error)
-default_file defaults_try_get_file(const char *filename);
-
 SCP_vector<default_file> defaults_get_all();
 
 #endif
